@@ -1,0 +1,125 @@
+#!/bin/bash
+
+set -e
+
+# Colors for output
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# Get version from package.json
+get_version() {
+  if [[ -f "$PROJECT_ROOT/package.json" ]]; then
+    grep '"version"' "$PROJECT_ROOT/package.json" | sed 's/.*"version": *"\([^"]*\)".*/\1/'
+  else
+    echo "unknown"
+  fi
+}
+
+show_help() {
+  cat <<EOF
+claude-evolve - AI-powered algorithm evolution tool
+
+USAGE:
+    claude-evolve [COMMAND] [OPTIONS]
+
+COMMANDS:
+    setup       Initialize evolution workspace
+    ideate      Generate new algorithm ideas
+    run         Execute evolution candidates
+    analyze     Analyze evolution results
+    help        Show this help message
+
+OPTIONS:
+    -h, --help     Show help message
+    -v, --version  Show version
+
+EXAMPLES:
+    claude-evolve setup
+    claude-evolve ideate 5
+    claude-evolve run --timeout 300
+    claude-evolve analyze --open
+
+For more information, visit: https://github.com/anthropics/claude-evolve
+EOF
+}
+
+show_menu() {
+  echo -e "${GREEN}🧬 Claude Evolve - Algorithm Evolution Tool${NC}"
+  echo
+  echo "This tool helps you evolve algorithms using AI-powered mutations."
+  echo
+  echo "What would you like to do?"
+  echo
+  echo "  1) setup    - Initialize evolution workspace"
+  echo "  2) ideate   - Generate new algorithm ideas"
+  echo "  3) run      - Execute evolution candidates"
+  echo "  4) analyze  - Analyze evolution results"
+  echo "  5) help     - Show help message"
+  echo "  6) exit     - Exit"
+  echo
+
+  # Show workspace status
+  echo "Current status:"
+  [[ -d evolution ]] && echo "  ✓ evolution/ workspace exists" || echo "  ✗ evolution/ workspace missing"
+  [[ -f evolution/BRIEF.md ]] && echo "  ✓ BRIEF.md exists" || echo "  ✗ BRIEF.md missing"
+  [[ -f evolution/evolution.csv ]] && echo "  ✓ evolution.csv exists" || echo "  ✗ evolution.csv missing"
+  echo
+}
+
+# Main logic
+if [[ $# -eq 0 ]]; then
+  show_menu
+  read -r -p "Enter your choice (1-6): " choice
+
+  case $choice in
+  1) exec "$SCRIPT_DIR/claude-evolve-setup" ;;
+  2) exec "$SCRIPT_DIR/claude-evolve-ideate" ;;
+  3) exec "$SCRIPT_DIR/claude-evolve-run" ;;
+  4) exec "$SCRIPT_DIR/claude-evolve-analyze" ;;
+  5) show_help ;;
+  6)
+    echo "Goodbye!"
+    exit 0
+    ;;
+  *)
+    echo -e "${RED}Invalid choice. Please select 1-6.${NC}"
+    exit 1
+    ;;
+  esac
+fi
+
+case "${1:-}" in
+-h | --help | help)
+  show_help
+  ;;
+-v | --version)
+  echo "claude-evolve v$(get_version)"
+  ;;
+setup)
+  shift
+  exec "$SCRIPT_DIR/claude-evolve-setup" "$@"
+  ;;
+ideate)
+  shift
+  exec "$SCRIPT_DIR/claude-evolve-ideate" "$@"
+  ;;
+run)
+  shift
+  exec "$SCRIPT_DIR/claude-evolve-run" "$@"
+  ;;
+analyze)
+  shift
+  exec "$SCRIPT_DIR/claude-evolve-analyze" "$@"
+  ;;
+*)
+  echo "Unknown command: ${1:-}"
+  echo
+  show_help
+  exit 1
+  ;;
+esac

@@ -1,0 +1,206 @@
+#!/bin/bash
+
+set -e
+
+# Parse arguments
+count=1
+no_ai=false
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+  --help)
+    cat <<EOF
+claude-evolve ideate - Generate new algorithm ideas
+
+USAGE:
+  claude-evolve ideate [N] [--no-ai]
+
+ARGUMENTS:
+  N         Number of ideas to generate (default: 1, max: 50)
+
+OPTIONS:
+  --no-ai   Use manual entry mode instead of AI generation
+  --help    Show this help message
+
+DESCRIPTION:
+  Generates new algorithm variations by prompting Claude with context
+  from the project BRIEF.md and top performers from evolution.csv.
+  Falls back to manual entry if --no-ai is specified or Claude fails.
+EOF
+    exit 0
+    ;;
+  --no-ai)
+    no_ai=true
+    shift
+    ;;
+  *)
+    if [[ $1 =~ ^[0-9]+$ ]]; then
+      count=$1
+    else
+      echo "[ERROR] Invalid number of ideas: $1" >&2
+      exit 1
+    fi
+    shift
+    ;;
+  esac
+done
+
+# Validate count
+if [[ $count -lt 1 || $count -gt 50 ]]; then
+  echo "[ERROR] Number of ideas must be between 1 and 50" >&2
+  exit 1
+fi
+
+# Check workspace
+if [[ ! -d evolution ]]; then
+  echo "[ERROR] Evolution workspace not found. Run 'claude-evolve setup' first." >&2
+  exit 1
+fi
+
+# Ensure CSV exists
+if [[ ! -f evolution/evolution.csv ]]; then
+  echo "id,basedOnId,description,performance,status" >evolution/evolution.csv
+fi
+
+# Get next ID
+get_next_id() {
+  if [[ ! -f evolution/evolution.csv ]]; then
+    echo "1"
+    return
+  fi
+  # Find highest ID and increment (pure shell)
+  local max_id=0
+  while IFS=, read -r id rest; do
+    if [[ $id =~ ^[0-9]+$ ]] && [[ $id -gt $max_id ]]; then
+      max_id=$id
+    fi
+  done < <(tail -n +2 evolution/evolution.csv)
+  echo $((max_id + 1))
+}
+
+# Add idea to CSV
+add_idea() {
+  local description="$1"
+  local id
+  id=$(get_next_id)
+
+  # Escape quotes in description
+  local escaped_desc="${description//\"/\"\"}"
+
+  # Append to CSV
+  echo "${id},,\"${escaped_desc}\",," >>evolution/evolution.csv
+  echo "[INFO] Added idea: $description"
+}
+
+# Manual entry mode
+ideate_manual() {
+  local ideas_added=0
+
+  for ((i = 1; i <= count; i++)); do
+    if [[ $count -eq 1 ]]; then
+      read -r -p "Enter algorithm idea (or empty to skip): " description
+    else
+      read -r -p "Enter algorithm idea $i/$count (or empty to skip): " description
+    fi
+
+    if [[ -z $description ]]; then
+      echo "[INFO] Empty description, skipping idea"
+      continue
+    fi
+
+    add_idea "$description"
+    ((ideas_added++))
+
+    if [[ $i -lt $count ]]; then
+      read -r -p "Add another idea? (y/N) " continue_adding
+      if [[ $continue_adding != "y" && $continue_adding != "Y" ]]; then
+        break
+      fi
+    fi
+  done
+
+  echo "[INFO] Added $ideas_added idea(s) to evolution.csv"
+}
+
+# AI generation mode
+ideate_ai() {
+  # Check for claude CLI
+  if ! command -v claude >/dev/null 2>&1; then
+    echo "[WARN] Claude CLI not found. Falling back to manual entry."
+    return 1
+  fi
+
+  if [[ ! -f evolution/BRIEF.md ]]; then
+    echo "[WARN] BRIEF.md not found. Falling back to manual entry."
+    return 1
+  fi
+
+  # Get top performers (pure shell)
+  local top_performers=""
+  if [[ -f evolution/evolution.csv ]]; then
+    # Simple top performers extraction (lines with non-empty performance)
+    top_performers=$(awk -F, 'NR > 1 && $4 != "" { print $1 ": " $3 " (score: " $4 ")" }' evolution/evolution.csv | head -5)
+  fi
+
+  # Build prompt
+  local prompt
+  prompt="You are helping with algorithm evolution. Generate exactly $count new algorithm idea(s) based on the following context.
+
+Project Brief:
+$(cat evolution/BRIEF.md)
+"
+
+  if [[ -n $top_performers ]]; then
+    prompt+="
+Top Performing Algorithms So Far:
+$top_performers
+"
+  fi
+
+  prompt+="
+Generate $count creative algorithm variation(s) that could potentially improve performance.
+For each idea, provide a single line description that explains the approach.
+Format: One idea per line, no numbering, no extra formatting."
+
+  echo "[INFO] Generating $count idea(s) with Claude..."
+
+  # Call Claude and process response
+  local response
+  if ! response=$(echo "$prompt" | claude -p 2>&1); then
+    echo "[WARN] Claude API call failed, falling back to manual entry."
+    return 1
+  fi
+
+  local ideas_added=0
+  while IFS= read -r line; do
+    # Clean up line
+    line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    [[ -z $line ]] && continue
+
+    # Remove numbering/bullets
+    line=$(echo "$line" | sed 's/^[0-9]*\. *//;s/^[-*] *//')
+
+    add_idea "$line"
+    ((ideas_added++))
+
+    [[ $ideas_added -ge $count ]] && break
+  done <<<"$response"
+
+  if [[ $ideas_added -eq 0 ]]; then
+    echo "[WARN] No valid ideas extracted from Claude response"
+    return 1
+  fi
+
+  echo "[INFO] Successfully generated $ideas_added idea(s)"
+}
+
+# Main execution
+if [[ $no_ai == true ]]; then
+  echo "[INFO] Manual entry mode"
+  ideate_manual
+else
+  if ! ideate_ai; then
+    echo "[INFO] Falling back to manual entry"
+    ideate_manual
+  fi
+fi

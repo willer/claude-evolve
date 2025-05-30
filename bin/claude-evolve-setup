@@ -1,0 +1,52 @@
+#!/bin/bash
+
+set -e
+
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+echo "[INFO] Initializing evolution workspace..."
+
+# Create evolution directory
+if [[ ! -d evolution ]]; then
+  echo "[INFO] Creating evolution/ directory..."
+  mkdir -p evolution
+else
+  echo "[INFO] evolution/ directory already exists"
+fi
+
+# Copy template files
+for file in BRIEF.md algorithm.py evaluator.py; do
+  if [[ ! -f evolution/$file ]]; then
+    if [[ -f "$PROJECT_ROOT/templates/$file" ]]; then
+      echo "[INFO] Copying $file from templates..."
+      cp "$PROJECT_ROOT/templates/$file" "evolution/$file"
+    else
+      echo "[ERROR] Template file not found: $PROJECT_ROOT/templates/$file"
+      exit 1
+    fi
+  else
+    echo "[INFO] $file already exists, skipping"
+  fi
+done
+
+# Create CSV with header
+if [[ ! -f evolution/evolution.csv ]]; then
+  echo "[INFO] Creating evolution.csv with header..."
+  echo "id,basedOnId,description,performance,status" >evolution/evolution.csv
+else
+  echo "[INFO] evolution.csv already exists, skipping"
+fi
+
+# Open editor for BRIEF.md if interactive and file is new or empty
+if [[ -t 1 ]] && [[ ! -s evolution/BRIEF.md ]]; then
+  echo "[INFO] Opening BRIEF.md for editing..."
+  "${EDITOR:-nano}" evolution/BRIEF.md || true
+fi
+
+echo "[INFO] Evolution workspace setup complete!"
+echo "[INFO] Next steps:"
+echo "[INFO]   1. Edit evolution/BRIEF.md to describe your optimization problem"
+echo "[INFO]   2. Customize evolution/evaluator.py for your evaluation criteria"
+echo "[INFO]   3. Run 'claude-evolve ideate' to generate initial candidates"

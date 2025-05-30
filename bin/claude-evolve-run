@@ -1,0 +1,246 @@
+#!/bin/bash
+
+set -e
+
+# Parse arguments
+timeout_seconds=""
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+  --timeout)
+    if [[ -z ${2:-} ]] || [[ ! $2 =~ ^[0-9]+$ ]] || [[ $2 -eq 0 ]]; then
+      echo "[ERROR] --timeout requires a positive integer (seconds)" >&2
+      exit 1
+    fi
+    timeout_seconds="$2"
+    shift 2
+    ;;
+  --help)
+    cat <<EOF
+claude-evolve run - Execute evolution candidates
+
+USAGE:
+  claude-evolve run [OPTIONS]
+
+OPTIONS:
+  --timeout <sec>  Kill evaluator after specified seconds (default: no timeout)
+  --help           Show this help message
+
+DESCRIPTION:
+  Processes the oldest pending candidate from evolution.csv by:
+  1. Generating algorithm mutation using Claude
+  2. Running evaluator.py on the generated algorithm
+  3. Updating CSV with performance score and completion status
+
+  Use --timeout to prevent runaway evaluations from blocking progress.
+EOF
+    exit 0
+    ;;
+  *)
+    echo "[ERROR] Unknown option: $1" >&2
+    exit 1
+    ;;
+  esac
+done
+
+echo "[INFO] Starting evolution run..."
+[[ -n $timeout_seconds ]] && echo "[INFO] Using timeout: ${timeout_seconds} seconds"
+
+# Validate workspace
+if [[ ! -d evolution ]]; then
+  echo "[ERROR] Evolution directory not found. Run 'claude-evolve setup' first." >&2
+  exit 1
+fi
+
+for file in evolution.csv evaluator.py; do
+  if [[ ! -f evolution/$file ]]; then
+    echo "[ERROR] $file not found. Run 'claude-evolve setup' first." >&2
+    exit 1
+  fi
+done
+
+# Find oldest empty row (pure shell)
+find_empty_row() {
+  local row_num=2 # Start after header
+  while IFS=, read -r id based_on desc perf status; do
+    if [[ -z $perf && -z $status ]]; then
+      echo $row_num
+      return 0
+    fi
+    ((row_num++))
+  done < <(tail -n +2 evolution/evolution.csv)
+  return 1
+}
+
+# Get CSV row (pure shell)
+get_csv_row() {
+  sed -n "${1}p" evolution/evolution.csv
+}
+
+# Update CSV row (pure shell with temp file)
+update_csv_row() {
+  local row_num="$1"
+  local performance="$2"
+  local status="$3"
+
+  # Read CSV and update specific row
+  local temp_file="evolution/evolution.csv.tmp"
+  local current_row=1
+
+  while IFS=, read -r id based_on desc perf stat; do
+    if [[ $current_row -eq $row_num ]]; then
+      # Update this row
+      echo "$id,$based_on,$desc,$performance,$status"
+    else
+      # Keep original row
+      echo "$id,$based_on,$desc,$perf,$stat"
+    fi
+    ((current_row++))
+  done <evolution/evolution.csv >"$temp_file"
+
+  mv "$temp_file" evolution/evolution.csv
+}
+
+# Find next candidate
+if ! row_num=$(find_empty_row); then
+  echo "[ERROR] No empty rows found in CSV. Run 'claude-evolve ideate' to add candidates." >&2
+  exit 1
+fi
+
+# Get row data
+row_data=$(get_csv_row "$row_num")
+IFS=, read -r id based_on_id description performance status <<<"$row_data"
+
+# Clean up description (remove quotes)
+description=${description#\"}
+description=${description%\"}
+
+echo "[INFO] Processing candidate ID: $id"
+echo "[INFO] Description: $description"
+echo "[INFO] Based on ID: $based_on_id"
+
+# Set interrupt handler
+trap 'update_csv_row "$row_num" "" "interrupted"; echo "[INFO] Evolution interrupted"; exit 130' INT
+
+# Mark as running
+update_csv_row "$row_num" "" "running"
+
+# Determine parent algorithm
+parent_file="evolution/algorithm.py"
+if [[ -n $based_on_id && $based_on_id != "0" ]]; then
+  parent_file="evolution/evolution_id${based_on_id}.py"
+  if [[ ! -f $parent_file ]]; then
+    echo "[ERROR] Parent algorithm file not found: $parent_file" >&2
+    update_csv_row "$row_num" "" "failed"
+    exit 1
+  fi
+fi
+
+echo "[INFO] Using parent algorithm: $parent_file"
+
+# Generate mutation
+output_file="evolution/evolution_id${id}.py"
+echo "[INFO] Generating algorithm mutation..."
+
+# Check for claude CLI
+claude_cmd="${CLAUDE_CMD:-claude}"
+if ! command -v "$claude_cmd" >/dev/null 2>&1; then
+  echo "[ERROR] Claude CLI not found. Please install claude-cli." >&2
+  update_csv_row "$row_num" "" "failed"
+  exit 1
+fi
+
+# Create mutation prompt
+prompt="You are an AI assistant helping to evolve algorithms through mutations. Please create a new Python algorithm based on the parent algorithm and the requested modification.
+
+CONTEXT:
+$(cat evolution/BRIEF.md 2>/dev/null || echo "No brief available")
+
+PARENT ALGORITHM:
+\`\`\`python
+$(cat "$parent_file")
+\`\`\`
+
+REQUESTED MODIFICATION:
+$description
+
+INSTRUCTIONS:
+1. Study the parent algorithm carefully
+2. Apply the requested modification while preserving the core structure
+3. Ensure the modified algorithm maintains the same interface (function signatures)
+4. Include proper error handling and documentation
+5. Return ONLY the complete Python code without explanation
+
+The output should be a complete, executable Python file that builds upon the parent algorithm."
+
+# Generate mutation
+if ! generated_code=$(echo "$prompt" | "$claude_cmd"); then
+  echo "[ERROR] Claude failed to generate algorithm mutation" >&2
+  update_csv_row "$row_num" "" "failed"
+  exit 1
+fi
+
+# Save generated algorithm
+echo "$generated_code" >"$output_file"
+echo "[INFO] Generated algorithm: $output_file"
+
+# Run evaluator
+echo "[INFO] Running evaluation..."
+eval_output=""
+eval_exit_code=0
+
+if [[ -n $timeout_seconds ]]; then
+  echo "[INFO] Starting evaluation with ${timeout_seconds}s timeout..."
+  if eval_output=$(timeout "$timeout_seconds" python3 evolution/evaluator.py "$output_file" 2>&1); then
+    eval_exit_code=0
+  else
+    eval_exit_code=$?
+    if [[ $eval_exit_code -eq 124 ]]; then
+      echo "[ERROR] Evaluation timed out after ${timeout_seconds} seconds" >&2
+      update_csv_row "$row_num" "" "timeout"
+      exit 1
+    fi
+  fi
+else
+  if eval_output=$(python3 evolution/evaluator.py "$output_file" 2>&1); then
+    eval_exit_code=0
+  else
+    eval_exit_code=$?
+  fi
+fi
+
+# Process results
+if [[ $eval_exit_code -eq 0 ]]; then
+  # Extract score from JSON (simple grep approach)
+  if score=$(echo "$eval_output" | grep -o '"score"[[:space:]]*:[[:space:]]*[0-9.]*' | cut -d: -f2 | tr -d ' '); then
+    if [[ -n $score ]]; then
+      update_csv_row "$row_num" "$score" "completed"
+      echo "[INFO] ✓ Evaluation completed successfully"
+      echo "[INFO] Performance score: $score"
+    else
+      # Try "performance" field
+      if score=$(echo "$eval_output" | grep -o '"performance"[[:space:]]*:[[:space:]]*[0-9.]*' | cut -d: -f2 | tr -d ' '); then
+        update_csv_row "$row_num" "$score" "completed"
+        echo "[INFO] ✓ Evaluation completed successfully"
+        echo "[INFO] Performance score: $score"
+      else
+        echo "[ERROR] No score found in evaluator output" >&2
+        echo "[ERROR] Output: $eval_output" >&2
+        update_csv_row "$row_num" "" "failed"
+        exit 1
+      fi
+    fi
+  else
+    echo "[ERROR] Failed to parse evaluator output" >&2
+    echo "[ERROR] Output: $eval_output" >&2
+    update_csv_row "$row_num" "" "failed"
+    exit 1
+  fi
+else
+  echo "[ERROR] Evaluator failed with exit code $eval_exit_code" >&2
+  echo "[ERROR] Output: $eval_output" >&2
+  update_csv_row "$row_num" "" "failed"
+  exit 1
+fi
+
+echo "[INFO] Evolution cycle completed successfully!"

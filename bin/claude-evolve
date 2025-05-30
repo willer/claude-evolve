@@ -1,0 +1,4 @@
+#!/bin/bash
+
+# Main dispatcher script for claude-evolve
+exec "$(dirname "$0")/claude-evolve-main" "$@"

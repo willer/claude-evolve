@@ -1,0 +1,173 @@
+#!/bin/bash
+
+set -e
+
+# Parse arguments
+open_chart=false
+csv_file="evolution/evolution.csv"
+output_file="evolution/performance.png"
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+  --help)
+    cat <<EOF
+claude-evolve analyze - Analyze evolution results
+
+USAGE:
+  claude-evolve analyze [--open] [--csv <path>] [--output <path>]
+
+OPTIONS:
+  --open            Open the generated chart automatically
+  --csv <path>      Path to evolution.csv (default: ./evolution/evolution.csv)
+  --output <path>   Output path for chart PNG (default: ./evolution/performance.png)
+  --help            Show this help message
+
+DESCRIPTION:
+  Analyzes the evolution.csv file and generates a performance chart.
+  Displays summary statistics and identifies the top performing algorithm.
+EOF
+    exit 0
+    ;;
+  --open)
+    open_chart=true
+    shift
+    ;;
+  --csv)
+    csv_file="$2"
+    shift 2
+    ;;
+  --output)
+    output_file="$2"
+    shift 2
+    ;;
+  *)
+    echo "[ERROR] Unknown option: $1" >&2
+    exit 1
+    ;;
+  esac
+done
+
+# Check if CSV exists
+if [[ ! -f $csv_file ]]; then
+  echo "[ERROR] CSV file not found: $csv_file" >&2
+  echo "[ERROR] Run 'claude-evolve setup' and 'claude-evolve ideate' first." >&2
+  exit 1
+fi
+
+echo "=== Evolution Analysis Summary ==="
+echo
+
+# Count totals (pure shell)
+total=0
+completed=0
+running=0
+failed=0
+pending=0
+total_performance=0
+count_with_performance=0
+top_score=""
+top_id=""
+top_desc=""
+
+while IFS=, read -r id _ desc perf status; do
+  [[ $id == "id" ]] && continue # Skip header
+
+  ((total++))
+
+  case "$status" in
+  "completed") ((completed++)) ;;
+  "running") ((running++)) ;;
+  "failed" | "timeout" | "interrupted") ((failed++)) ;;
+  *) ((pending++)) ;;
+  esac
+
+  # Track performance stats
+  if [[ -n $perf && $perf != "" ]]; then
+    total_performance=$(echo "$total_performance + $perf" | bc -l 2>/dev/null || echo "$total_performance")
+    ((count_with_performance++))
+
+    # Check if this is the top performer
+    if [[ -z $top_score ]] || (($(echo "$perf > $top_score" | bc -l 2>/dev/null || echo "0"))); then
+      top_score="$perf"
+      top_id="$id"
+      top_desc="$desc"
+    fi
+  fi
+done <"$csv_file"
+
+# Display summary
+echo "Total Candidates: $total"
+echo "Completed: $completed"
+echo "Running: $running"
+echo "Failed: $failed"
+echo "Pending: $pending"
+
+if [[ $count_with_performance -gt 0 ]]; then
+  avg_performance=$(echo "scale=4; $total_performance / $count_with_performance" | bc -l 2>/dev/null || echo "0")
+  echo "Average Performance: $avg_performance"
+else
+  echo "Average Performance: N/A"
+fi
+
+echo
+echo "=== Top Performer ==="
+if [[ -n $top_id ]]; then
+  echo "ID: $top_id"
+  echo "Performance: $top_score"
+  echo "Description: $top_desc"
+else
+  echo "No completed candidates yet"
+fi
+
+# Simple chart generation using gnuplot if available
+if command -v gnuplot >/dev/null 2>&1 && [[ $count_with_performance -gt 0 ]]; then
+  echo
+  echo "Generating performance chart: $output_file"
+
+  # Create data file for gnuplot
+  data_file="/tmp/evolution_data_$$.dat"
+  echo "# ID Performance" >"$data_file"
+
+  while IFS=, read -r id _ desc perf status; do
+    [[ $id == "id" ]] && continue # Skip header
+    if [[ -n $perf && $perf != "" ]]; then
+      echo "$id $perf" >>"$data_file"
+    fi
+  done <"$csv_file"
+
+  # Generate plot
+  gnuplot <<EOF
+set terminal png size 800,600
+set output "$output_file"
+set title "Algorithm Evolution Performance"
+set xlabel "Evolution ID"
+set ylabel "Performance Score"
+set grid
+plot "$data_file" using 1:2 with linespoints title "Performance"
+EOF
+
+  rm -f "$data_file"
+  echo "Chart saved successfully!"
+
+  # Open chart if requested
+  if [[ $open_chart == true ]]; then
+    if command -v open >/dev/null 2>&1; then
+      open "$output_file"
+    elif command -v xdg-open >/dev/null 2>&1; then
+      xdg-open "$output_file"
+    else
+      echo "[WARN] Cannot open chart automatically. View: $output_file"
+    fi
+  fi
+else
+  if [[ $count_with_performance -eq 0 ]]; then
+    echo
+    echo "No performance data available for chart generation."
+    echo "Run 'claude-evolve run' to execute candidates first."
+  else
+    echo
+    echo "[WARN] gnuplot not found. Install gnuplot for chart generation."
+    echo "       On macOS: brew install gnuplot"
+    echo "       On Ubuntu: sudo apt install gnuplot"
+  fi
+fi
