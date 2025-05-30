@@ -70,11 +70,16 @@ setup() {
 }
 
 @test "ideate command fails when evolution workspace doesn't exist" {
-    # Ensure we're in a clean directory without evolution workspace
-    cd "$BATS_TEST_TMPDIR"
+    # Save current directory and ensure we're in a clean directory without evolution workspace
+    local original_dir="$PWD"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    cd "$tmpdir"
     run "$CLI_SCRIPT" ideate
     [ "$status" -eq 1 ]
     [[ "$output" =~ "Evolution workspace not found" ]]
+    cd "$original_dir"
+    rm -rf "$tmpdir"
 }
 
 @test "run command fails when evolution workspace not found" {

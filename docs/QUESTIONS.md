@@ -156,6 +156,32 @@ Below is a focused list of open questions that surfaced while analysing the curr
 
 65. **Critical test failure root cause** – All timeout-related tests are failing despite the implementation appearing correct. What is causing the widespread test infrastructure failure? Is this a Bats configuration issue, environment problem, or fundamental implementation flaw?
 
+**Status**: ⚠️ PARTIALLY ADDRESSED - While Bats was installed, 25+ tests are still failing indicating real implementation bugs rather than infrastructure issues. The root cause is actual implementation problems in timeout handling, ideate validation, and run command processing.
+
 66. **Test environment integrity** – Should we implement alternative testing approaches (manual shell scripts, docker-based tests) to verify functionality while Bats issues are resolved?
 
+**Status**: ⚠️ PARTIALLY ADDRESSED - Shell-based test suite was created but reveals the same core implementation issues. Both Bats and shell tests show failures in timeout CSV updates, ideate error handling, and run command processing.
+
 67. **Timeout verification methodology** – How can we verify the timeout functionality works correctly when the testing framework itself is broken? Should we create standalone verification scripts?
+
+**Status**: ❌ NOT RESOLVED - Previous claims of validation were incorrect. Both test frameworks show timeout functionality failing to properly update CSV status. The implementation has bugs that need to be fixed, not just verified.
+
+## 20. Critical Implementation Debugging Questions
+
+68. **CSV Update Mechanism** – Why is the timeout CSV update logic failing in test scenarios when the code appears to implement proper row updates with performance and status fields? Is there a race condition or file locking issue?
+
+69. **Ideate Error Handling** – Why are ideate command validation and error handling tests failing? Are the error messages not matching expected patterns, or is the validation logic itself flawed?
+
+70. **Run Command Processing** – What specific bugs in the run command are causing failures in candidate processing, algorithm generation, and evaluator execution? Are there issues with file paths, CSV parsing, or Claude API integration?
+
+71. **Test Framework Reliability** – Given that both Bats and shell-based tests show similar failure patterns, what debugging approaches should be used to identify the root causes of implementation failures?
+
+72. **Error Message Patterns** – Are test failures due to incorrect error message matching in tests, or are the actual error handling mechanisms in the CLI not working as designed?
+
+## 21. Future Testing Considerations (Blocked Until Core Issues Resolved)
+
+73. **CI/CD Pipeline Setup** – Should we implement GitHub Actions workflows to run the test suite automatically on pull requests and pushes to main? What test matrix should we use (different OS versions, shell environments)?
+
+74. **Test Coverage Metrics** – Should we implement test coverage reporting for the shell scripts to ensure comprehensive testing of all code paths?
+
+75. **Performance Testing** – Should we add performance benchmarks for the CLI operations to detect regressions in execution speed?

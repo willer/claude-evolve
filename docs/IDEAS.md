@@ -97,6 +97,26 @@ This file tracks potential enhancements and features that could be added to clau
 - Add execution time tracking and optimization suggestions
 - Implement resource usage monitoring (memory, CPU)
 - Create performance regression detection
+
+### Testing Infrastructure Improvements
+
+- **Automated Testing Matrix**: Set up GitHub Actions CI pipeline with multiple OS testing (Ubuntu, macOS, Windows WSL)
+- **Shell Script Coverage**: Implement code coverage reporting for shell scripts using tools like bashcov or kcov
+- **Performance Benchmarking**: Add automated performance tests to detect CLI execution speed regressions
+- **Integration Test Environments**: Create Docker-based test environments for consistent testing across platforms
+- **Test Data Management**: Implement test fixture management for reproducible testing scenarios
+- **Parallel Test Execution**: Optimize test suite execution time through parallel test running
+- **Test Result Reporting**: Add comprehensive test result reporting with trend analysis
+- **Mock Service Improvements**: Enhance Claude API mocking with more realistic response scenarios and error conditions
+
+### Enhanced Timeout Management
+
+- **Granular Timeout Controls**: Support timeout specification in minutes/hours (e.g., `--timeout 5m`, `--timeout 2h`)
+- **Process Group Management**: Implement proper process group cleanup to handle evaluators that spawn subprocesses
+- **Timeout Recovery Strategies**: Add automatic retry mechanisms for timeout scenarios with backoff logic
+- **Cross-platform Timeout**: Ensure consistent timeout behavior across Linux, macOS, and Windows WSL environments
+- **Timeout Monitoring**: Add real-time timeout countdown display during evaluation execution
+- **Smart Timeout Recommendations**: Analyze historical evaluation times to suggest optimal timeout values
 - Add execution analytics and insights
 - Implement CSV schema validation to catch column mismatch issues at runtime
 - Consider using a more robust CSV parsing library or approach to prevent manual column indexing errors
