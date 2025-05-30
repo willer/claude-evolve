@@ -172,7 +172,7 @@ Format: One idea per line, no numbering, no extra formatting."
 
   # Call Claude and process response
   local response
-  if ! response=$(echo "$prompt" | claude --model opus -p 2>&1); then
+  if ! response=$(echo "$prompt" | claude --dangerously-skip-permissions --model opus -p 2>&1); then
     echo "[WARN] Claude API call failed, falling back to manual entry."
     return 1
   fi

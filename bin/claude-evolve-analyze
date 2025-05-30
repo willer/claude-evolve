@@ -81,24 +81,25 @@ while IFS=, read -r id _ desc perf status; do
   ((total++))
 
   case "$status" in
-  "completed") ((completed++)) ;;
+  "complete" | "completed") 
+    ((completed++))
+    # Only count performance for completed runs
+    if [[ -n $perf && $perf != "" ]]; then
+      total_performance=$(echo "$total_performance + $perf" | bc -l 2>/dev/null || echo "$total_performance")
+      ((count_with_performance++))
+
+      # Check if this is the top performer
+      if [[ -z $top_score ]] || (($(echo "$perf > $top_score" | bc -l 2>/dev/null || echo "0"))); then
+        top_score="$perf"
+        top_id="$id"
+        top_desc="$desc"
+      fi
+    fi
+    ;;
   "running") ((running++)) ;;
   "failed" | "timeout" | "interrupted") ((failed++)) ;;
   *) ((pending++)) ;;
   esac
-
-  # Track performance stats
-  if [[ -n $perf && $perf != "" ]]; then
-    total_performance=$(echo "$total_performance + $perf" | bc -l 2>/dev/null || echo "$total_performance")
-    ((count_with_performance++))
-
-    # Check if this is the top performer
-    if [[ -z $top_score ]] || (($(echo "$perf > $top_score" | bc -l 2>/dev/null || echo "0"))); then
-      top_score="$perf"
-      top_id="$id"
-      top_desc="$desc"
-    fi
-  fi
 done <"$csv_file"
 
 # Display summary
@@ -153,17 +154,17 @@ plot "$data_file" using 1:2 with linespoints title "Performance"
 EOF
 
   rm -f "$data_file"
-  echo "Chart saved successfully!"
+  echo "Chart saved to: $output_file"
 
-  # Open chart if requested
-  if [[ $open_chart == true ]]; then
-    if command -v open >/dev/null 2>&1; then
-      open "$output_file"
-    elif command -v xdg-open >/dev/null 2>&1; then
-      xdg-open "$output_file"
-    else
-      echo "[WARN] Cannot open chart automatically. View: $output_file"
-    fi
+  # Always try to open chart (not just when --open is used)
+  if command -v open >/dev/null 2>&1; then
+    open "$output_file"
+    echo "Opening chart..."
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$output_file"
+    echo "Opening chart..."
+  else
+    echo "[WARN] Cannot open chart automatically. View: $output_file"
   fi
 else
   if [[ $count_with_performance -eq 0 ]]; then

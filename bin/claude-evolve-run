@@ -49,8 +49,30 @@ EOF
   esac
 done
 
-echo "[INFO] Starting evolution run..."
-[[ -n $timeout_seconds ]] && echo "[INFO] Using timeout: ${timeout_seconds} seconds"
+echo "[INFO] Starting continuous evolution run..."
+echo "[INFO] Will continue running until no more pending candidates or 5 consecutive failures"
+[[ -n $timeout_seconds ]] && echo "[INFO] Using timeout: ${timeout_seconds} seconds per evaluation"
+
+# Prepare logging directory
+mkdir -p logs
+
+# Track consecutive failures
+consecutive_failures=0
+MAX_FAILURES=5
+
+# Track if we should continue after a failure
+should_continue_after_failure() {
+  ((consecutive_failures++))
+  
+  if [[ $consecutive_failures -ge $MAX_FAILURES ]]; then
+    echo "[ERROR] Too many consecutive failures ($consecutive_failures). Stopping evolution run." >&2
+    return 1
+  else
+    echo "[WARN] Failure $consecutive_failures of $MAX_FAILURES. Continuing to next candidate..." >&2
+    echo "----------------------------------------"
+    return 0
+  fi
+}
 
 # Validate workspace using config
 if [[ ! -d "$FULL_EVOLUTION_DIR" ]]; then
@@ -119,11 +141,16 @@ update_csv_row() {
   mv "$temp_file" "$FULL_CSV_PATH"
 }
 
-# Find next candidate
-if ! row_num=$(find_empty_row); then
-  echo "[ERROR] No pending candidates found in CSV. Run 'claude-evolve ideate' to add more candidates." >&2
-  exit 1
-fi
+# Main evolution loop
+while true; do
+  # Find next candidate
+  if ! row_num=$(find_empty_row); then
+    echo "[INFO] No more pending candidates found. Evolution run complete!"
+    exit 0
+  fi
+  
+  # Create log file for this iteration
+  LOGFILE="logs/claude-$(date +%Y%m%d_%H%M%S).txt"
 
 # Get row data
 row_data=$(get_csv_row "$row_num")
@@ -157,7 +184,11 @@ else
   if [[ ! -f $parent_file ]]; then
     echo "[ERROR] Parent algorithm file not found: $parent_file" >&2
     update_csv_row "$row_num" "" "failed"
-    exit 1
+    if should_continue_after_failure; then
+      continue
+    else
+      exit 1
+    fi
   fi
 fi
 
@@ -179,64 +210,52 @@ if ! command -v "$claude_cmd" >/dev/null 2>&1; then
   exit 1
 fi
 
-# Implement claude-fsd style model selection
-# Read/create loop counter for megathinking mode
-if [[ -f "$FULL_EVOLUTION_DIR/.loop_counter" ]]; then
-  LOOP_COUNTER=$(cat "$FULL_EVOLUTION_DIR/.loop_counter")
-else
-  LOOP_COUNTER=1
-fi
+# Always use Claude Sonnet
+CLAUDE_MODEL="sonnet"
+echo "[INFO] Using Claude Sonnet for development"
 
-# Check if this is the 4th iteration for megathinking mode
-if [ $((LOOP_COUNTER % 4)) -eq 0 ]; then
-  echo -e "\033[33m**** MEGATHINKING MODE ACTIVATED ****\033[0m"
-  CLAUDE_MODEL="opus"
-  MEGATHINK_PREFIX="megathink: "
-  echo "[INFO] Using Claude Opus for architectural thinking (iteration $LOOP_COUNTER)"
-else
-  CLAUDE_MODEL="sonnet"
-  MEGATHINK_PREFIX=""
-  echo "[INFO] Using Claude Sonnet for development (iteration $LOOP_COUNTER)"
-fi
+# Create mutation prompt - Claude will edit the file directly
+prompt="Please edit file $output_file to implement the following change for iteration $id: $description
 
-# Increment and save counter
-echo $((LOOP_COUNTER + 1)) > "$FULL_EVOLUTION_DIR/.loop_counter"
+There may be extra information in documentation in the $FULL_EVOLUTION_DIR/*.md files.
 
-# Create mutation prompt
-prompt="${MEGATHINK_PREFIX}You are an AI assistant helping to evolve algorithms through mutations. Please modify the Python algorithm file at $output_file based on the requested modification.
-
-CONTEXT:
-$(cat "$FULL_BRIEF_PATH" 2>/dev/null || echo "No brief available")
-
-ALGORITHM FILE TO MODIFY: $output_file
-
-REQUESTED MODIFICATION:
-$description
-
-INSTRUCTIONS:
-1. Read the existing algorithm file at $output_file
-2. Apply the requested modification while preserving the core structure
-3. Ensure the modified algorithm maintains the same interface (function signatures)
-4. Include proper error handling and documentation
-5. Overwrite the file with your improved version
-6. Return ONLY the complete Python code without explanation
-
-The output should be a complete, executable Python file that builds upon the existing algorithm."
+The algorithm should maintain the same interface (function signatures) and include proper error handling."
 
 # Generate mutation (skip for baseline)
 if [[ $id == "000" || $id == "0" ]]; then
   echo "[INFO] Baseline algorithm - skipping mutation, using original"
 else
   echo "[INFO] Calling Claude $CLAUDE_MODEL to apply mutation..."
-  if ! generated_code=$(echo "$prompt" | "$claude_cmd" --model $CLAUDE_MODEL); then
-    echo "[ERROR] Claude failed to generate algorithm mutation" >&2
+  echo "[INFO] Claude will edit: $output_file"
+  echo "[INFO] Logging to: ${LOGFILE}-developer"
+  
+  # Claude will edit the file directly - log both prompt and response
+  {
+    echo "=== EVOLUTION MUTATION PROMPT ==="
+    echo "ID: $id"
+    echo "Based on: $based_on_id"
+    echo "Description: $description"
+    echo "Output file: $output_file"
+    echo "Model: $CLAUDE_MODEL"
+    echo "Timestamp: $(date)"
+    echo
+    echo "$prompt"
+    echo
+    echo "=== CLAUDE RESPONSE ==="
+  } >> "${LOGFILE}-developer"
+  
+  # Use tee to show output and log simultaneously
+  if ! echo "$prompt" | "$claude_cmd" --dangerously-skip-permissions --model $CLAUDE_MODEL -p 2>&1 | tee -a "${LOGFILE}-developer"; then
+    echo "[ERROR] Claude failed to mutate algorithm" >&2
     update_csv_row "$row_num" "" "failed"
-    exit 1
+    if should_continue_after_failure; then
+      continue
+    else
+      exit 1
+    fi
   fi
   
-  # Save generated algorithm (overwrite the copied file)
-  echo "$generated_code" >"$output_file"
-  echo "[INFO] Claude successfully mutated algorithm"
+  echo "[INFO] Claude completed mutation"
 fi
 
 echo "[INFO] Algorithm ready at: $output_file"
@@ -256,7 +275,11 @@ if [[ -n $timeout_seconds ]]; then
     if [[ $eval_exit_code -eq 124 ]]; then
       echo "[ERROR] Evaluation timed out after ${timeout_seconds} seconds" >&2
       update_csv_row "$row_num" "" "timeout"
-      exit 1
+      if should_continue_after_failure; then
+        continue 2  # Continue outer while loop from nested context
+      else
+        exit 1
+      fi
     fi
   fi
 else
@@ -267,11 +290,25 @@ else
   fi
 fi
 
-# Show evaluator output
+# Show evaluator output and log it
 echo "[INFO] Evaluator output:"
 echo "----------------------------------------"
 echo "$eval_output"
 echo "----------------------------------------"
+
+# Log evaluator phase
+{
+  echo "=== EVALUATOR EXECUTION ==="
+  echo "ID: $id"
+  echo "Algorithm: $output_file"
+  echo "Command: $PYTHON_CMD $FULL_EVALUATOR_PATH $output_file"
+  echo "Exit code: $eval_exit_code"
+  echo "Timestamp: $(date)"
+  echo
+  echo "=== EVALUATOR OUTPUT ==="
+  echo "$eval_output"
+  echo
+} >> "${LOGFILE}-evaluator"
 
 # Process results
 if [[ $eval_exit_code -eq 0 ]]; then
@@ -291,20 +328,37 @@ if [[ $eval_exit_code -eq 0 ]]; then
         echo "[ERROR] No score found in evaluator output" >&2
         echo "[ERROR] Output: $eval_output" >&2
         update_csv_row "$row_num" "" "failed"
-        exit 1
+        if should_continue_after_failure; then
+          continue 2
+        else
+          exit 1
+        fi
       fi
     fi
   else
     echo "[ERROR] Failed to parse evaluator output" >&2
     echo "[ERROR] Output: $eval_output" >&2
     update_csv_row "$row_num" "" "failed"
-    exit 1
+    if should_continue_after_failure; then
+      continue
+    else
+      exit 1
+    fi
   fi
 else
   echo "[ERROR] Evaluator failed with exit code $eval_exit_code" >&2
   echo "[ERROR] Output: $eval_output" >&2
   update_csv_row "$row_num" "" "failed"
-  exit 1
+  if should_continue_after_failure; then
+    continue
+  else
+    exit 1
+  fi
 fi
 
-echo "[INFO] Evolution cycle completed successfully!"
+  echo "[INFO] Evolution cycle completed successfully!"
+  consecutive_failures=0  # Reset failure counter on success
+  
+  echo "[INFO] Looking for next candidate..."
+  echo "----------------------------------------"
+done  # End of main evolution loop
