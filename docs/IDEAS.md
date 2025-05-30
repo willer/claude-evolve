@@ -17,6 +17,17 @@ This file tracks potential enhancements and features that could be added to clau
 - Add progress bars for long-running operations
 - Colorized output with configurable themes
 
+### Ideation Enhancements
+
+- Add a `--from-file` option to ideate command for bulk importing ideas
+- Implement idea similarity detection using embeddings or simple text comparison
+- Add progress bar for multi-idea generation
+- Create idea templates for common algorithm patterns
+- Add support for idea categories or tags for better organization
+- Implement idea rating/scoring before evaluation
+- Add interactive mode for refining AI-generated ideas
+- Cache BRIEF.md content to improve performance
+
 ## Testing Framework Enhancements
 
 ### Test Coverage
@@ -26,6 +37,11 @@ This file tracks potential enhancements and features that could be added to clau
 - Add performance/benchmark tests for CLI operations
 - Create end-to-end workflow tests
 - Add comprehensive unit tests for CSV manipulation functions in lib/common.sh
+- Fix run command implementation to resolve test failures (prioritize over environment blame)
+- Add tests for concurrent execution scenarios when parallel mode is implemented
+- Create stress tests for large CSV files and many candidates
+- Implement proper error handling in cmd_run to prevent silent failures
+- Add debugging output to understand why tests are failing in npm test environment
 
 ### Test Infrastructure
 
@@ -43,6 +59,11 @@ This file tracks potential enhancements and features that could be added to clau
 - Implement automated dependency vulnerability scanning
 - Add code complexity analysis
 - Create automated documentation generation
+- Add automatic changelog generation from conventional commits
+- Implement semantic versioning based on conventional commit types
+- Consider adding commit message linting for conventional commit standards (✅ COMPLETED)
+- Add git hook integrity checks to prevent legacy hook conflicts
+- Implement automated commit message template generation for consistency
 
 ### Build System
 
@@ -107,3 +128,14 @@ This file tracks potential enhancements and features that could be added to clau
 - Implement project templates and examples
 - Create guided workflow suggestions
 - Add undo/rollback functionality for destructive operations
+
+## Repository Management
+
+### Branch Protection Enhancements
+
+- Consider adding required status checks once CI/CD is implemented in Phase 7
+- Evaluate enabling linear history requirement to simplify merge scenarios
+- Add automated branch protection rule updates when new CI checks are added
+- Implement branch protection rule validation/testing to ensure proper configuration
+- Consider adding protection for other important branches (develop, release branches)
+- Add monitoring/alerting for branch protection rule changes

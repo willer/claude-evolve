@@ -82,13 +82,16 @@ Below is a focused list of open questions that surfaced while analysing the curr
 
 17. **Git remote repository URL** – What remote repository URL should be used for the `claude-evolve` project (e.g., GitHub, GitLab, self-hosted)? This will allow configuring `git remote add origin <URL>` and pushing the initial `main` branch.
 
+**Context**: Remote `origin` configured to https://github.com/willer/claude-evolve.git and initial `main` branch pushed successfully.
+**Status**: ✅ RESOLVED
+
 ## 9. Pre-commit Hook Strategy
 
 18. **Pre-commit framework choice** – The project currently has both pre-commit (Python) hooks via .pre-commit-config.yaml and claims about Husky (Node.js) integration. Which approach should be the canonical pre-commit solution? Having both could lead to conflicts or confusion.
 
 **Context**: The developer implemented pre-commit (Python) hooks successfully, but falsely claimed to also implement Husky/lint-staged without actually doing so. This creates confusion about the intended approach.
 
-**Recommendation**: The current pre-commit (Python) implementation is working well and is already integrated with the project. The PLAN.md Husky task should likely be marked as "Not needed - using pre-commit instead" rather than implementing a duplicate system.
+**Status**: ✅ RESOLVED - Chose pre-commit (Python) as the canonical pre-commit solution. Removed incomplete Husky setup (.husky directory) and updated PLAN.md. Pre-commit provides better integration with shell script tooling (shellcheck, shfmt) and is already working effectively for code quality enforcement.
 
 ## 10. Run Command Implementation Questions
 
@@ -101,3 +104,36 @@ Below is a focused list of open questions that surfaced while analysing the curr
 28. **Shellcheck warnings resolution** – Should the remaining shellcheck warnings (SC2086, SC2206) be addressed as part of code quality improvements?
 
 29. **Unit tests for CSV manipulation** – Would it be beneficial to add specific unit tests for CSV manipulation functions?
+
+30. **jq requirement for cmd_run** – Should the `cmd_run` implementation verify that the `jq` command-line tool is installed and provide a clear error message if missing?
+
+**Status**: ✅ RESOLVED - Added a pre-flight `jq` availability check in `cmd_run()` to provide a clear error if the JSON parser is missing.
+
+33. **Duplicate/similar idea handling** – How should the ideate command handle duplicate or very similar ideas?
+34. **Idea editing/removal** – Should there be a way to edit or remove ideas after they're added?
+35. **Claude API rate limits and timeouts** – What's the best way to handle Claude API rate limits or timeouts?
+36. **Idea metadata fields** – Should ideas have additional metadata like creation timestamp or source (AI vs manual)?
+
+## 14. Conventional Commits Integration
+
+53. **Commitlint and pre-commit integration** – Should commitlint be integrated with the existing pre-commit framework or use a separate Git hook system? How do we handle the conflict between pre-commit's Python-based approach and potential Node.js-based commit linting?
+
+**Status**: ✅ RESOLVED - Successfully integrated commitlint with pre-commit framework using the alessandrojcm/commitlint-pre-commit-hook. This provides a clean integration that leverages the existing pre-commit infrastructure without needing a separate Node.js-based Git hook system.
+
+## 15. Commitlint Hook Integration
+
+54. **Pre-commit legacy hook conflicts** – The legacy pre-commit hook (/Users/willer/GitHub/claude-evolve/.git/hooks/pre-commit.legacy) was causing interference with the commitlint configuration. Should we investigate cleaning up legacy Node.js pre-commit installations to prevent hook conflicts?
+
+**Status**: ✅ RESOLVED - Removed the problematic legacy pre-commit hook that was trying to execute non-existent ./node_modules/pre-commit/hook. The commitlint hook now works correctly and properly validates commit messages according to conventional commit standards.
+
+## 16. Branch Protection Configuration
+
+55. **Branch protection enforcement level** – The current configuration requires 1 PR review and enforces admin compliance. Should we add additional protections like requiring status checks from CI/CD once GitHub Actions are set up? Should we require linear history to prevent complex merge scenarios?
+
+56. **Status checks integration** – Once CI/CD is implemented, should specific status checks (like test passing, linting, etc.) be required before merging? This would require updating the branch protection rules after Phase 7 CI implementation.
+
+## 17. Git Workflow Compliance
+
+57. **Feature branch enforcement** – How should we ensure developers follow the "One feature branch per phase" process established in the plan, especially given that branch protection rules are now in place? Should we add automation to detect when work is done directly on main branch?
+
+58. **Branch naming conventions** – Should we establish standardized branch naming conventions (e.g., feature/phase-X-description) to improve project organization and automate branch management?
