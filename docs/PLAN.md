@@ -21,7 +21,8 @@ The plan is organised into sequential _phases_ – each phase fits comfortably i
   > ✅ **COMPLETED**: Added bin field to package.json enabling CLI functionality via "./bin/claude-evolve.sh".
 - [x] Install dev-dependencies:
       • `shellcheck` & `shfmt` (lint/format shell scripts)
-      • `@commitlint/*`, `prettier` (markdown / json formatting) > ✅ **COMPLETED**: Installed shellcheck, shfmt, @commitlint/cli, @commitlint/config-conventional, and prettier. Added npm scripts for linting and formatting. Downloaded shfmt binary locally due to npm package issues.
+      • `@commitlint/*`, `prettier` (markdown / json formatting)
+      > ✅ **COMPLETED**: Installed shellcheck, shfmt, @commitlint/cli, @commitlint/config-conventional, and prettier. Added npm scripts for linting and formatting. Downloaded shfmt binary locally due to npm package issues.
 - [ ] Add **pre-commit** config (`.pre-commit-config.yaml`) running:
       • shellcheck
       • shfmt
