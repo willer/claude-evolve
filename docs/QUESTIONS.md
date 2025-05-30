@@ -185,3 +185,27 @@ Below is a focused list of open questions that surfaced while analysing the curr
 74. **Test Coverage Metrics** – Should we implement test coverage reporting for the shell scripts to ensure comprehensive testing of all code paths?
 
 75. **Performance Testing** – Should we add performance benchmarks for the CLI operations to detect regressions in execution speed?
+
+## 22. Test Environment Configuration Questions
+
+76. **Bats tmp directory configuration** - The Bats tests were failing due to attempting to use a relative `tmp/` directory that didn't exist. Should we document the required TMPDIR configuration in the README?
+
+**Status**: ✅ RESOLVED - Created `test/run_bats_tests.sh` wrapper script that sets `TMPDIR=/tmp` and `BATS_TMPDIR=/tmp` to ensure consistent test execution environment.
+
+77. **Cross-platform test compatibility** - Will the TMPDIR solution work consistently across different platforms (Linux, macOS, Windows WSL)?
+
+78. **Test output stream handling** - The implementation correctly writes to stderr via log functions, but Bats tests check stdout by default. Should we standardize on output stream conventions?
+
+**Status**: ✅ RESOLVED - Tests work correctly when proper TMPDIR is set. The stderr/stdout separation is actually correct behavior.
+
+79. **Shell-based test retention** - Should we keep `test/run_tests.sh` as an alternative test runner, or rely solely on Bats now that it's working?
+
+**Status**: ✅ RESOLVED - Keeping both test runners provides validation redundancy and different testing approaches.
+
+## 23. CI/CD Pipeline Questions
+
+80. **GitHub Actions configuration** - What test matrix should the CI pipeline use (OS versions, shell environments, Bats versions)?
+
+81. **CI test execution** - Should the CI pipeline use `test/run_bats_tests.sh` to ensure proper test environment setup?
+
+82. **Shellcheck integration** - How should shellcheck be integrated into the CI pipeline and local development workflow?

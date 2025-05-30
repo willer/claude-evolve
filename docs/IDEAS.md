@@ -108,6 +108,9 @@ This file tracks potential enhancements and features that could be added to clau
 - **Parallel Test Execution**: Optimize test suite execution time through parallel test running
 - **Test Result Reporting**: Add comprehensive test result reporting with trend analysis
 - **Mock Service Improvements**: Enhance Claude API mocking with more realistic response scenarios and error conditions
+- **Bats Environment Documentation**: Document the TMPDIR requirements for Bats tests in the README
+- **Cross-platform Test Compatibility**: Verify TMPDIR solution works across different platforms
+- **Test Runner Consolidation**: Consider whether to maintain both Bats and shell-based test runners
 
 ### Enhanced Timeout Management
 

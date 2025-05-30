@@ -27,5 +27,9 @@
     "bats": "^1.12.0",
     "prettier": "^3.5.3",
     "shellcheck": "^3.1.0"
+  },
+  "dependencies": {
+    "chartjs-node-canvas": "^5.0.0",
+    "csv-parser": "^3.2.0"
   }
 }

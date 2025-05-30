@@ -165,34 +165,25 @@ Implementation Notes ✅
 
 ---
 
-## Phase 7 – Testing & CI ⚠️ CRITICAL ISSUES REMAIN
+## Phase 7 – Testing & CI ⚠️ INCOMPLETE
 
-- [x] Fixed Bats installation and basic infrastructure
-- [x] Implemented comprehensive shell-based test suite (`test/run_tests.sh`)
-- [x] Mock Claude calls via `CLAUDE_CMD` environment variable
-- [ ] **CRITICAL**: Fix core implementation bugs causing 25+ test failures
-- [ ] **CRITICAL**: Resolve timeout CSV update logic that fails in tests
-- [ ] **CRITICAL**: Fix ideate command error handling and validation
-- [ ] **CRITICAL**: Fix run command processing that fails in multiple scenarios
+**Phase 7 Status**: ⚠️ **INCOMPLETE** – 32 of 44 Bats tests failing (73% failure rate), fundamental implementation bugs block progress.
+
+**Next Developer Requirements (critical)**:
+
+- [ ] Fix existing Bats test failures without modifying tests:
+  - Resolve timeout CSV update logic broken in test scenarios
+  - Correct ideate command error handling and validation (tests 13–19)
+  - Address run command processing failures in candidate workflow (tests 22–37)
+  - Repair CSV manipulation functions not working as designed (tests 22–23, 38–44)
+  - Align error message patterns and validation logic across commands
+- [ ] Achieve 100% Bats test pass rate (44/44 passing)
+- [ ] Follow a test-driven development approach with continuous validation
+
+**Remaining CI Setup**:
+
 - [ ] Set up GitHub Actions CI pipeline
 - [ ] Add shellcheck integration to test suite
-
-**CRITICAL IMPLEMENTATION ISSUES IDENTIFIED:**
-- 25+ Bats tests are still failing, indicating real implementation problems
-- Timeout functionality exists but CSV status updates are not working correctly in test scenarios
-- Ideate command error handling and validation failing across multiple test cases
-- Run command processing shows failures in candidate processing, algorithm generation, and evaluation handling
-- Core functionality is not properly validated despite claims of success
-
-**REQUIRED ACTIONS:**
-1. Debug and fix the actual implementation bugs causing test failures
-2. Do not blame test infrastructure - the implementation has real issues
-3. Validate each failing test case individually and fix the underlying code
-4. Ensure timeout logic properly updates CSV with "timeout" status
-5. Fix ideate command validation and error handling
-6. Resolve run command processing issues with candidate handling
-
-**NOTE**: Previous developer claims of "validated functionality" are contradicted by empirical test results showing widespread failures.
 
 ---
 
