@@ -50,10 +50,23 @@ setup() {
     [[ "$output" =~ "Unknown command" ]]
 }
 
-@test "setup command shows not implemented message and exits with code 1" {
+@test "setup command initializes evolution workspace" {
+    rm -rf "$PROJECT_ROOT/evolution"
     run "$CLI_SCRIPT" setup
-    [ "$status" -eq 1 ]
-    [[ "$output" =~ "Setup command not yet implemented" ]]
+    [ "$status" -eq 0 ]
+    [ -d "$PROJECT_ROOT/evolution" ]
+    [ -f "$PROJECT_ROOT/evolution/BRIEF.md" ]
+    [ -f "$PROJECT_ROOT/evolution/algorithm.py" ]
+    [ -f "$PROJECT_ROOT/evolution/evaluator.py" ]
+    [ -f "$PROJECT_ROOT/evolution/evolution.csv" ]
+    run head -n 1 "$PROJECT_ROOT/evolution/evolution.csv"
+    [ "$status" -eq 0 ]
+    [ "$output" = "id,basedOnId,description,performance,status" ]
+}
+
+@test "setup command is idempotent" {
+    run "$CLI_SCRIPT" setup
+    [ "$status" -eq 0 ]
 }
 
 @test "ideate command shows not implemented message and exits with code 1" {
