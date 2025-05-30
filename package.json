@@ -1,9 +1,19 @@
 {
   "name": "claude-evolve",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "bin": {
-    "claude-evolve": "./bin/claude-evolve"
+    "claude-evolve": "./bin/claude-evolve",
+    "claude-evolve-main": "./bin/claude-evolve-main",
+    "claude-evolve-setup": "./bin/claude-evolve-setup",
+    "claude-evolve-ideate": "./bin/claude-evolve-ideate",
+    "claude-evolve-run": "./bin/claude-evolve-run",
+    "claude-evolve-analyze": "./bin/claude-evolve-analyze"
   },
+  "files": [
+    "bin/",
+    "lib/",
+    "templates/"
+  ],
   "main": "index.js",
   "directories": {
     "doc": "docs"

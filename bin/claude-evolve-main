@@ -8,16 +8,20 @@ YELLOW='\033[0;33m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 
-# Get script directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Get script directory (resolve symlinks for global install)
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # Get version from package.json
 get_version() {
+  # Try package.json in project root first
   if [[ -f "$PROJECT_ROOT/package.json" ]]; then
     grep '"version"' "$PROJECT_ROOT/package.json" | sed 's/.*"version": *"\([^"]*\)".*/\1/'
+  # If not found, try npm list (for global installs)
+  elif command -v npm >/dev/null 2>&1; then
+    npm list -g claude-evolve --depth=0 2>/dev/null | grep claude-evolve | sed 's/.*@//' || echo "1.0.1"
   else
-    echo "unknown"
+    echo "1.0.1"
   fi
 }
 
