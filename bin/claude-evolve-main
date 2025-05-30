@@ -20,6 +20,7 @@ get_version() {
   fi
 }
 
+
 show_help() {
   cat <<EOF
 claude-evolve - AI-powered algorithm evolution tool

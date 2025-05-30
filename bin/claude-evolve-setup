@@ -6,6 +6,9 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
+# Source shared editor functions
+source "$PROJECT_ROOT/lib/editor.sh"
+
 echo "[INFO] Initializing evolution workspace..."
 
 # Create evolution directory
@@ -42,7 +45,7 @@ fi
 # Open editor for BRIEF.md if interactive and file is new or empty
 if [[ -t 1 ]] && [[ ! -s evolution/BRIEF.md ]]; then
   echo "[INFO] Opening BRIEF.md for editing..."
-  "${EDITOR:-nano}" evolution/BRIEF.md || true
+  open_with_editor evolution/BRIEF.md
 fi
 
 echo "[INFO] Evolution workspace setup complete!"

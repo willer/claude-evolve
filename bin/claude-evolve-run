@@ -142,6 +142,10 @@ echo "[INFO] Using parent algorithm: $parent_file"
 output_file="evolution/evolution_id${id}.py"
 echo "[INFO] Generating algorithm mutation..."
 
+# Copy parent algorithm to output file first
+cp "$parent_file" "$output_file"
+echo "[INFO] Copied parent algorithm to: $output_file"
+
 # Check for claude CLI
 claude_cmd="${CLAUDE_CMD:-claude}"
 if ! command -v "$claude_cmd" >/dev/null 2>&1; then
@@ -151,27 +155,25 @@ if ! command -v "$claude_cmd" >/dev/null 2>&1; then
 fi
 
 # Create mutation prompt
-prompt="You are an AI assistant helping to evolve algorithms through mutations. Please create a new Python algorithm based on the parent algorithm and the requested modification.
+prompt="You are an AI assistant helping to evolve algorithms through mutations. Please modify the Python algorithm file at $output_file based on the requested modification.
 
 CONTEXT:
 $(cat evolution/BRIEF.md 2>/dev/null || echo "No brief available")
 
-PARENT ALGORITHM:
-\`\`\`python
-$(cat "$parent_file")
-\`\`\`
+ALGORITHM FILE TO MODIFY: $output_file
 
 REQUESTED MODIFICATION:
 $description
 
 INSTRUCTIONS:
-1. Study the parent algorithm carefully
+1. Read the existing algorithm file at $output_file
 2. Apply the requested modification while preserving the core structure
 3. Ensure the modified algorithm maintains the same interface (function signatures)
 4. Include proper error handling and documentation
-5. Return ONLY the complete Python code without explanation
+5. Overwrite the file with your improved version
+6. Return ONLY the complete Python code without explanation
 
-The output should be a complete, executable Python file that builds upon the parent algorithm."
+The output should be a complete, executable Python file that builds upon the existing algorithm."
 
 # Generate mutation
 if ! generated_code=$(echo "$prompt" | "$claude_cmd"); then
@@ -180,9 +182,9 @@ if ! generated_code=$(echo "$prompt" | "$claude_cmd"); then
   exit 1
 fi
 
-# Save generated algorithm
+# Save generated algorithm (overwrite the copied file)
 echo "$generated_code" >"$output_file"
-echo "[INFO] Generated algorithm: $output_file"
+echo "[INFO] Updated algorithm: $output_file"
 
 # Run evaluator
 echo "[INFO] Running evaluation..."
