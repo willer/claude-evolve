@@ -14,7 +14,8 @@ The plan is organised into sequential *phases* – each phase fits comfortably i
 - [ ] Configure branch protection rules (main protected, feature branches for work)
 
 ### Tooling Baseline
-- [ ] `npm init -y` – create `package.json`
+- [x] `npm init -y` – create `package.json`
+  > ✅ **COMPLETED**: Generated package.json with default values for claude-evolve project.
 - [ ] Add `bin/claude-evolve` entry in `package.json` (points to `./bin/claude-evolve.sh`)
 - [ ] Install dev-dependencies:
     • `shellcheck` & `shfmt` (lint/format shell scripts)
