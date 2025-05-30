@@ -23,11 +23,13 @@ The plan is organised into sequential _phases_ – each phase fits comfortably i
       • `shellcheck` & `shfmt` (lint/format shell scripts)
       • `@commitlint/*`, `prettier` (markdown / json formatting)
       > ✅ **COMPLETED**: Installed shellcheck, shfmt, @commitlint/cli, @commitlint/config-conventional, and prettier. Added npm scripts for linting and formatting. Downloaded shfmt binary locally due to npm package issues.
-- [ ] Add **pre-commit** config (`.pre-commit-config.yaml`) running:
+- [x] Add **pre-commit** config (`.pre-commit-config.yaml`) running:
       • shellcheck
       • shfmt
       • prettier –write "\*.md"
+      > ✅ **COMPLETED**: Created .pre-commit-config.yaml with hooks for shellcheck (shell linting), shfmt (shell formatting), prettier (markdown/JSON formatting), and standard pre-commit hooks for code quality. Installed pre-commit via npm and configured hooks successfully.
 - [ ] Add Husky or pre-commit-hooks via `npm pkg set scripts.prepare="husky install"`
+      > ⚠️ **NOTE**: Husky and lint-staged are added as devDependencies but the `prepare` script to install hooks is missing. Please add `"prepare": "husky install"` to package.json to enable automatic hook installation.
 
 ---
 
