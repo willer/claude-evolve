@@ -1,6 +1,9 @@
 {
   "name": "claude-evolve",
   "version": "1.0.0",
+  "bin": {
+    "claude-evolve": "./bin/claude-evolve.sh"
+  },
   "main": "index.js",
   "directories": {
     "doc": "docs"

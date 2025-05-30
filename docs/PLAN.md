@@ -16,7 +16,8 @@ The plan is organised into sequential *phases* – each phase fits comfortably i
 ### Tooling Baseline
 - [x] `npm init -y` – create `package.json`
   > ✅ **COMPLETED**: Generated package.json with default values for claude-evolve project.
-- [ ] Add `bin/claude-evolve` entry in `package.json` (points to `./bin/claude-evolve.sh`)
+- [x] Add `bin/claude-evolve` entry in `package.json` (points to `./bin/claude-evolve.sh`)
+  > ✅ **COMPLETED**: Added bin field to package.json enabling CLI functionality via "./bin/claude-evolve.sh".
 - [ ] Install dev-dependencies:
     • `shellcheck` & `shfmt` (lint/format shell scripts)
     • `@commitlint/*`, `prettier` (markdown / json formatting)
