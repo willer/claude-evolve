@@ -57,7 +57,7 @@ load_config() {
     done < "$config_file"
   fi
 
-  # Create full paths
+  # Create full paths - ALL paths are relative to evolution_dir
   FULL_EVOLUTION_DIR="$EVOLUTION_DIR"
   FULL_ALGORITHM_PATH="$EVOLUTION_DIR/$ALGORITHM_FILE"
   FULL_EVALUATOR_PATH="$EVOLUTION_DIR/$EVALUATOR_FILE"

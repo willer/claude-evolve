@@ -2,10 +2,16 @@
 
 set -e
 
+# Load configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/config.sh
+source "$SCRIPT_DIR/../lib/config.sh"
+load_config
+
 # Parse arguments
 open_chart=false
-csv_file="evolution/evolution.csv"
-output_file="evolution/performance.png"
+csv_file="$FULL_CSV_PATH"
+output_file="$FULL_OUTPUT_DIR/performance.png"
 
 while [[ $# -gt 0 ]]; do
   case $1 in

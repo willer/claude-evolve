@@ -2,6 +2,12 @@
 
 set -e
 
+# Load configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/config.sh
+source "$SCRIPT_DIR/../lib/config.sh"
+load_config
+
 # Parse arguments
 timeout_seconds=""
 
@@ -46,35 +52,46 @@ done
 echo "[INFO] Starting evolution run..."
 [[ -n $timeout_seconds ]] && echo "[INFO] Using timeout: ${timeout_seconds} seconds"
 
-# Validate workspace
-if [[ ! -d evolution ]]; then
-  echo "[ERROR] Evolution directory not found. Run 'claude-evolve setup' first." >&2
+# Validate workspace using config
+if [[ ! -d "$FULL_EVOLUTION_DIR" ]]; then
+  echo "[ERROR] Evolution directory not found: $FULL_EVOLUTION_DIR. Run 'claude-evolve setup' first." >&2
   exit 1
 fi
 
-for file in evolution.csv evaluator.py; do
-  if [[ ! -f evolution/$file ]]; then
-    echo "[ERROR] $file not found. Run 'claude-evolve setup' first." >&2
-    exit 1
-  fi
-done
+# Check required files
+if [[ ! -f "$FULL_CSV_PATH" ]]; then
+  echo "[ERROR] CSV file not found: $FULL_CSV_PATH" >&2
+  exit 1
+fi
 
-# Find oldest empty row (pure shell)
+if [[ ! -f "$FULL_EVALUATOR_PATH" ]]; then
+  echo "[ERROR] Evaluator not found: $FULL_EVALUATOR_PATH" >&2
+  exit 1
+fi
+
+if [[ ! -f "$FULL_ALGORITHM_PATH" ]]; then
+  echo "[ERROR] Algorithm not found: $FULL_ALGORITHM_PATH" >&2
+  exit 1
+fi
+
+# Find oldest pending row (pure shell)
 find_empty_row() {
   local row_num=2 # Start after header
-  while IFS=, read -r id based_on desc perf status; do
-    if [[ -z $perf && -z $status ]]; then
+  local csv_id csv_based_on csv_desc csv_perf csv_status
+  while IFS=, read -r csv_id csv_based_on csv_desc csv_perf csv_status; do
+    # Look for rows with pending status or empty status (but not complete/failed/running)
+    if [[ $csv_status == "pending" || (-z $csv_perf && -z $csv_status) ]]; then
       echo $row_num
       return 0
     fi
     ((row_num++))
-  done < <(tail -n +2 evolution/evolution.csv)
+  done < <(tail -n +2 "$FULL_CSV_PATH")
   return 1
 }
 
 # Get CSV row (pure shell)
 get_csv_row() {
-  sed -n "${1}p" evolution/evolution.csv
+  sed -n "${1}p" "$FULL_CSV_PATH"
 }
 
 # Update CSV row (pure shell with temp file)
@@ -84,32 +101,40 @@ update_csv_row() {
   local status="$3"
 
   # Read CSV and update specific row
-  local temp_file="evolution/evolution.csv.tmp"
+  local temp_file="${FULL_CSV_PATH}.tmp"
   local current_row=1
+  local csv_id csv_based_on csv_desc csv_perf csv_stat
 
-  while IFS=, read -r id based_on desc perf stat; do
+  while IFS=, read -r csv_id csv_based_on csv_desc csv_perf csv_stat; do
     if [[ $current_row -eq $row_num ]]; then
       # Update this row
-      echo "$id,$based_on,$desc,$performance,$status"
+      echo "$csv_id,$csv_based_on,$csv_desc,$performance,$status"
     else
       # Keep original row
-      echo "$id,$based_on,$desc,$perf,$stat"
+      echo "$csv_id,$csv_based_on,$csv_desc,$csv_perf,$csv_stat"
     fi
     ((current_row++))
-  done <evolution/evolution.csv >"$temp_file"
+  done <"$FULL_CSV_PATH" >"$temp_file"
 
-  mv "$temp_file" evolution/evolution.csv
+  mv "$temp_file" "$FULL_CSV_PATH"
 }
 
 # Find next candidate
 if ! row_num=$(find_empty_row); then
-  echo "[ERROR] No empty rows found in CSV. Run 'claude-evolve ideate' to add candidates." >&2
+  echo "[ERROR] No pending candidates found in CSV. Run 'claude-evolve ideate' to add more candidates." >&2
   exit 1
 fi
 
 # Get row data
 row_data=$(get_csv_row "$row_num")
 IFS=, read -r id based_on_id description performance status <<<"$row_data"
+
+# Check if ID is empty
+if [[ -z $id ]]; then
+  echo "[ERROR] Empty ID found at row $row_num. CSV may be malformed." >&2
+  echo "[ERROR] Row data: $row_data" >&2
+  exit 1
+fi
 
 # Clean up description (remove quotes)
 description=${description#\"}
@@ -119,16 +144,16 @@ echo "[INFO] Processing candidate ID: $id"
 echo "[INFO] Description: $description"
 echo "[INFO] Based on ID: $based_on_id"
 
-# Set interrupt handler
-trap 'update_csv_row "$row_num" "" "interrupted"; echo "[INFO] Evolution interrupted"; exit 130' INT
-
-# Mark as running
-update_csv_row "$row_num" "" "running"
+# Set interrupt handler - just exit without updating CSV status
+trap 'echo "[INFO] Evolution interrupted"; exit 130' INT
 
 # Determine parent algorithm
-parent_file="evolution/algorithm.py"
-if [[ -n $based_on_id && $based_on_id != "0" ]]; then
-  parent_file="evolution/evolution_id${based_on_id}.py"
+if [[ -z $based_on_id || $based_on_id == "0" || $based_on_id == '""' ]]; then
+  # Empty or zero basedonID means use the base algorithm
+  parent_file="$FULL_ALGORITHM_PATH"
+  echo "[INFO] Using base algorithm (basedonID is empty or 0)"
+else
+  parent_file="$FULL_OUTPUT_DIR/evolution_id${based_on_id}.py"
   if [[ ! -f $parent_file ]]; then
     echo "[ERROR] Parent algorithm file not found: $parent_file" >&2
     update_csv_row "$row_num" "" "failed"
@@ -139,7 +164,7 @@ fi
 echo "[INFO] Using parent algorithm: $parent_file"
 
 # Generate mutation
-output_file="evolution/evolution_id${id}.py"
+output_file="$FULL_OUTPUT_DIR/evolution_id${id}.py"
 echo "[INFO] Generating algorithm mutation..."
 
 # Copy parent algorithm to output file first
@@ -156,8 +181,8 @@ fi
 
 # Implement claude-fsd style model selection
 # Read/create loop counter for megathinking mode
-if [[ -f evolution/.loop_counter ]]; then
-  LOOP_COUNTER=$(cat evolution/.loop_counter)
+if [[ -f "$FULL_EVOLUTION_DIR/.loop_counter" ]]; then
+  LOOP_COUNTER=$(cat "$FULL_EVOLUTION_DIR/.loop_counter")
 else
   LOOP_COUNTER=1
 fi
@@ -175,13 +200,13 @@ else
 fi
 
 # Increment and save counter
-echo $((LOOP_COUNTER + 1)) > evolution/.loop_counter
+echo $((LOOP_COUNTER + 1)) > "$FULL_EVOLUTION_DIR/.loop_counter"
 
 # Create mutation prompt
 prompt="${MEGATHINK_PREFIX}You are an AI assistant helping to evolve algorithms through mutations. Please modify the Python algorithm file at $output_file based on the requested modification.
 
 CONTEXT:
-$(cat evolution/BRIEF.md 2>/dev/null || echo "No brief available")
+$(cat "$FULL_BRIEF_PATH" 2>/dev/null || echo "No brief available")
 
 ALGORITHM FILE TO MODIFY: $output_file
 
@@ -198,25 +223,33 @@ INSTRUCTIONS:
 
 The output should be a complete, executable Python file that builds upon the existing algorithm."
 
-# Generate mutation
-if ! generated_code=$(echo "$prompt" | "$claude_cmd" --model $CLAUDE_MODEL); then
-  echo "[ERROR] Claude failed to generate algorithm mutation" >&2
-  update_csv_row "$row_num" "" "failed"
-  exit 1
+# Generate mutation (skip for baseline)
+if [[ $id == "000" || $id == "0" ]]; then
+  echo "[INFO] Baseline algorithm - skipping mutation, using original"
+else
+  echo "[INFO] Calling Claude $CLAUDE_MODEL to apply mutation..."
+  if ! generated_code=$(echo "$prompt" | "$claude_cmd" --model $CLAUDE_MODEL); then
+    echo "[ERROR] Claude failed to generate algorithm mutation" >&2
+    update_csv_row "$row_num" "" "failed"
+    exit 1
+  fi
+  
+  # Save generated algorithm (overwrite the copied file)
+  echo "$generated_code" >"$output_file"
+  echo "[INFO] Claude successfully mutated algorithm"
 fi
 
-# Save generated algorithm (overwrite the copied file)
-echo "$generated_code" >"$output_file"
-echo "[INFO] Updated algorithm: $output_file"
+echo "[INFO] Algorithm ready at: $output_file"
 
 # Run evaluator
 echo "[INFO] Running evaluation..."
+echo "[INFO] Executing: $PYTHON_CMD $FULL_EVALUATOR_PATH $output_file"
 eval_output=""
 eval_exit_code=0
 
 if [[ -n $timeout_seconds ]]; then
-  echo "[INFO] Starting evaluation with ${timeout_seconds}s timeout..."
-  if eval_output=$(timeout "$timeout_seconds" python3 evolution/evaluator.py "$output_file" 2>&1); then
+  echo "[INFO] Evaluation timeout: ${timeout_seconds}s"
+  if eval_output=$(timeout "$timeout_seconds" "$PYTHON_CMD" "$FULL_EVALUATOR_PATH" "$output_file" 2>&1); then
     eval_exit_code=0
   else
     eval_exit_code=$?
@@ -227,25 +260,31 @@ if [[ -n $timeout_seconds ]]; then
     fi
   fi
 else
-  if eval_output=$(python3 evolution/evaluator.py "$output_file" 2>&1); then
+  if eval_output=$("$PYTHON_CMD" "$FULL_EVALUATOR_PATH" "$output_file" 2>&1); then
     eval_exit_code=0
   else
     eval_exit_code=$?
   fi
 fi
 
+# Show evaluator output
+echo "[INFO] Evaluator output:"
+echo "----------------------------------------"
+echo "$eval_output"
+echo "----------------------------------------"
+
 # Process results
 if [[ $eval_exit_code -eq 0 ]]; then
   # Extract score from JSON (simple grep approach)
   if score=$(echo "$eval_output" | grep -o '"score"[[:space:]]*:[[:space:]]*[0-9.]*' | cut -d: -f2 | tr -d ' '); then
     if [[ -n $score ]]; then
-      update_csv_row "$row_num" "$score" "completed"
+      update_csv_row "$row_num" "$score" "complete"
       echo "[INFO] ✓ Evaluation completed successfully"
       echo "[INFO] Performance score: $score"
     else
       # Try "performance" field
       if score=$(echo "$eval_output" | grep -o '"performance"[[:space:]]*:[[:space:]]*[0-9.]*' | cut -d: -f2 | tr -d ' '); then
-        update_csv_row "$row_num" "$score" "completed"
+        update_csv_row "$row_num" "$score" "complete"
         echo "[INFO] ✓ Evaluation completed successfully"
         echo "[INFO] Performance score: $score"
       else
