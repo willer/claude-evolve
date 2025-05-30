@@ -1,0 +1,27 @@
+# claude-evolve configuration file
+# This file defines paths and settings for the evolution process
+
+# Working directory for evolution files
+evolution_dir: "evolution"
+
+# Algorithm and evaluator file paths (relative to evolution_dir)
+algorithm_file: "algorithm.py"
+evaluator_file: "evaluator.py"
+brief_file: "BRIEF.md"
+
+# CSV file for tracking evolution (relative to evolution_dir)
+evolution_csv: "evolution.csv"
+
+# Output directory for generated algorithms (relative to evolution_dir)
+# Leave empty to use evolution_dir directly
+output_dir: ""
+
+# Parent algorithm selection strategy
+# Options: "best", "random", "latest"
+parent_selection: "best"
+
+# Maximum number of ideas to generate at once
+max_ideas: 50
+
+# Python command to use for evaluation
+python_cmd: "python3"

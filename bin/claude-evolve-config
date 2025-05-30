@@ -1,0 +1,142 @@
+#!/bin/bash
+
+set -e
+
+# Load configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/config.sh
+source "$SCRIPT_DIR/../lib/config.sh"
+
+show_help() {
+  cat <<EOF
+claude-evolve config - Manage configuration settings
+
+USAGE:
+  claude-evolve config [--show] [--edit] [--reset]
+
+OPTIONS:
+  --show    Show current configuration (default)
+  --edit    Open config file in editor
+  --reset   Reset to default configuration
+  --help    Show this help message
+
+DESCRIPTION:
+  Manages claude-evolve configuration settings including file paths,
+  algorithm locations, and behavior settings.
+
+CONFIGURATION FILE:
+  The configuration is loaded from:
+  evolution/config.yaml
+
+  If no config file exists, defaults are used.
+EOF
+}
+
+# Parse arguments
+action="show"
+while [[ $# -gt 0 ]]; do
+  case $1 in
+  --help)
+    show_help
+    exit 0
+    ;;
+  --show)
+    action="show"
+    shift
+    ;;
+  --edit)
+    action="edit"
+    shift
+    ;;
+  --reset)
+    action="reset"
+    shift
+    ;;
+  *)
+    echo "[ERROR] Unknown option: $1" >&2
+    echo "Use --help for usage information" >&2
+    exit 1
+    ;;
+  esac
+done
+
+# Load current config
+load_config
+
+case $action in
+show)
+  show_config
+  ;;
+edit)
+  # Single config file location
+  config_file="evolution/config.yaml"
+  
+  if [[ ! -f "$config_file" ]]; then
+    if [[ ! -d "evolution" ]]; then
+      echo "[ERROR] Evolution directory not found. Run 'claude-evolve setup' first." >&2
+      exit 1
+    fi
+    
+    echo "[INFO] Creating new config file: $config_file"
+    
+    # Copy template if available
+    if [[ -f "$SCRIPT_DIR/../templates/config.yaml" ]]; then
+      cp "$SCRIPT_DIR/../templates/config.yaml" "$config_file"
+    else
+      # Create basic config
+      cat > "$config_file" <<EOF
+# claude-evolve configuration file
+evolution_dir: "evolution"
+algorithm_file: "algorithm.py"
+evaluator_file: "evaluator.py"
+brief_file: "BRIEF.md"
+evolution_csv: "evolution.csv"
+output_dir: ""
+parent_selection: "best"
+max_ideas: 50
+python_cmd: "python3"
+EOF
+    fi
+  fi
+  
+  # Open in editor
+  if [[ -n ${EDITOR:-} ]]; then
+    "$EDITOR" "$config_file"
+  elif command -v code >/dev/null 2>&1; then
+    code "$config_file"
+  elif command -v nano >/dev/null 2>&1; then
+    nano "$config_file"
+  else
+    echo "[INFO] Config file created at: $config_file"
+    echo "[INFO] Edit manually or set EDITOR environment variable"
+  fi
+  ;;
+reset)
+  config_file="evolution/config.yaml"
+  
+  if [[ ! -d "evolution" ]]; then
+    echo "[ERROR] Evolution directory not found. Run 'claude-evolve setup' first." >&2
+    exit 1
+  fi
+  
+  echo "[INFO] Resetting configuration to defaults: $config_file"
+  if [[ -f "$SCRIPT_DIR/../templates/config.yaml" ]]; then
+    cp "$SCRIPT_DIR/../templates/config.yaml" "$config_file"
+  else
+    # Create default config
+    cat > "$config_file" <<EOF
+# claude-evolve configuration file
+evolution_dir: "evolution"
+algorithm_file: "algorithm.py"
+evaluator_file: "evaluator.py"
+brief_file: "BRIEF.md"
+evolution_csv: "evolution.csv"
+output_dir: ""
+parent_selection: "best"
+max_ideas: 50
+python_cmd: "python3"
+EOF
+  fi
+  echo "[INFO] Configuration reset successfully"
+  ;;
+esac

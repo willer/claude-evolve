@@ -81,8 +81,9 @@ show_menu() {
   echo "  2) ideate   - Generate new algorithm ideas"
   echo "  3) run      - Execute evolution candidates"
   echo "  4) analyze  - Analyze evolution results"
-  echo "  5) help     - Show help message"
-  echo "  6) exit     - Exit"
+  echo "  5) config   - Manage configuration settings"
+  echo "  6) help     - Show help message"
+  echo "  7) exit     - Exit"
   echo
 
   # Show workspace status
@@ -99,20 +100,21 @@ check_for_updates
 # Main logic
 if [[ $# -eq 0 ]]; then
   show_menu
-  read -r -p "Enter your choice (1-6): " choice
+  read -r -p "Enter your choice (1-7): " choice
 
   case $choice in
   1) exec "$SCRIPT_DIR/claude-evolve-setup" ;;
   2) exec "$SCRIPT_DIR/claude-evolve-ideate" ;;
   3) exec "$SCRIPT_DIR/claude-evolve-run" ;;
   4) exec "$SCRIPT_DIR/claude-evolve-analyze" ;;
-  5) show_help ;;
-  6)
+  5) exec "$SCRIPT_DIR/claude-evolve-config" ;;
+  6) show_help ;;
+  7)
     echo "Goodbye!"
     exit 0
     ;;
   *)
-    echo -e "${RED}Invalid choice. Please select 1-6.${NC}"
+    echo -e "${RED}Invalid choice. Please select 1-7.${NC}"
     exit 1
     ;;
   esac
@@ -140,6 +142,10 @@ run)
 analyze)
   shift
   exec "$SCRIPT_DIR/claude-evolve-analyze" "$@"
+  ;;
+config)
+  shift
+  exec "$SCRIPT_DIR/claude-evolve-config" "$@"
   ;;
 *)
   echo "Unknown command: ${1:-}"

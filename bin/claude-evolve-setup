@@ -20,7 +20,7 @@ else
 fi
 
 # Copy template files
-for file in BRIEF.md algorithm.py evaluator.py; do
+for file in BRIEF.md algorithm.py evaluator.py config.yaml; do
   if [[ ! -f evolution/$file ]]; then
     if [[ -f "$PROJECT_ROOT/templates/$file" ]]; then
       echo "[INFO] Copying $file from templates..."
