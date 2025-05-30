@@ -7,9 +7,9 @@ The plan is organised into sequential *phases* – each phase fits comfortably i
 ## Phase 0 – Repository & SDLC Skeleton
 
 - [ ] Initialise Git repository (if not already) and push to remote
-  > ⚠️ **Action Required**: The repository has been initialized (`git init -b main`), but no commits have been created or pushed. Please stage and commit all existing files (including an updated `.gitignore`), configure the remote `origin`, and push the initial `main` branch.
-- [ ] Add `.gitignore` (node_modules, evolution/*.png, *.log, etc.)
-  > ⚠️ **Action Required**: The current `.gitignore` is incomplete. Please extend it to cover standard exclusions (`node_modules/`, `npm-debug.log*`, `*.pid`, OS files like `.DS_Store`, build outputs, and `evolution/*.{png,jpg,gif}`) and remove any editor swap files (e.g., `.gitignore.swp`).
+  > ⚠️ **Action Required**: Please configure the remote `origin` with the repository URL (see Question 17 in QUESTIONS.md) and push the initial `main` branch.
+- [x] Add `.gitignore` (node_modules, evolution/*.png, *.log, etc.)
+  > ✅ **COMPLETED**: Comprehensive .gitignore implemented covering Node.js dependencies, OS files, editor files, build outputs, and project-specific evolution artifacts.
 - [ ] Enable conventional commits / commitlint (optional)
 - [ ] Configure branch protection rules (main protected, feature branches for work)
 
