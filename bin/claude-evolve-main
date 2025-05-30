@@ -4,6 +4,7 @@ set -e
 
 # Colors for output
 GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 
@@ -20,6 +21,22 @@ get_version() {
   fi
 }
 
+# Function to check for updates (non-blocking)
+check_for_updates() {
+  # Only check if we can reach npm registry quickly
+  if timeout 2 npm view claude-evolve version >/dev/null 2>&1; then
+    local current_version
+    current_version=$(npm list -g claude-evolve --depth=0 2>/dev/null | grep claude-evolve | sed 's/.*@//')
+    local latest_version
+    latest_version=$(timeout 2 npm view claude-evolve version 2>/dev/null)
+    
+    if [[ -n $current_version ]] && [[ -n $latest_version ]] && [[ $current_version != "$latest_version" ]]; then
+      echo -e "${YELLOW}📦 Update available: claude-evolve $current_version → $latest_version${NC}"
+      echo -e "${YELLOW}   Run: npm update -g claude-evolve${NC}"
+      echo
+    fi
+  fi
+}
 
 show_help() {
   cat <<EOF
@@ -71,6 +88,9 @@ show_menu() {
   [[ -f evolution/evolution.csv ]] && echo "  ✓ evolution.csv exists" || echo "  ✗ evolution.csv missing"
   echo
 }
+
+# Check for updates (quick, non-blocking)
+check_for_updates
 
 # Main logic
 if [[ $# -eq 0 ]]; then
