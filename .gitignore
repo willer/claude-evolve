@@ -32,6 +32,9 @@ node_modules/
 .parcel-cache/
 .eslintcache
 
+# Local binaries
+.bin/
+
 # Build outputs
 dist/
 build/

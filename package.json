@@ -9,10 +9,22 @@
     "doc": "docs"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "lint": "npm run lint:shell && npm run lint:format",
+    "lint:shell": "shellcheck bin/*.sh lib/*.sh 2>/dev/null || echo 'No shell files found to lint'",
+    "lint:format": "prettier --check '**/*.{md,json}'",
+    "format": "npm run format:shell && npm run format:files",
+    "format:shell": "./.bin/shfmt -w bin/*.sh lib/*.sh 2>/dev/null || echo 'No shell files found to format'",
+    "format:files": "prettier --write '**/*.{md,json}'"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": ""
+  "description": "",
+  "devDependencies": {
+    "@commitlint/cli": "^19.8.1",
+    "@commitlint/config-conventional": "^19.8.1",
+    "prettier": "^3.5.3",
+    "shellcheck": "^3.1.0"
+  }
 }

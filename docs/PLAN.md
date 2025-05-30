@@ -1,6 +1,6 @@
 # Claude-Evolve – Implementation Plan
 
-The plan is organised into sequential *phases* – each phase fits comfortably in a feature branch and ends in a working, testable state.  Tick the `[ ]` check-box when the task is complete.
+The plan is organised into sequential _phases_ – each phase fits comfortably in a feature branch and ends in a working, testable state. Tick the `[ ]` check-box when the task is complete.
 
 ---
 
@@ -8,23 +8,24 @@ The plan is organised into sequential *phases* – each phase fits comfortably i
 
 - [ ] Initialise Git repository (if not already) and push to remote
   > ⚠️ **Action Required**: Please configure the remote `origin` with the repository URL (see Question 17 in QUESTIONS.md) and push the initial `main` branch.
-- [x] Add `.gitignore` (node_modules, evolution/*.png, *.log, etc.)
+- [x] Add `.gitignore` (node*modules, evolution/*.png, \_.log, etc.)
   > ✅ **COMPLETED**: Comprehensive .gitignore implemented covering Node.js dependencies, OS files, editor files, build outputs, and project-specific evolution artifacts.
 - [ ] Enable conventional commits / commitlint (optional)
 - [ ] Configure branch protection rules (main protected, feature branches for work)
 
 ### Tooling Baseline
+
 - [x] `npm init -y` – create `package.json`
   > ✅ **COMPLETED**: Generated package.json with default values for claude-evolve project.
 - [x] Add `bin/claude-evolve` entry in `package.json` (points to `./bin/claude-evolve.sh`)
   > ✅ **COMPLETED**: Added bin field to package.json enabling CLI functionality via "./bin/claude-evolve.sh".
-- [ ] Install dev-dependencies:
-    • `shellcheck` & `shfmt` (lint/format shell scripts)
-    • `@commitlint/*`, `prettier` (markdown / json formatting)
+- [x] Install dev-dependencies:
+      • `shellcheck` & `shfmt` (lint/format shell scripts)
+      • `@commitlint/*`, `prettier` (markdown / json formatting) > ✅ **COMPLETED**: Installed shellcheck, shfmt, @commitlint/cli, @commitlint/config-conventional, and prettier. Added npm scripts for linting and formatting. Downloaded shfmt binary locally due to npm package issues.
 - [ ] Add **pre-commit** config (`.pre-commit-config.yaml`) running:
-    • shellcheck
-    • shfmt
-    • prettier –write "*.md"
+      • shellcheck
+      • shfmt
+      • prettier –write "\*.md"
 - [ ] Add Husky or pre-commit-hooks via `npm pkg set scripts.prepare="husky install"`
 
 ---
@@ -32,16 +33,19 @@ The plan is organised into sequential *phases* – each phase fits comfortably i
 ## Phase 1 – Minimal CLI Skeleton
 
 Directory layout
+
 - [ ] `bin/claude-evolve.sh` – argument parsing stub (menu + sub-commands)
 - [ ] `lib/common.sh` – shared helper functions (logging, json parsing)
 - [ ] `templates/` – default files copied by `setup`
 
 Core behaviour
+
 - [ ] `claude-evolve --help` prints usage & version (from package.json)
 - [ ] No-arg invocation opens interactive menu (placeholder)
 - [ ] `claude-evolve <cmd>` routes to `cmd_<name>` bash functions
 
 Unit tests
+
 - [ ] Add minimal Bats-core test verifying `--help` exits 0
 
 ---
@@ -60,16 +64,17 @@ Unit tests
 
 - [ ] `claude-evolve ideate [N]` (default 1)
 - [ ] Prompt Claude (`claude -p`) with a template pulling context from:
-    • The project `evolution/BRIEF.md`
-    • Recent top performers from `evolution.csv`
+      • The project `evolution/BRIEF.md`
+      • Recent top performers from `evolution.csv`
 - [ ] Append new rows into `evolution.csv` with blank performance/status
-- [ ] Offer interactive *manual entry* fallback when `–no-ai` is passed or Claude fails
+- [ ] Offer interactive _manual entry_ fallback when `–no-ai` is passed or Claude fails
 
 ---
 
 ## Phase 4 – Candidate Execution Loop (`run`)
 
 Basic MVP
+
 - [ ] Select the **oldest** row in `evolution.csv` with empty status
 - [ ] Build prompt for Claude to mutate the parent algorithm (file path from `basedOnId`)
 - [ ] Save generated code as `evolution/evolution_idXXX.<ext>` (use same extension as parent)
@@ -78,6 +83,7 @@ Basic MVP
 - [ ] Stream progress log to terminal (ID, description, metric)
 
 Error handling
+
 - [ ] Detect evaluator non-zero exit → mark `failed`
 - [ ] Graceful Ctrl-C → mark current row `interrupted`
 
@@ -129,6 +135,6 @@ Error handling
 
 ### Process Notes
 
-• One *feature branch* per phase or sub-feature – keep PRs small.
+• One _feature branch_ per phase or sub-feature – keep PRs small.
 • Each merged PR must pass tests & pre-commit hooks.
 • Strict adherence to **YAGNI** – only ship what is necessary for the next user-visible increment.
