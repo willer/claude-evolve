@@ -3,7 +3,7 @@
 set -e
 
 # Parse arguments
-count=1
+count=20
 no_ai=false
 
 while [[ $# -gt 0 ]]; do
@@ -16,7 +16,7 @@ USAGE:
   claude-evolve ideate [N] [--no-ai]
 
 ARGUMENTS:
-  N         Number of ideas to generate (default: 1, max: 50)
+  N         Number of ideas to generate (default: 20, max: 50)
 
 OPTIONS:
   --no-ai   Use manual entry mode instead of AI generation
@@ -71,8 +71,8 @@ get_next_id() {
   # Find highest ID and increment (pure shell)
   local max_id=0
   while IFS=, read -r id rest; do
-    if [[ $id =~ ^[0-9]+$ ]] && [[ $id -gt $max_id ]]; then
-      max_id=$id
+    if [[ $id =~ ^[0-9]+$ ]] && (( 10#$id > max_id )); then
+      max_id=$((10#$id))
     fi
   done < <(tail -n +2 evolution/evolution.csv)
   echo $((max_id + 1))
@@ -144,7 +144,7 @@ ideate_ai() {
 
   # Build prompt
   local prompt
-  prompt="You are helping with algorithm evolution. Generate exactly $count new algorithm idea(s) based on the following context.
+  prompt="It's time for your megathinking mode! You are helping with algorithm evolution. Generate exactly $count new algorithm idea(s) based on the following context.
 
 Project Brief:
 $(cat evolution/BRIEF.md)
@@ -166,7 +166,7 @@ Format: One idea per line, no numbering, no extra formatting."
 
   # Call Claude and process response
   local response
-  if ! response=$(echo "$prompt" | claude -p 2>&1); then
+  if ! response=$(echo "$prompt" | claude --model opus -p 2>&1); then
     echo "[WARN] Claude API call failed, falling back to manual entry."
     return 1
   fi

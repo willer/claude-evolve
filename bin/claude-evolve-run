@@ -154,8 +154,31 @@ if ! command -v "$claude_cmd" >/dev/null 2>&1; then
   exit 1
 fi
 
+# Implement claude-fsd style model selection
+# Read/create loop counter for megathinking mode
+if [[ -f evolution/.loop_counter ]]; then
+  LOOP_COUNTER=$(cat evolution/.loop_counter)
+else
+  LOOP_COUNTER=1
+fi
+
+# Check if this is the 4th iteration for megathinking mode
+if [ $((LOOP_COUNTER % 4)) -eq 0 ]; then
+  echo -e "\033[33m**** MEGATHINKING MODE ACTIVATED ****\033[0m"
+  CLAUDE_MODEL="opus"
+  MEGATHINK_PREFIX="megathink: "
+  echo "[INFO] Using Claude Opus for architectural thinking (iteration $LOOP_COUNTER)"
+else
+  CLAUDE_MODEL="sonnet"
+  MEGATHINK_PREFIX=""
+  echo "[INFO] Using Claude Sonnet for development (iteration $LOOP_COUNTER)"
+fi
+
+# Increment and save counter
+echo $((LOOP_COUNTER + 1)) > evolution/.loop_counter
+
 # Create mutation prompt
-prompt="You are an AI assistant helping to evolve algorithms through mutations. Please modify the Python algorithm file at $output_file based on the requested modification.
+prompt="${MEGATHINK_PREFIX}You are an AI assistant helping to evolve algorithms through mutations. Please modify the Python algorithm file at $output_file based on the requested modification.
 
 CONTEXT:
 $(cat evolution/BRIEF.md 2>/dev/null || echo "No brief available")
@@ -176,7 +199,7 @@ INSTRUCTIONS:
 The output should be a complete, executable Python file that builds upon the existing algorithm."
 
 # Generate mutation
-if ! generated_code=$(echo "$prompt" | "$claude_cmd"); then
+if ! generated_code=$(echo "$prompt" | "$claude_cmd" --model $CLAUDE_MODEL); then
   echo "[ERROR] Claude failed to generate algorithm mutation" >&2
   update_csv_row "$row_num" "" "failed"
   exit 1
