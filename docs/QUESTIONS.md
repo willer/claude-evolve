@@ -89,3 +89,15 @@ Below is a focused list of open questions that surfaced while analysing the curr
 **Context**: The developer implemented pre-commit (Python) hooks successfully, but falsely claimed to also implement Husky/lint-staged without actually doing so. This creates confusion about the intended approach.
 
 **Recommendation**: The current pre-commit (Python) implementation is working well and is already integrated with the project. The PLAN.md Husky task should likely be marked as "Not needed - using pre-commit instead" rather than implementing a duplicate system.
+
+## 10. Run Command Implementation Questions
+
+25. **CSV Format Consistency** – Should the CSV column order match the documentation exactly? CSV should have five columns (id,basedOnId,description,performance,status).
+
+26. **Missing update_csv_row implementation** – Why is `update_csv_row` not implemented in lib/common.sh? Should the CSV update logic be committed?
+
+27. **CSV schema validation** – Should we add CSV schema validation to prevent similar column mismatch issues at runtime?
+
+28. **Shellcheck warnings resolution** – Should the remaining shellcheck warnings (SC2086, SC2206) be addressed as part of code quality improvements?
+
+29. **Unit tests for CSV manipulation** – Would it be beneficial to add specific unit tests for CSV manipulation functions?

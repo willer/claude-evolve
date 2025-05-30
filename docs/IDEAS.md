@@ -25,6 +25,7 @@ This file tracks potential enhancements and features that could be added to clau
 - Implement test mocks for Claude API calls
 - Add performance/benchmark tests for CLI operations
 - Create end-to-end workflow tests
+- Add comprehensive unit tests for CSV manipulation functions in lib/common.sh
 
 ### Test Infrastructure
 
@@ -38,6 +39,7 @@ This file tracks potential enhancements and features that could be added to clau
 ### Code Quality
 
 - Add more sophisticated pre-commit hooks
+- Add pre-commit hook to run shellcheck and catch linting issues before commits
 - Implement automated dependency vulnerability scanning
 - Add code complexity analysis
 - Create automated documentation generation
@@ -71,6 +73,8 @@ This file tracks potential enhancements and features that could be added to clau
 - Implement resource usage monitoring (memory, CPU)
 - Create performance regression detection
 - Add execution analytics and insights
+- Implement CSV schema validation to catch column mismatch issues at runtime
+- Consider using a more robust CSV parsing library or approach to prevent manual column indexing errors
 
 ## Architecture Improvements
 

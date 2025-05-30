@@ -82,6 +82,8 @@ Unit tests
 
 Basic MVP
 
+- [ ] **Critical Bug Fix**: Fix CSV column mismatch in update_csv_row (update performance in column 4, not column 6).
+
 - [ ] Select the **oldest** row in `evolution.csv` with empty status
 - [ ] Build prompt for Claude to mutate the parent algorithm (file path from `basedOnId`)
 - [ ] Save generated code as `evolution/evolution_idXXX.<ext>` (use same extension as parent)
