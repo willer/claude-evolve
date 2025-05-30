@@ -134,7 +134,8 @@ Additional Features ✅
 
 ## Phase 5 – Enhancements to `run`
 
-- [ ] `--timeout <sec>` option → kill evaluator past limit, mark `timeout`
+> ⚠️ **INCOMPLETE**: Implementation exists but is currently failing the Bats test suite. Please ensure the timeout logic (exit codes, error messaging, and process cleanup) aligns with test expectations and fix or update tests as needed (see Phase 7).
+
 - [ ] `--parallel <N>` → run up to N candidates concurrently (background subshells)
 - [ ] ETA & throughput stats in the live log
 
@@ -165,6 +166,7 @@ Implementation Notes ✅
 ## Phase 7 – Testing & CI
 
 - [ ] Fix Bats temporary directory setup in this environment
+  > 🚨 **CRITICAL**: All tests are failing due to Bats infrastructure issues. The timeout feature cannot be properly validated until testing infrastructure is fixed.
 - [ ] Alternative: Implement comprehensive shell-based test suite
 - [ ] Set up proper CI environment with working Bats configuration
 - [ ] Mock Claude calls via environment var `CLAUDE_MOCK=1`

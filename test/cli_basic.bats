@@ -69,16 +69,20 @@ setup() {
     [ "$status" -eq 0 ]
 }
 
-@test "ideate command shows not implemented message and exits with code 1" {
+@test "ideate command fails when evolution workspace doesn't exist" {
+    # Ensure we're in a clean directory without evolution workspace
+    cd "$BATS_TEST_TMPDIR"
     run "$CLI_SCRIPT" ideate
     [ "$status" -eq 1 ]
-    [[ "$output" =~ "Ideate command not yet implemented" ]]
+    [[ "$output" =~ "Evolution workspace not found" ]]
 }
 
-@test "run command shows not implemented message and exits with code 1" {
+@test "run command fails when evolution workspace not found" {
+    # Ensure evolution directory doesn't exist for this test
+    rm -rf "$PROJECT_ROOT/evolution"
     run "$CLI_SCRIPT" run
     [ "$status" -eq 1 ]
-    [[ "$output" =~ "Run command not yet implemented" ]]
+    [[ "$output" =~ "Evolution directory not found" ]]
 }
 
 @test "analyze command shows not implemented message and exits with code 1" {

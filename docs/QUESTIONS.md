@@ -137,3 +137,25 @@ Below is a focused list of open questions that surfaced while analysing the curr
 57. **Feature branch enforcement** – How should we ensure developers follow the "One feature branch per phase" process established in the plan, especially given that branch protection rules are now in place? Should we add automation to detect when work is done directly on main branch?
 
 58. **Branch naming conventions** – Should we establish standardized branch naming conventions (e.g., feature/phase-X-description) to improve project organization and automate branch management?
+
+## 18. Timeout Implementation Questions
+
+59. **Process group management** – The current timeout implementation uses bash's `timeout` command which may not kill all child processes if the evaluator spawns subprocesses. Should we implement process group killing (`timeout --kill-after`) to ensure complete cleanup?
+
+60. **Timeout granularity** – Should we support more granular timeout specification (e.g., minutes, hours) or is seconds sufficient for most use cases?
+
+61. **Default timeout behavior** – Should there be a default timeout value when none is specified, or should the current unlimited behavior be maintained? What would be a reasonable default if implemented?
+
+62. **Timeout status differentiation** – Should we differentiate between different types of timeouts (wall-clock vs CPU time) or provide more granular timeout status information?
+
+63. **Timeout recovery** – Should there be automatic retry mechanisms for timed-out evaluations, or should users manually handle timeout scenarios?
+
+64. **Cross-platform timeout compatibility** – The bash `timeout` command may behave differently across platforms (Linux vs macOS vs Windows with WSL). Should we test and document platform-specific timeout behavior?
+
+## 19. Testing Infrastructure Crisis
+
+65. **Critical test failure root cause** – All timeout-related tests are failing despite the implementation appearing correct. What is causing the widespread test infrastructure failure? Is this a Bats configuration issue, environment problem, or fundamental implementation flaw?
+
+66. **Test environment integrity** – Should we implement alternative testing approaches (manual shell scripts, docker-based tests) to verify functionality while Bats issues are resolved?
+
+67. **Timeout verification methodology** – How can we verify the timeout functionality works correctly when the testing framework itself is broken? Should we create standalone verification scripts?

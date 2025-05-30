@@ -16,6 +16,10 @@ This file tracks potential enhancements and features that could be added to clau
 - Implement command aliases (e.g., `claude-evolve i` for `ideate`)
 - Add progress bars for long-running operations
 - Colorized output with configurable themes
+- Implement timeout presets (--timeout-short, --timeout-medium, --timeout-long) for common use cases
+- Add timeout estimation based on historical evaluator performance
+- Create timeout warnings when approaching the limit during evaluation
+- Add configurable default timeout in project configuration file
 
 ### Ideation Enhancements
 
