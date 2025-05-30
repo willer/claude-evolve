@@ -9,7 +9,7 @@
     "doc": "docs"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "bats test/*.bats",
     "lint": "npm run lint:shell && npm run lint:format",
     "lint:shell": "shellcheck bin/*.sh lib/*.sh 2>/dev/null || echo 'No shell files found to lint'",
     "lint:format": "prettier --check '**/*.{md,json}'",
@@ -24,6 +24,7 @@
   "devDependencies": {
     "@commitlint/cli": "^19.8.1",
     "@commitlint/config-conventional": "^19.8.1",
+    "bats": "^1.12.0",
     "prettier": "^3.5.3",
     "shellcheck": "^3.1.0"
   }

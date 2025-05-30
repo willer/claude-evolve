@@ -21,15 +21,12 @@ The plan is organised into sequential _phases_ – each phase fits comfortably i
   > ✅ **COMPLETED**: Added bin field to package.json enabling CLI functionality via "./bin/claude-evolve.sh".
 - [x] Install dev-dependencies:
       • `shellcheck` & `shfmt` (lint/format shell scripts)
-      • `@commitlint/*`, `prettier` (markdown / json formatting)
-      > ✅ **COMPLETED**: Installed shellcheck, shfmt, @commitlint/cli, @commitlint/config-conventional, and prettier. Added npm scripts for linting and formatting. Downloaded shfmt binary locally due to npm package issues.
+      • `@commitlint/*`, `prettier` (markdown / json formatting) > ✅ **COMPLETED**: Installed shellcheck, shfmt, @commitlint/cli, @commitlint/config-conventional, and prettier. Added npm scripts for linting and formatting. Downloaded shfmt binary locally due to npm package issues.
 - [x] Add **pre-commit** config (`.pre-commit-config.yaml`) running:
       • shellcheck
       • shfmt
-      • prettier –write "\*.md"
-      > ✅ **COMPLETED**: Created .pre-commit-config.yaml with hooks for shellcheck (shell linting), shfmt (shell formatting), prettier (markdown/JSON formatting), and standard pre-commit hooks for code quality. Installed pre-commit via npm and configured hooks successfully.
-- [ ] Add Husky or pre-commit-hooks via `npm pkg set scripts.prepare="husky install"`
-      > ⚠️ **NOTE**: Husky and lint-staged are added as devDependencies but the `prepare` script to install hooks is missing. Please add `"prepare": "husky install"` to package.json to enable automatic hook installation.
+      • prettier –write "\*.md" > ✅ **COMPLETED**: Created .pre-commit-config.yaml with hooks for shellcheck (shell linting), shfmt (shell formatting), and prettier (markdown formatting).
+- [ ] Add Husky or pre-commit-hooks via `npm pkg set scripts.prepare="husky install"` > ⚠️ **NOTE**: Husky and lint-staged are added as devDependencies but the `prepare` script to install hooks is missing. Please add `"prepare": "husky install"` to package.json to enable automatic hook installation.
 
 ---
 
@@ -37,19 +34,26 @@ The plan is organised into sequential _phases_ – each phase fits comfortably i
 
 Directory layout
 
-- [ ] `bin/claude-evolve.sh` – argument parsing stub (menu + sub-commands)
-- [ ] `lib/common.sh` – shared helper functions (logging, json parsing)
-- [ ] `templates/` – default files copied by `setup`
+- [x] `bin/claude-evolve.sh` – argument parsing stub (menu + sub-commands)
+  > ✅ **COMPLETED**: Created main CLI script with argument parsing, command routing to `cmd_<name>` functions, and interactive menu.
+- [x] `lib/common.sh` – shared helper functions (logging, json parsing)
+  > ✅ **COMPLETED**: Implemented logging functions, JSON parsing with jq, file validation, and utility functions with proper error handling.
+- [x] `templates/` – default files copied by `setup`
+  > ✅ **COMPLETED**: Created template directory with BRIEF.md, evaluator.py, and algorithm.py templates for project initialization.
 
 Core behaviour
 
-- [ ] `claude-evolve --help` prints usage & version (from package.json)
-- [ ] No-arg invocation opens interactive menu (placeholder)
-- [ ] `claude-evolve <cmd>` routes to `cmd_<name>` bash functions
+- [x] `claude-evolve --help` prints usage & version (from package.json)
+  > ✅ **COMPLETED**: Implemented help functionality with comprehensive usage information and dynamic version extraction from package.json.
+- [x] No-arg invocation opens interactive menu (placeholder)
+  > ✅ **COMPLETED**: Interactive menu system with numbered options for all commands, proper input validation, and error handling.
+- [x] `claude-evolve <cmd>` routes to `cmd_<name>` bash functions
+  > ✅ **COMPLETED**: Command routing system implemented with proper argument passing and unknown command handling.
 
 Unit tests
 
-- [ ] Add minimal Bats-core test verifying `--help` exits 0
+- [x] Add minimal Bats-core test verifying `--help` exits 0
+  > ✅ **COMPLETED**: Comprehensive Bats test suite covering help flags, version flags, command routing, error handling, and exit codes. Updated package.json test script.
 
 ---
 

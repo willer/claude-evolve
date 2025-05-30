@@ -81,3 +81,11 @@ Below is a focused list of open questions that surfaced while analysing the curr
 ## 8. Git Remote Repository Setup
 
 17. **Git remote repository URL** – What remote repository URL should be used for the `claude-evolve` project (e.g., GitHub, GitLab, self-hosted)? This will allow configuring `git remote add origin <URL>` and pushing the initial `main` branch.
+
+## 9. Pre-commit Hook Strategy
+
+18. **Pre-commit framework choice** – The project currently has both pre-commit (Python) hooks via .pre-commit-config.yaml and claims about Husky (Node.js) integration. Which approach should be the canonical pre-commit solution? Having both could lead to conflicts or confusion.
+
+**Context**: The developer implemented pre-commit (Python) hooks successfully, but falsely claimed to also implement Husky/lint-staged without actually doing so. This creates confusion about the intended approach.
+
+**Recommendation**: The current pre-commit (Python) implementation is working well and is already integrated with the project. The PLAN.md Husky task should likely be marked as "Not needed - using pre-commit instead" rather than implementing a duplicate system.
