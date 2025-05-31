@@ -6,7 +6,7 @@ Automated algorithm evolution - let AI evolve your algorithms while you sleep.
 
 claude-evolve is an automated algorithm evolution system that runs continuous evolution cycles without constant supervision. Start with a base algorithm and let it evolve optimized variants autonomously.
 
-Think of it like **genetic algorithms for code** - it handles the mutations and testing, but you should keep an eye on the results and occasionally guide the evolution when needed.
+Think of it like **genetic algorithms for code** - it handles the mutations and testing, and runs **indefinitely** until you stop it. The system automatically generates new ideas when it runs out of candidates.
 
 ### How the Evolution System Works
 
@@ -19,10 +19,10 @@ The system operates with specialized phases working together:
 
 The evolution cycle:
 ```
-Ideate → Mutate → Evaluate → Analyze → Repeat
+Ideate → Mutate → Evaluate → (Auto-Generate New Ideas) → Repeat Forever
 ```
 
-You can leave it running while you grab lunch or sleep - it just keeps evolving better algorithms until you stop it.
+**Truly autonomous evolution**: The system runs indefinitely, automatically generating new generations of ideas when it exhausts current candidates. You can leave it running overnight, over the weekend, or while you work on other things - it just keeps evolving better algorithms until you manually stop it with Ctrl+C.
 
 ## Installation
 
@@ -65,19 +65,22 @@ Initializes your evolution workspace with:
 - CSV file for tracking evolution progress
 
 #### claude-evolve-ideate
-Generates new algorithm variation ideas using Claude Opus in megathinking mode:
-- Reads your project brief
-- Analyzes top-performing algorithms so far
-- Creates creative mutations and variations
-- Defaults to 20 ideas per run (configurable)
+Generates new algorithm variation ideas using multi-strategy evolutionary approach:
+- **Novel exploration** - Pure creativity for global search
+- **Hill climbing** - Parameter tuning of top performers
+- **Structural mutation** - Algorithmic changes to successful designs  
+- **Crossover hybrid** - Combines successful approaches
+- Uses Claude Opus in megathinking mode for each strategy
+- Configurable strategy distribution (default: 3+5+3+4 = 15 ideas)
 
 #### claude-evolve-run
-Executes the next evolution candidate:
+Executes evolution candidates in an **infinite loop**:
 - Picks the next untested idea from your CSV
 - Uses Claude to implement the mutation
 - Runs your evaluator to measure performance
 - Records results and updates the evolution log
-- Every 4th iteration uses Opus for architectural thinking
+- **When no candidates remain**: Automatically generates new ideas and continues
+- **Runs forever until manually stopped** (Ctrl+C)
 
 #### claude-evolve-analyze
 Analyzes evolution progress and generates insights:
@@ -102,7 +105,8 @@ Manages configuration settings:
    - Implements the mutation
    - Evaluates performance
    - Records results
-   - Repeats until you stop it
+   - **Generates new ideas when candidates are exhausted**
+   - **Repeats forever until manually stopped**
 
 ## Monitoring Progress (Like Genetic Algorithms)
 
@@ -120,10 +124,11 @@ This isn't sci-fi level "sleep through the entire evolution" automation - it's m
 - **Restart from best** - Copy top performer to `algorithm.py` and continue evolving
 - **The system adapts** - New ideas will build on your guidance
 
-**Interruptible design:**
-- Hit Ctrl+C anytime to pause
-- Restart later with `claude-evolve run`
-- Perfect for running overnight, during meetings, or while getting lunch
+**Infinite evolution with manual control:**
+- **Runs forever** - automatically generates new generations of ideas
+- **Hit Ctrl+C anytime** to stop the evolution process
+- **Restart later** with `claude-evolve run` to continue from where you left off
+- **Perfect for long-term optimization** - run overnight, over weekends, or while working on other projects
 
 ## Requirements
 
@@ -173,12 +178,60 @@ evolution_csv: "evolution.csv"
 # Parent algorithm selection strategy
 parent_selection: "best"  # or "random", "latest"
 
-# Maximum number of ideas to generate at once
-max_ideas: 50
+# Multi-strategy ideation configuration
+ideation_strategies:
+  total_ideas: 15           # Total ideas per generation
+  novel_exploration: 3      # Pure creativity, global search
+  hill_climbing: 5          # Parameter tuning of top performers
+  structural_mutation: 3    # Algorithmic changes to top performers
+  crossover_hybrid: 4       # Combine successful approaches
+  num_elites: 3            # Number of top performers to use as parents
 
 # Python command to use for evaluation
 python_cmd: "python3"
 ```
+
+### Understanding the Multi-Strategy Approach
+
+The ideation system uses evolutionary algorithm principles with four complementary strategies:
+
+**🎯 Novel Exploration (Global Search)**
+- Generates completely new algorithmic approaches
+- Prevents getting stuck in local optima
+- Explores different paradigms, data structures, mathematical approaches
+- Essential for breakthrough innovations
+
+**⛰️ Hill Climbing (Exploitation)**  
+- Fine-tunes parameters of successful algorithms
+- Adjusts constants, thresholds, iteration counts
+- Quick wins through incremental improvements
+- Builds on proven approaches
+
+**🔧 Structural Mutation (Medium-Distance Search)**
+- Redesigns implementation while keeping core insights
+- Changes data structures, sub-algorithms, execution patterns
+- Balances innovation with proven concepts
+- Explores architectural variations
+
+**🧬 Crossover Hybrid (Recombination)**
+- Combines successful elements from different top performers  
+- Creates novel interactions between proven approaches
+- Leverages diversity in the population
+- Often produces unexpected breakthrough combinations
+
+**⚖️ Strategy Balance**
+The default 3+5+3+4 distribution provides:
+- 20% wild exploration (escape local maxima)
+- 33% focused exploitation (quick improvements)  
+- 20% structural innovation (medium jumps)
+- 27% recombination (leverage diversity)
+
+**🎛️ Tuning Your Evolution**
+Adjust ratios based on your needs:
+- **Stuck in local optimum?** Increase `novel_exploration` and `structural_mutation`
+- **Need incremental gains?** Increase `hill_climbing`
+- **Population too similar?** Increase `crossover_hybrid`
+- **Want faster convergence?** Decrease `total_ideas`, increase `hill_climbing`
 
 ## Tips for Success
 

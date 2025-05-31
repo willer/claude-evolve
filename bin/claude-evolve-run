@@ -145,8 +145,26 @@ update_csv_row() {
 while true; do
   # Find next candidate
   if ! row_num=$(find_empty_row); then
-    echo "[INFO] No more pending candidates found. Evolution run complete!"
-    exit 0
+    echo "[INFO] No more pending candidates found. Generating new ideas..."
+    
+    # Check if claude-evolve-ideate exists
+    ideate_script="$SCRIPT_DIR/claude-evolve-ideate"
+    if [[ ! -f "$ideate_script" ]]; then
+      echo "[ERROR] claude-evolve-ideate script not found: $ideate_script" >&2
+      echo "[INFO] Evolution run complete - no way to generate more ideas."
+      exit 0
+    fi
+    
+    # Generate new ideas using the multi-strategy approach
+    echo "[INFO] Calling claude-evolve-ideate to generate new candidates..."
+    if ! "$ideate_script"; then
+      echo "[ERROR] Failed to generate new ideas" >&2
+      echo "[INFO] Evolution run complete - ideation failed."
+      exit 1
+    fi
+    
+    echo "[INFO] New ideas generated successfully. Continuing evolution..."
+    continue  # Go back to start of loop to find the new candidates
   fi
   
   # Create log file for this iteration
@@ -215,11 +233,16 @@ CLAUDE_MODEL="sonnet"
 echo "[INFO] Using Claude Sonnet for development"
 
 # Create mutation prompt - Claude will edit the file directly
-prompt="Please edit file $output_file to implement the following change for iteration $id: $description
+prompt="Edit the file $output_file to implement this specific change: $description
 
-There may be extra information in documentation in the $FULL_EVOLUTION_DIR/*.md files.
+Requirements:
+- Edit the file directly (don't just provide comments or suggestions)
+- Maintain the same function signatures and interfaces
+- Make the specific change described above
+- Ensure the code runs without syntax errors
+- Add proper error handling if needed
 
-The algorithm should maintain the same interface (function signatures) and include proper error handling."
+The file currently contains the parent algorithm. Modify it according to the description above."
 
 # Generate mutation (skip for baseline)
 if [[ $id == "000" || $id == "0" ]]; then

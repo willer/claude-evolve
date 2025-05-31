@@ -72,7 +72,7 @@ fi
 
 # Validate strategy configuration
 if [[ $use_strategies == true ]]; then
-  local total_check=$((NOVEL_EXPLORATION + HILL_CLIMBING + STRUCTURAL_MUTATION + CROSSOVER_HYBRID))
+  total_check=$((NOVEL_EXPLORATION + HILL_CLIMBING + STRUCTURAL_MUTATION + CROSSOVER_HYBRID))
   if [[ $total_check -ne $TOTAL_IDEAS ]]; then
     echo "[ERROR] Strategy counts don't sum to total_ideas ($total_check != $TOTAL_IDEAS)" >&2
     echo "Check your evolution/config.yaml configuration" >&2
@@ -80,7 +80,7 @@ if [[ $use_strategies == true ]]; then
   fi
 fi
 
-# Get next ID
+# Get next available ID
 get_next_id() {
   if [[ ! -f "$FULL_CSV_PATH" ]]; then
     echo "1"
@@ -96,8 +96,8 @@ get_next_id() {
   echo $((max_id + 1))
 }
 
-# Add idea to CSV
-add_idea() {
+# Add idea to CSV manually (fallback for manual mode)
+add_idea_manual() {
   local description="$1"
   local based_on_id="$2"
   local id
@@ -141,7 +141,7 @@ ideate_manual() {
       continue
     fi
 
-    add_idea "$description" ""
+    add_idea_manual "$description" ""
     ((ideas_added++))
 
     if [[ $i -lt $TOTAL_IDEAS ]]; then
@@ -175,7 +175,7 @@ ideate_ai_strategies() {
   if [[ -z $top_performers ]]; then
     echo "[INFO] No completed algorithms found, using pure novel exploration"
     # Generate all ideas as novel exploration
-    generate_novel_ideas "$TOTAL_IDEAS" ""
+    generate_novel_ideas_direct "$TOTAL_IDEAS"
     return 0
   fi
 
@@ -185,135 +185,159 @@ ideate_ai_strategies() {
   echo "  Structural mutation: $STRUCTURAL_MUTATION"
   echo "  Crossover hybrid: $CROSSOVER_HYBRID"
 
-  # Generate each type of idea
-  [[ $NOVEL_EXPLORATION -gt 0 ]] && generate_novel_ideas "$NOVEL_EXPLORATION" ""
-  [[ $HILL_CLIMBING -gt 0 ]] && generate_hill_climbing_ideas "$HILL_CLIMBING" "$top_performers"
-  [[ $STRUCTURAL_MUTATION -gt 0 ]] && generate_structural_mutation_ideas "$STRUCTURAL_MUTATION" "$top_performers"
-  [[ $CROSSOVER_HYBRID -gt 0 ]] && generate_crossover_ideas "$CROSSOVER_HYBRID" "$top_performers"
+  # Generate each type of idea by having Claude directly edit the CSV
+  [[ $NOVEL_EXPLORATION -gt 0 ]] && generate_novel_ideas_direct "$NOVEL_EXPLORATION"
+  [[ $HILL_CLIMBING -gt 0 ]] && generate_hill_climbing_direct "$HILL_CLIMBING" "$top_performers"
+  [[ $STRUCTURAL_MUTATION -gt 0 ]] && generate_structural_mutation_direct "$STRUCTURAL_MUTATION" "$top_performers"
+  [[ $CROSSOVER_HYBRID -gt 0 ]] && generate_crossover_direct "$CROSSOVER_HYBRID" "$top_performers"
 }
 
-# Generate novel exploration ideas
-generate_novel_ideas() {
+# Generate novel exploration ideas by having Claude edit CSV directly
+generate_novel_ideas_direct() {
   local count="$1"
-  local context="$2"
   
-  local prompt="Generate $count completely novel algorithm approaches for this problem.
-Think outside the box - consider entirely different algorithmic paradigms, data structures, or mathematical approaches.
+  local prompt="Edit the file $FULL_CSV_PATH to add exactly $count new rows for novel algorithmic approaches.
+
+Current CSV content:
+$(cat "$FULL_CSV_PATH")
 
 Project Brief:
 $(cat "$FULL_BRIEF_PATH")
 
-$context
+Requirements for new CSV rows:
+- IDs must be numbers only (suitable for filenames)
+- basedOnId should be empty (these are novel approaches) 
+- Each description should be one clear sentence describing a specific algorithmic change
+- Descriptions should explore completely different approaches than existing ones
+- All new rows should have empty performance and status fields
 
-Provide $count creative, innovative ideas that explore fundamentally different solution approaches.
-Format: One idea per line, no numbering, no extra formatting."
+Example descriptions:
+- Use ensemble of 3 random forests with different feature subsets
+- Replace neural network with gradient boosting decision trees
+- Implement Monte Carlo tree search for feature selection
 
-  generate_and_add_ideas "$prompt" "$count" ""
-}
+Add exactly $count rows to the CSV file now."
 
-# Generate hill climbing ideas (parameter tuning)
-generate_hill_climbing_ideas() {
-  local count="$1"
-  local top_performers="$2"
-  
-  local prompt="Generate $count parameter optimization ideas based on these successful algorithms:
-
-$top_performers
-
-Project Brief:
-$(cat "$FULL_BRIEF_PATH")
-
-Focus on tuning parameters, constants, thresholds, sizes, iteration counts, and optimization parameters.
-Make small incremental improvements to the existing successful approaches.
-Format: One idea per line, no numbering, no extra formatting."
-
-  # Get the best performer's ID for basedOnId
-  local best_id
-  best_id=$(echo "$top_performers" | head -1 | cut -d, -f1)
-  
-  generate_and_add_ideas "$prompt" "$count" "$best_id"
-}
-
-# Generate structural mutation ideas
-generate_structural_mutation_ideas() {
-  local count="$1"
-  local top_performers="$2"
-  
-  local prompt="Generate $count structural algorithm modifications based on these successful algorithms:
-
-$top_performers
-
-Project Brief:
-$(cat "$FULL_BRIEF_PATH")
-
-Keep the core algorithmic insights but redesign the implementation approach.
-Consider: different data structures, alternative algorithms for sub-components, different execution patterns.
-Format: One idea per line, no numbering, no extra formatting."
-
-  # Get the best performer's ID for basedOnId
-  local best_id
-  best_id=$(echo "$top_performers" | head -1 | cut -d, -f1)
-  
-  generate_and_add_ideas "$prompt" "$count" "$best_id"
-}
-
-# Generate crossover hybrid ideas
-generate_crossover_ideas() {
-  local count="$1"
-  local top_performers="$2"
-  
-  local prompt="Generate $count hybrid algorithms that combine successful approaches from these top performers:
-
-$top_performers
-
-Project Brief:
-$(cat "$FULL_BRIEF_PATH")
-
-Create novel combinations that merge the best aspects of different successful algorithms.
-Consider: what makes each successful? How could they complement each other?
-Format: One idea per line, no numbering, no extra formatting."
-
-  # Use the top two performers for crossover
-  local parent_ids
-  parent_ids=$(echo "$top_performers" | head -2 | cut -d, -f1 | tr '\n' '+' | sed 's/+$//')
-  
-  generate_and_add_ideas "$prompt" "$count" "$parent_ids"
-}
-
-# Helper function to generate and add ideas using Claude
-generate_and_add_ideas() {
-  local prompt="$1"
-  local count="$2" 
-  local based_on_id="$3"
-  
-  # Call Claude and process response
-  local response
-  if ! response=$(echo "$prompt" | claude --dangerously-skip-permissions --model opus -p 2>&1); then
-    echo "[WARN] Claude API call failed for $count ideas" >&2
+  echo "[INFO] Calling Claude Opus to generate $count novel exploration ideas..."
+  if ! echo "$prompt" | claude --dangerously-skip-permissions --model opus -p; then
+    echo "[WARN] Claude failed to generate novel ideas" >&2
     return 1
   fi
+  echo "[INFO] Novel exploration ideas generated"
+}
 
-  local ideas_added=0
-  while IFS= read -r line; do
-    # Clean up line
-    line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-    [[ -z $line ]] && continue
+# Generate hill climbing ideas by having Claude edit CSV directly
+generate_hill_climbing_direct() {
+  local count="$1"
+  local top_performers="$2"
+  
+  local prompt="Edit the file $FULL_CSV_PATH to add exactly $count new rows for parameter tuning based on successful algorithms.
 
-    # Remove numbering/bullets
-    line=$(echo "$line" | sed 's/^[0-9]*\. *//;s/^[-*] *//')
+Current CSV content:
+$(cat "$FULL_CSV_PATH")
 
-    add_idea "$line" "$based_on_id"
-    ((ideas_added++))
+Successful algorithms to build on:
+$top_performers
 
-    [[ $ideas_added -ge $count ]] && break
-  done <<<"$response"
+Project Brief:
+$(cat "$FULL_BRIEF_PATH")
 
-  if [[ $ideas_added -eq 0 ]]; then
-    echo "[WARN] No valid ideas extracted from Claude response" >&2
+Requirements for new CSV rows:
+- IDs must be numbers only (suitable for filenames)
+- basedOnId should reference ONE of the successful algorithm IDs above (pick the best one)
+- Each description should be one clear sentence about parameter tuning
+- Focus on adjusting hyperparameters, thresholds, sizes, learning rates
+- All new rows should have empty performance and status fields
+
+Example descriptions:
+- Increase learning rate from 0.001 to 0.01 for faster convergence
+- Reduce batch size from 32 to 16 to improve gradient estimates
+- Set dropout rate to 0.3 instead of 0.1 to prevent overfitting
+
+Add exactly $count parameter tuning rows to the CSV file now."
+
+  echo "[INFO] Calling Claude Opus to generate $count hill climbing ideas..."
+  if ! echo "$prompt" | claude --dangerously-skip-permissions --model opus -p; then
+    echo "[WARN] Claude failed to generate hill climbing ideas" >&2
     return 1
   fi
+  echo "[INFO] Hill climbing ideas generated"
+}
 
-  echo "[INFO] Generated $ideas_added ideas of requested type"
+# Generate structural mutation ideas by having Claude edit CSV directly
+generate_structural_mutation_direct() {
+  local count="$1"
+  local top_performers="$2"
+  
+  local prompt="Edit the file $FULL_CSV_PATH to add exactly $count new rows for structural modifications based on successful algorithms.
+
+Current CSV content:
+$(cat "$FULL_CSV_PATH")
+
+Successful algorithms to build on:
+$top_performers
+
+Project Brief:
+$(cat "$FULL_BRIEF_PATH")
+
+Requirements for new CSV rows:
+- IDs must be numbers only (suitable for filenames)
+- basedOnId should reference ONE of the successful algorithm IDs above (pick the best one)
+- Each description should be one clear sentence about architectural changes
+- Keep core insights but change implementation approach
+- All new rows should have empty performance and status fields
+
+Example descriptions:
+- Replace linear layers with convolutional layers for spatial feature learning
+- Use bidirectional LSTM instead of unidirectional for better context
+- Add residual connections between layers to improve gradient flow
+
+Add exactly $count structural modification rows to the CSV file now."
+
+  echo "[INFO] Calling Claude Opus to generate $count structural mutation ideas..."
+  if ! echo "$prompt" | claude --dangerously-skip-permissions --model opus -p; then
+    echo "[WARN] Claude failed to generate structural mutation ideas" >&2
+    return 1
+  fi
+  echo "[INFO] Structural mutation ideas generated"
+}
+
+# Generate crossover hybrid ideas by having Claude edit CSV directly
+generate_crossover_direct() {
+  local count="$1"
+  local top_performers="$2"
+  
+  local prompt="Edit the file $FULL_CSV_PATH to add exactly $count new rows for hybrid combinations of successful algorithms.
+
+Current CSV content:
+$(cat "$FULL_CSV_PATH")
+
+Top performers to combine:
+$top_performers
+
+Project Brief:
+$(cat "$FULL_BRIEF_PATH")
+
+Requirements for new CSV rows:
+- IDs must be numbers only (suitable for filenames)
+- basedOnId should reference ONE of the successful algorithm IDs above (pick the best one as base)
+- Each description should be one clear sentence combining elements from different algorithms
+- Be specific about what elements to merge
+- All new rows should have empty performance and status fields
+
+Example descriptions:
+- Combine ensemble voting from algorithm 3 with feature selection from algorithm 5
+- Use the attention mechanism from algorithm 2 with the optimizer from algorithm 4
+- Merge the preprocessing pipeline from algorithm 1 with the architecture from algorithm 6
+
+Add exactly $count hybrid combination rows to the CSV file now."
+
+  echo "[INFO] Calling Claude Opus to generate $count crossover hybrid ideas..."
+  if ! echo "$prompt" | claude --dangerously-skip-permissions --model opus -p; then
+    echo "[WARN] Claude failed to generate crossover ideas" >&2
+    return 1
+  fi
+  echo "[INFO] Crossover hybrid ideas generated"
 }
 
 # Legacy AI generation mode (for backward compatibility)
@@ -337,56 +361,37 @@ ideate_ai_legacy() {
   fi
 
   # Build prompt
-  local prompt
-  prompt="It's time for your megathinking mode! You are helping with algorithm evolution. Generate exactly $TOTAL_IDEAS new algorithm idea(s) based on the following context.
+  local prompt="Edit the file $FULL_CSV_PATH to add exactly $TOTAL_IDEAS new algorithm variation rows.
+
+Current CSV content:
+$(cat "$FULL_CSV_PATH")
 
 Project Brief:
-$(cat "$FULL_BRIEF_PATH")
-"
+$(cat "$FULL_BRIEF_PATH")"
 
   if [[ -n $top_performers ]]; then
     prompt+="
+
 Top Performing Algorithms So Far:
-$top_performers
-"
+$top_performers"
   fi
 
   prompt+="
-Generate $TOTAL_IDEAS creative algorithm variation(s) that could potentially improve performance.
-For each idea, provide a single line description that explains the approach.
-Base it on the top algorithms by their ID.
-Format: One idea per line, no numbering, no extra formatting."
 
-  echo "[INFO] Generating $TOTAL_IDEAS idea(s) with Claude (legacy mode)..."
+Requirements for new CSV rows:
+- IDs must be numbers only (suitable for filenames)
+- basedOnId should be empty or reference existing algorithm ID
+- Each description should be one clear sentence describing an algorithmic approach
+- All new rows should have empty performance and status fields
 
-  # Call Claude and process response
-  local response
-  if ! response=$(echo "$prompt" | claude --dangerously-skip-permissions --model opus -p 2>&1); then
-    echo "[WARN] Claude API call failed, falling back to manual entry."
+Add exactly $TOTAL_IDEAS algorithm variation rows to the CSV file now."
+
+  echo "[INFO] Calling Claude Opus to generate $TOTAL_IDEAS ideas (legacy mode)..."
+  if ! echo "$prompt" | claude --dangerously-skip-permissions --model opus -p; then
+    echo "[WARN] Claude failed to generate ideas" >&2
     return 1
   fi
-
-  local ideas_added=0
-  while IFS= read -r line; do
-    # Clean up line
-    line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-    [[ -z $line ]] && continue
-
-    # Remove numbering/bullets
-    line=$(echo "$line" | sed 's/^[0-9]*\. *//;s/^[-*] *//')
-
-    add_idea "$line" ""
-    ((ideas_added++))
-
-    [[ $ideas_added -ge $TOTAL_IDEAS ]] && break
-  done <<<"$response"
-
-  if [[ $ideas_added -eq 0 ]]; then
-    echo "[WARN] No valid ideas extracted from Claude response"
-    return 1
-  fi
-
-  echo "[INFO] Successfully generated $ideas_added idea(s)"
+  echo "[INFO] Legacy ideas generated"
 }
 
 # Main execution
