@@ -20,8 +20,19 @@ output_dir: ""
 # Options: "best", "random", "latest"
 parent_selection: "best"
 
-# Maximum number of ideas to generate at once
-max_ideas: 50
+# Multi-strategy ideation configuration
+ideation_strategies:
+  # Total ideas per generation
+  total_ideas: 15
+  
+  # Strategy distribution (must sum to total_ideas)
+  novel_exploration: 3      # Pure creativity, global search
+  hill_climbing: 5          # Parameter tuning of top performers
+  structural_mutation: 3    # Algorithmic changes to top performers
+  crossover_hybrid: 4       # Combine successful approaches
+  
+  # Number of top performers to use as parents
+  num_elites: 3
 
 # Python command to use for evaluation
 python_cmd: "python3"

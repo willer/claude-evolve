@@ -9,8 +9,15 @@ DEFAULT_BRIEF_FILE="BRIEF.md"
 DEFAULT_EVOLUTION_CSV="evolution.csv"
 DEFAULT_OUTPUT_DIR=""
 DEFAULT_PARENT_SELECTION="best"
-DEFAULT_MAX_IDEAS=50
 DEFAULT_PYTHON_CMD="python3"
+
+# Default ideation strategy values
+DEFAULT_TOTAL_IDEAS=15
+DEFAULT_NOVEL_EXPLORATION=3
+DEFAULT_HILL_CLIMBING=5
+DEFAULT_STRUCTURAL_MUTATION=3
+DEFAULT_CROSSOVER_HYBRID=4
+DEFAULT_NUM_ELITES=3
 
 # Load configuration from config file
 load_config() {
@@ -22,8 +29,15 @@ load_config() {
   EVOLUTION_CSV="$DEFAULT_EVOLUTION_CSV"
   OUTPUT_DIR="$DEFAULT_OUTPUT_DIR"
   PARENT_SELECTION="$DEFAULT_PARENT_SELECTION"
-  MAX_IDEAS="$DEFAULT_MAX_IDEAS"
   PYTHON_CMD="$DEFAULT_PYTHON_CMD"
+  
+  # Set ideation strategy defaults
+  TOTAL_IDEAS="$DEFAULT_TOTAL_IDEAS"
+  NOVEL_EXPLORATION="$DEFAULT_NOVEL_EXPLORATION"
+  HILL_CLIMBING="$DEFAULT_HILL_CLIMBING"
+  STRUCTURAL_MUTATION="$DEFAULT_STRUCTURAL_MUTATION"
+  CROSSOVER_HYBRID="$DEFAULT_CROSSOVER_HYBRID"
+  NUM_ELITES="$DEFAULT_NUM_ELITES"
 
   # Single config file location: evolution/config.yaml
   local config_file="evolution/config.yaml"
@@ -31,7 +45,8 @@ load_config() {
   # Load config if found
   if [[ -f "$config_file" ]]; then
     echo "[INFO] Loading configuration from: $config_file"
-    # Simple YAML parsing for key: value pairs
+    # Simple YAML parsing for key: value pairs and nested structures
+    local in_ideation_section=false
     while IFS=': ' read -r key value; do
       # Skip comments and empty lines
       [[ $key =~ ^[[:space:]]*# ]] || [[ -z $key ]] && continue
@@ -43,17 +58,38 @@ load_config() {
       # Remove quotes from value
       value=$(echo "$value" | sed 's/^"//;s/"$//')
       
-      case $key in
-        evolution_dir) EVOLUTION_DIR="$value" ;;
-        algorithm_file) ALGORITHM_FILE="$value" ;;
-        evaluator_file) EVALUATOR_FILE="$value" ;;
-        brief_file) BRIEF_FILE="$value" ;;
-        evolution_csv) EVOLUTION_CSV="$value" ;;
-        output_dir) OUTPUT_DIR="$value" ;;
-        parent_selection) PARENT_SELECTION="$value" ;;
-        max_ideas) MAX_IDEAS="$value" ;;
-        python_cmd) PYTHON_CMD="$value" ;;
-      esac
+      # Handle nested ideation_strategies section
+      if [[ $key == "ideation_strategies" ]]; then
+        in_ideation_section=true
+        continue
+      elif [[ $key =~ ^[a-z_]+ ]] && [[ $in_ideation_section == true ]]; then
+        # Top-level key found, exit ideation section
+        in_ideation_section=false
+      fi
+      
+      if [[ $in_ideation_section == true ]]; then
+        # Handle indented keys in ideation_strategies
+        case $key in
+          total_ideas) TOTAL_IDEAS="$value" ;;
+          novel_exploration) NOVEL_EXPLORATION="$value" ;;
+          hill_climbing) HILL_CLIMBING="$value" ;;
+          structural_mutation) STRUCTURAL_MUTATION="$value" ;;
+          crossover_hybrid) CROSSOVER_HYBRID="$value" ;;
+          num_elites) NUM_ELITES="$value" ;;
+        esac
+      else
+        # Handle top-level keys
+        case $key in
+          evolution_dir) EVOLUTION_DIR="$value" ;;
+          algorithm_file) ALGORITHM_FILE="$value" ;;
+          evaluator_file) EVALUATOR_FILE="$value" ;;
+          brief_file) BRIEF_FILE="$value" ;;
+          evolution_csv) EVOLUTION_CSV="$value" ;;
+          output_dir) OUTPUT_DIR="$value" ;;
+          parent_selection) PARENT_SELECTION="$value" ;;
+          python_cmd) PYTHON_CMD="$value" ;;
+        esac
+      fi
     done < "$config_file"
   fi
 

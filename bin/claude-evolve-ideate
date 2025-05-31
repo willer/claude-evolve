@@ -9,53 +9,55 @@ source "$SCRIPT_DIR/../lib/config.sh"
 load_config
 
 # Parse arguments
-count=20
+use_strategies=true
 no_ai=false
 
 while [[ $# -gt 0 ]]; do
   case $1 in
   --help)
     cat <<EOF
-claude-evolve ideate - Generate new algorithm ideas
+claude-evolve ideate - Generate new algorithm ideas using evolutionary strategies
 
 USAGE:
-  claude-evolve ideate [N] [--no-ai]
-
-ARGUMENTS:
-  N         Number of ideas to generate (default: 20, max: 50)
+  claude-evolve ideate [--legacy N] [--no-ai]
 
 OPTIONS:
-  --no-ai   Use manual entry mode instead of AI generation
-  --help    Show this help message
+  --legacy N  Use legacy mode with N ideas (ignores strategy config)
+  --no-ai     Use manual entry mode instead of AI generation
+  --help      Show this help message
 
 DESCRIPTION:
-  Generates new algorithm variations by prompting Claude with context
-  from the project BRIEF.md and top performers from evolution.csv.
-  Falls back to manual entry if --no-ai is specified or Claude fails.
+  Generates algorithm ideas using multi-strategy evolutionary approach:
+  - Novel exploration: Pure creativity, global search
+  - Hill climbing: Parameter tuning of top performers  
+  - Structural mutation: Algorithmic changes to top performers
+  - Crossover hybrid: Combine successful approaches
+  
+  Strategy distribution is configured in evolution/config.yaml
 EOF
     exit 0
+    ;;
+  --legacy)
+    use_strategies=false
+    shift
+    if [[ $1 =~ ^[0-9]+$ ]]; then
+      TOTAL_IDEAS=$1
+      shift
+    else
+      echo "[ERROR] --legacy requires a number" >&2
+      exit 1
+    fi
     ;;
   --no-ai)
     no_ai=true
     shift
     ;;
   *)
-    if [[ $1 =~ ^[0-9]+$ ]]; then
-      count=$1
-    else
-      echo "[ERROR] Invalid number of ideas: $1" >&2
-      exit 1
-    fi
-    shift
+    echo "[ERROR] Unknown option: $1" >&2
+    exit 1
     ;;
   esac
 done
-
-# Validate count
-if [[ $count -lt 1 || $count -gt 50 ]]; then
-  echo "[ERROR] Number of ideas must be between 1 and 50" >&2
-  exit 1
-fi
 
 # Check workspace using config
 if [[ ! -d "$FULL_EVOLUTION_DIR" ]]; then
@@ -66,6 +68,16 @@ fi
 # Ensure CSV exists
 if [[ ! -f "$FULL_CSV_PATH" ]]; then
   echo "id,basedOnId,description,performance,status" >"$FULL_CSV_PATH"
+fi
+
+# Validate strategy configuration
+if [[ $use_strategies == true ]]; then
+  local total_check=$((NOVEL_EXPLORATION + HILL_CLIMBING + STRUCTURAL_MUTATION + CROSSOVER_HYBRID))
+  if [[ $total_check -ne $TOTAL_IDEAS ]]; then
+    echo "[ERROR] Strategy counts don't sum to total_ideas ($total_check != $TOTAL_IDEAS)" >&2
+    echo "Check your evolution/config.yaml configuration" >&2
+    exit 1
+  fi
 fi
 
 # Get next ID
@@ -87,6 +99,7 @@ get_next_id() {
 # Add idea to CSV
 add_idea() {
   local description="$1"
+  local based_on_id="$2"
   local id
   id=$(get_next_id)
 
@@ -94,19 +107,33 @@ add_idea() {
   local escaped_desc="${description//\"/\"\"}"
 
   # Append to CSV
-  echo "${id},,\"${escaped_desc}\",," >>"$FULL_CSV_PATH"
+  echo "${id},${based_on_id},\"${escaped_desc}\",," >>"$FULL_CSV_PATH"
   echo "[INFO] Added idea: $description"
+}
+
+# Get top performers for parent selection
+get_top_performers() {
+  local num_requested="$1"
+  if [[ ! -f "$FULL_CSV_PATH" ]]; then
+    echo ""
+    return
+  fi
+  
+  # Get completed algorithms with performance scores, sort by performance descending
+  awk -F, 'NR > 1 && $4 != "" && $5 == "complete" { print $1 "," $3 "," $4 }' "$FULL_CSV_PATH" | \
+    sort -t, -k3 -nr | \
+    head -n "$num_requested"
 }
 
 # Manual entry mode
 ideate_manual() {
   local ideas_added=0
 
-  for ((i = 1; i <= count; i++)); do
-    if [[ $count -eq 1 ]]; then
+  for ((i = 1; i <= TOTAL_IDEAS; i++)); do
+    if [[ $TOTAL_IDEAS -eq 1 ]]; then
       read -r -p "Enter algorithm idea (or empty to skip): " description
     else
-      read -r -p "Enter algorithm idea $i/$count (or empty to skip): " description
+      read -r -p "Enter algorithm idea $i/$TOTAL_IDEAS (or empty to skip): " description
     fi
 
     if [[ -z $description ]]; then
@@ -114,10 +141,10 @@ ideate_manual() {
       continue
     fi
 
-    add_idea "$description"
+    add_idea "$description" ""
     ((ideas_added++))
 
-    if [[ $i -lt $count ]]; then
+    if [[ $i -lt $TOTAL_IDEAS ]]; then
       read -r -p "Add another idea? (y/N) " continue_adding
       if [[ $continue_adding != "y" && $continue_adding != "Y" ]]; then
         break
@@ -128,8 +155,169 @@ ideate_manual() {
   echo "[INFO] Added $ideas_added idea(s) to $EVOLUTION_CSV"
 }
 
-# AI generation mode
-ideate_ai() {
+# Generate ideas using AI with multi-strategy approach
+ideate_ai_strategies() {
+  # Check for claude CLI
+  if ! command -v claude >/dev/null 2>&1; then
+    echo "[WARN] Claude CLI not found. Falling back to manual entry."
+    return 1
+  fi
+
+  if [[ ! -f "$FULL_BRIEF_PATH" ]]; then
+    echo "[WARN] $BRIEF_FILE not found. Falling back to manual entry."
+    return 1
+  fi
+
+  # Get top performers
+  local top_performers
+  top_performers=$(get_top_performers "$NUM_ELITES")
+  
+  if [[ -z $top_performers ]]; then
+    echo "[INFO] No completed algorithms found, using pure novel exploration"
+    # Generate all ideas as novel exploration
+    generate_novel_ideas "$TOTAL_IDEAS" ""
+    return 0
+  fi
+
+  echo "[INFO] Generating $TOTAL_IDEAS ideas using multi-strategy approach:"
+  echo "  Novel exploration: $NOVEL_EXPLORATION"
+  echo "  Hill climbing: $HILL_CLIMBING" 
+  echo "  Structural mutation: $STRUCTURAL_MUTATION"
+  echo "  Crossover hybrid: $CROSSOVER_HYBRID"
+
+  # Generate each type of idea
+  [[ $NOVEL_EXPLORATION -gt 0 ]] && generate_novel_ideas "$NOVEL_EXPLORATION" ""
+  [[ $HILL_CLIMBING -gt 0 ]] && generate_hill_climbing_ideas "$HILL_CLIMBING" "$top_performers"
+  [[ $STRUCTURAL_MUTATION -gt 0 ]] && generate_structural_mutation_ideas "$STRUCTURAL_MUTATION" "$top_performers"
+  [[ $CROSSOVER_HYBRID -gt 0 ]] && generate_crossover_ideas "$CROSSOVER_HYBRID" "$top_performers"
+}
+
+# Generate novel exploration ideas
+generate_novel_ideas() {
+  local count="$1"
+  local context="$2"
+  
+  local prompt="Generate $count completely novel algorithm approaches for this problem.
+Think outside the box - consider entirely different algorithmic paradigms, data structures, or mathematical approaches.
+
+Project Brief:
+$(cat "$FULL_BRIEF_PATH")
+
+$context
+
+Provide $count creative, innovative ideas that explore fundamentally different solution approaches.
+Format: One idea per line, no numbering, no extra formatting."
+
+  generate_and_add_ideas "$prompt" "$count" ""
+}
+
+# Generate hill climbing ideas (parameter tuning)
+generate_hill_climbing_ideas() {
+  local count="$1"
+  local top_performers="$2"
+  
+  local prompt="Generate $count parameter optimization ideas based on these successful algorithms:
+
+$top_performers
+
+Project Brief:
+$(cat "$FULL_BRIEF_PATH")
+
+Focus on tuning parameters, constants, thresholds, sizes, iteration counts, and optimization parameters.
+Make small incremental improvements to the existing successful approaches.
+Format: One idea per line, no numbering, no extra formatting."
+
+  # Get the best performer's ID for basedOnId
+  local best_id
+  best_id=$(echo "$top_performers" | head -1 | cut -d, -f1)
+  
+  generate_and_add_ideas "$prompt" "$count" "$best_id"
+}
+
+# Generate structural mutation ideas
+generate_structural_mutation_ideas() {
+  local count="$1"
+  local top_performers="$2"
+  
+  local prompt="Generate $count structural algorithm modifications based on these successful algorithms:
+
+$top_performers
+
+Project Brief:
+$(cat "$FULL_BRIEF_PATH")
+
+Keep the core algorithmic insights but redesign the implementation approach.
+Consider: different data structures, alternative algorithms for sub-components, different execution patterns.
+Format: One idea per line, no numbering, no extra formatting."
+
+  # Get the best performer's ID for basedOnId
+  local best_id
+  best_id=$(echo "$top_performers" | head -1 | cut -d, -f1)
+  
+  generate_and_add_ideas "$prompt" "$count" "$best_id"
+}
+
+# Generate crossover hybrid ideas
+generate_crossover_ideas() {
+  local count="$1"
+  local top_performers="$2"
+  
+  local prompt="Generate $count hybrid algorithms that combine successful approaches from these top performers:
+
+$top_performers
+
+Project Brief:
+$(cat "$FULL_BRIEF_PATH")
+
+Create novel combinations that merge the best aspects of different successful algorithms.
+Consider: what makes each successful? How could they complement each other?
+Format: One idea per line, no numbering, no extra formatting."
+
+  # Use the top two performers for crossover
+  local parent_ids
+  parent_ids=$(echo "$top_performers" | head -2 | cut -d, -f1 | tr '\n' '+' | sed 's/+$//')
+  
+  generate_and_add_ideas "$prompt" "$count" "$parent_ids"
+}
+
+# Helper function to generate and add ideas using Claude
+generate_and_add_ideas() {
+  local prompt="$1"
+  local count="$2" 
+  local based_on_id="$3"
+  
+  # Call Claude and process response
+  local response
+  if ! response=$(echo "$prompt" | claude --dangerously-skip-permissions --model opus -p 2>&1); then
+    echo "[WARN] Claude API call failed for $count ideas" >&2
+    return 1
+  fi
+
+  local ideas_added=0
+  while IFS= read -r line; do
+    # Clean up line
+    line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    [[ -z $line ]] && continue
+
+    # Remove numbering/bullets
+    line=$(echo "$line" | sed 's/^[0-9]*\. *//;s/^[-*] *//')
+
+    add_idea "$line" "$based_on_id"
+    ((ideas_added++))
+
+    [[ $ideas_added -ge $count ]] && break
+  done <<<"$response"
+
+  if [[ $ideas_added -eq 0 ]]; then
+    echo "[WARN] No valid ideas extracted from Claude response" >&2
+    return 1
+  fi
+
+  echo "[INFO] Generated $ideas_added ideas of requested type"
+}
+
+# Legacy AI generation mode (for backward compatibility)
+ideate_ai_legacy() {
   # Check for claude CLI
   if ! command -v claude >/dev/null 2>&1; then
     echo "[WARN] Claude CLI not found. Falling back to manual entry."
@@ -150,7 +338,7 @@ ideate_ai() {
 
   # Build prompt
   local prompt
-  prompt="It's time for your megathinking mode! You are helping with algorithm evolution. Generate exactly $count new algorithm idea(s) based on the following context.
+  prompt="It's time for your megathinking mode! You are helping with algorithm evolution. Generate exactly $TOTAL_IDEAS new algorithm idea(s) based on the following context.
 
 Project Brief:
 $(cat "$FULL_BRIEF_PATH")
@@ -164,11 +352,12 @@ $top_performers
   fi
 
   prompt+="
-Generate $count creative algorithm variation(s) that could potentially improve performance.
+Generate $TOTAL_IDEAS creative algorithm variation(s) that could potentially improve performance.
 For each idea, provide a single line description that explains the approach.
+Base it on the top algorithms by their ID.
 Format: One idea per line, no numbering, no extra formatting."
 
-  echo "[INFO] Generating $count idea(s) with Claude..."
+  echo "[INFO] Generating $TOTAL_IDEAS idea(s) with Claude (legacy mode)..."
 
   # Call Claude and process response
   local response
@@ -186,10 +375,10 @@ Format: One idea per line, no numbering, no extra formatting."
     # Remove numbering/bullets
     line=$(echo "$line" | sed 's/^[0-9]*\. *//;s/^[-*] *//')
 
-    add_idea "$line"
+    add_idea "$line" ""
     ((ideas_added++))
 
-    [[ $ideas_added -ge $count ]] && break
+    [[ $ideas_added -ge $TOTAL_IDEAS ]] && break
   done <<<"$response"
 
   if [[ $ideas_added -eq 0 ]]; then
@@ -204,9 +393,16 @@ Format: One idea per line, no numbering, no extra formatting."
 if [[ $no_ai == true ]]; then
   echo "[INFO] Manual entry mode"
   ideate_manual
-else
-  if ! ideate_ai; then
+elif [[ $use_strategies == true ]]; then
+  echo "[INFO] Multi-strategy AI generation mode"
+  if ! ideate_ai_strategies; then
     echo "[INFO] Falling back to manual entry"
+    ideate_manual
+  fi
+else
+  echo "[INFO] Legacy AI generation mode"
+  if ! ideate_ai_legacy; then
+    echo "[INFO] Falling back to manual entry" 
     ideate_manual
   fi
 fi
