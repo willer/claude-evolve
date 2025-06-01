@@ -163,15 +163,21 @@ while IFS=, read -r id _ desc perf status; do
 done <"$csv_file"
 
 # Process generation stats
-for gen in $(cut -d' ' -f1 "$gen_stats_file" | sort -u); do
-  total_in_gen=$(grep -c "^$gen " "$gen_stats_file")
-  completed_in_gen=$(grep -c "^$gen completed" "$gen_stats_file")
+for gen in $(cut -d' ' -f1 "$gen_stats_file" | sort -u || echo ""); do
+  [[ -z "$gen" ]] && continue
+  total_in_gen=$(grep -c "^$gen " "$gen_stats_file" 2>/dev/null || echo "0")
+  completed_in_gen=$(grep -c "^$gen completed" "$gen_stats_file" 2>/dev/null || echo "0")
+  # Clean any whitespace from the numbers
+  completed_in_gen=$(echo "$completed_in_gen" | tr -d '[:space:]')
   
   echo -n "$gen: $total_in_gen candidates"
   
-  if [[ $completed_in_gen -gt 0 ]]; then
-    # Calculate average performance for this generation
-    sum=$(grep "^$gen completed" "$gen_stats_file" | awk '{s+=$3} END {print s}')
+  if [[ "$completed_in_gen" -gt 0 ]]; then
+    # Calculate average performance for this generation  
+    sum="0"
+    if grep -q "^$gen completed" "$gen_stats_file"; then
+      sum=$(grep "^$gen completed" "$gen_stats_file" | awk '{s+=$3} END {printf "%.6f", s}' 2>/dev/null || echo "0")
+    fi
     avg=$(echo "scale=4; $sum / $completed_in_gen" | bc -l 2>/dev/null || echo "0")
     echo " ($completed_in_gen completed, avg: $avg)"
   else
@@ -181,8 +187,19 @@ done
 
 rm -f "$gen_stats_file"
 
+# Count valid performance entries for chart (excluding zeros)
+valid_performance_count=0
+while IFS=, read -r id _ desc perf status; do
+  [[ $id == "id" ]] && continue # Skip header
+  if [[ $status =~ ^(complete|completed)$ && -n $perf && $perf != "" ]]; then
+    if (( $(echo "$perf > 0" | bc -l 2>/dev/null || echo "0") )); then
+      ((valid_performance_count++))
+    fi
+  fi
+done <"$csv_file"
+
 # Simple chart generation using gnuplot if available
-if command -v gnuplot >/dev/null 2>&1 && [[ $count_with_performance -gt 0 ]]; then
+if command -v gnuplot >/dev/null 2>&1 && [[ $valid_performance_count -gt 0 ]]; then
   echo
   echo "Generating performance chart: $output_file"
 
@@ -222,7 +239,8 @@ if command -v gnuplot >/dev/null 2>&1 && [[ $count_with_performance -gt 0 ]]; th
   fi
 
   # Generate plot
-  gnuplot <<EOF
+  if [[ -s "$data_file" ]]; then
+    gnuplot <<EOF
 set terminal png size 1000,600
 set output "$output_file"
 set title "Algorithm Evolution Performance"
@@ -231,18 +249,22 @@ set ylabel "Performance Score"
 set grid
 set key off
 
-# Set y-axis range with some padding
-stats "$data_file" using 3 nooutput
-set yrange [STATS_min*0.95:STATS_max*1.05]
+# Plot the main line in dark blue
+plot "$data_file" using 1:3 with linespoints linewidth 2 linecolor rgb "#1f77b4" pointsize 0.8 notitle
 
-# Plot the main line in dark blue, winner as large blue circle
-plot "$data_file" using 1:3 with lines linewidth 2 linecolor rgb "#1f77b4" notitle, \
-     "$data_file" using 1:3 with points pointtype 7 pointsize 0.5 linecolor rgb "#1f77b4" notitle, \
-     "$winner_file" using 1:3 with points pointtype 7 pointsize 3 linecolor rgb "#0000ff" notitle
+# Highlight winner if we have one
+$(if [[ -s "$winner_file" ]]; then
+  echo "replot \"$winner_file\" using 1:3 with points pointtype 7 pointsize 3 linecolor rgb \"#0000ff\" notitle"
+fi)
 
-# Add label with winner info at bottom
-set label 1 "Best: $max_id (Score: $max_perf)" at graph 0.5, -0.15 center font ",10"
+# Add winner info at bottom
+set label "Best: $max_id (Score: $max_perf)" at graph 0.5, 0.02 center font ",12"
+replot
 EOF
+  else
+    echo "[WARN] No valid performance data to plot"
+    exit 0
+  fi
 
   rm -f "$data_file" "$winner_file"
   echo "Chart saved to: $output_file"
@@ -258,9 +280,9 @@ EOF
     echo "[WARN] Cannot open chart automatically. View: $output_file"
   fi
 else
-  if [[ $count_with_performance -eq 0 ]]; then
+  if [[ $valid_performance_count -eq 0 ]]; then
     echo
-    echo "No performance data available for chart generation."
+    echo "No valid performance data available for chart generation."
     echo "Run 'claude-evolve run' to execute candidates first."
   else
     echo
