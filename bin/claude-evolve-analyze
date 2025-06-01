@@ -83,16 +83,19 @@ while IFS=, read -r id _ desc perf status; do
   case "$status" in
   "complete" | "completed") 
     ((completed++))
-    # Only count performance for completed runs
+    # Only count performance for completed runs with non-zero values
     if [[ -n $perf && $perf != "" ]]; then
-      total_performance=$(echo "$total_performance + $perf" | bc -l 2>/dev/null || echo "$total_performance")
-      ((count_with_performance++))
+      # Skip zeros (they're errors)
+      if (( $(echo "$perf > 0" | bc -l 2>/dev/null || echo "0") )); then
+        total_performance=$(echo "$total_performance + $perf" | bc -l 2>/dev/null || echo "$total_performance")
+        ((count_with_performance++))
 
-      # Check if this is the top performer
-      if [[ -z $top_score ]] || (($(echo "$perf > $top_score" | bc -l 2>/dev/null || echo "0"))); then
-        top_score="$perf"
-        top_id="$id"
-        top_desc="$desc"
+        # Check if this is the top performer
+        if [[ -z $top_score ]] || (($(echo "$perf > $top_score" | bc -l 2>/dev/null || echo "0"))); then
+          top_score="$perf"
+          top_id="$id"
+          top_desc="$desc"
+        fi
       fi
     fi
     ;;
@@ -126,34 +129,122 @@ else
   echo "No completed candidates yet"
 fi
 
+# Generation analysis
+echo
+echo "=== Generation Analysis ==="
+
+# Create temporary file for generation stats
+gen_stats_file="/tmp/evolution_gen_stats_$$.tmp"
+>"$gen_stats_file"
+
+while IFS=, read -r id _ desc perf status; do
+  [[ $id == "id" ]] && continue # Skip header
+  
+  # Extract generation from ID
+  gen="gen01" # default for old numeric IDs
+  if [[ $id =~ ^(gen[0-9]+)- ]]; then
+    gen="${BASH_REMATCH[1]}"
+  elif [[ $id =~ ^[0-9]+$ ]]; then
+    gen="gen00" # Mark old numeric IDs as gen00
+  fi
+  
+  # Write generation data to temp file
+  echo -n "$gen " >> "$gen_stats_file"
+  if [[ $status =~ ^(complete|completed)$ && -n $perf && $perf != "" ]]; then
+    # Exclude zeros from statistics (they're errors)
+    if (( $(echo "$perf > 0" | bc -l 2>/dev/null || echo "0") )); then
+      echo "completed $perf" >> "$gen_stats_file"
+    else
+      echo "error" >> "$gen_stats_file"
+    fi
+  else
+    echo "incomplete" >> "$gen_stats_file"
+  fi
+done <"$csv_file"
+
+# Process generation stats
+for gen in $(cut -d' ' -f1 "$gen_stats_file" | sort -u); do
+  total_in_gen=$(grep -c "^$gen " "$gen_stats_file")
+  completed_in_gen=$(grep -c "^$gen completed" "$gen_stats_file")
+  
+  echo -n "$gen: $total_in_gen candidates"
+  
+  if [[ $completed_in_gen -gt 0 ]]; then
+    # Calculate average performance for this generation
+    sum=$(grep "^$gen completed" "$gen_stats_file" | awk '{s+=$3} END {print s}')
+    avg=$(echo "scale=4; $sum / $completed_in_gen" | bc -l 2>/dev/null || echo "0")
+    echo " ($completed_in_gen completed, avg: $avg)"
+  else
+    echo " (0 completed)"
+  fi
+done
+
+rm -f "$gen_stats_file"
+
 # Simple chart generation using gnuplot if available
 if command -v gnuplot >/dev/null 2>&1 && [[ $count_with_performance -gt 0 ]]; then
   echo
   echo "Generating performance chart: $output_file"
 
-  # Create data file for gnuplot
+  # Create data file for gnuplot with row numbers, excluding zeros
   data_file="/tmp/evolution_data_$$.dat"
-  echo "# ID Performance" >"$data_file"
+  winner_file="/tmp/evolution_winner_$$.dat"
+  echo "# Row ID Performance" >"$data_file"
 
+  row_num=0
+  max_perf=0
+  max_row=0
+  max_id=""
+  
   while IFS=, read -r id _ desc perf status; do
     [[ $id == "id" ]] && continue # Skip header
-    if [[ -n $perf && $perf != "" ]]; then
-      echo "$id $perf" >>"$data_file"
+    ((row_num++))
+    
+    # Only include completed algorithms with non-zero performance
+    if [[ -n $perf && $perf != "" && $status =~ ^(complete|completed)$ ]]; then
+      # Skip zero values (they're errors)
+      if (( $(echo "$perf > 0" | bc -l) )); then
+        echo "$row_num \"$id\" $perf" >>"$data_file"
+        
+        # Track the winner
+        if (( $(echo "$perf > $max_perf" | bc -l) )); then
+          max_perf=$perf
+          max_row=$row_num
+          max_id=$id
+        fi
+      fi
     fi
   done <"$csv_file"
 
+  # Create winner data point
+  if [[ -n $max_id ]]; then
+    echo "$max_row \"$max_id\" $max_perf" >"$winner_file"
+  fi
+
   # Generate plot
   gnuplot <<EOF
-set terminal png size 800,600
+set terminal png size 1000,600
 set output "$output_file"
 set title "Algorithm Evolution Performance"
-set xlabel "Evolution ID"
+set xlabel "Evolution Run"
 set ylabel "Performance Score"
 set grid
-plot "$data_file" using 1:2 with linespoints title "Performance"
+set key off
+
+# Set y-axis range with some padding
+stats "$data_file" using 3 nooutput
+set yrange [STATS_min*0.95:STATS_max*1.05]
+
+# Plot the main line in dark blue, winner as large blue circle
+plot "$data_file" using 1:3 with lines linewidth 2 linecolor rgb "#1f77b4" notitle, \
+     "$data_file" using 1:3 with points pointtype 7 pointsize 0.5 linecolor rgb "#1f77b4" notitle, \
+     "$winner_file" using 1:3 with points pointtype 7 pointsize 3 linecolor rgb "#0000ff" notitle
+
+# Add label with winner info at bottom
+set label 1 "Best: $max_id (Score: $max_perf)" at graph 0.5, -0.15 center font ",10"
 EOF
 
-  rm -f "$data_file"
+  rm -f "$data_file" "$winner_file"
   echo "Chart saved to: $output_file"
 
   # Always try to open chart (not just when --open is used)

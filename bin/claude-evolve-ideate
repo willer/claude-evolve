@@ -8,6 +8,43 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../lib/config.sh"
 load_config
 
+# Helper function to call Claude with usage limit detection
+call_claude_with_limit_check() {
+  local prompt="$1"
+  local model="${2:-opus}"
+  
+  # Call Claude and capture output
+  local claude_output
+  claude_output=$(echo "$prompt" | claude --dangerously-skip-permissions --model "$model" -p 2>&1)
+  local claude_exit_code=$?
+  
+  # Check for usage limit
+  if echo "$claude_output" | grep -q "Claude AI usage limit reached"; then
+    # Extract timestamp if available
+    local limit_timestamp=$(echo "$claude_output" | grep -o "Claude AI usage limit reached|[0-9]*" | cut -d'|' -f2)
+    
+    # Print red error message
+    echo -e "\033[31m[ERROR] CLAUDE AI USAGE LIMIT REACHED!\033[0m" >&2
+    echo -e "\033[31m[ERROR] Ideation halted due to API rate limits.\033[0m" >&2
+    
+    if [[ -n $limit_timestamp ]]; then
+      # Convert timestamp to human-readable format
+      local limit_date=$(date -r "$limit_timestamp" "+%Y-%m-%d %H:%M:%S" 2>/dev/null || echo "Unknown time")
+      echo -e "\033[31m[ERROR] Limit will be released at: $limit_date\033[0m" >&2
+    fi
+    
+    echo -e "\033[33m[INFO] Please wait for the rate limit to reset before continuing.\033[0m" >&2
+    echo -e "\033[33m[INFO] No ideas were generated. Run ideate again when the limit resets.\033[0m" >&2
+    
+    exit 1
+  fi
+  
+  # Output Claude's response
+  echo "$claude_output"
+  
+  return $claude_exit_code
+}
+
 # Parse arguments
 use_strategies=true
 no_ai=false
@@ -80,28 +117,60 @@ if [[ $use_strategies == true ]]; then
   fi
 fi
 
-# Get next available ID
-get_next_id() {
+# Get next generation number
+get_next_generation() {
   if [[ ! -f "$FULL_CSV_PATH" ]]; then
-    echo "1"
+    echo "01"
     return
   fi
-  # Find highest ID and increment (pure shell)
-  local max_id=0
+  
+  # Find highest generation number
+  local max_gen=0
   while IFS=, read -r id rest; do
-    if [[ $id =~ ^[0-9]+$ ]] && (( 10#$id > max_id )); then
-      max_id=$((10#$id))
+    # Extract generation number from IDs like "gen01-001"
+    if [[ $id =~ ^gen([0-9]+)- ]]; then
+      local gen_num=$((10#${BASH_REMATCH[1]}))
+      if (( gen_num > max_gen )); then
+        max_gen=$gen_num
+      fi
     fi
   done < <(tail -n +2 "$FULL_CSV_PATH")
-  echo $((max_id + 1))
+  
+  # Increment and format with leading zero
+  printf "%02d" $((max_gen + 1))
+}
+
+# Get next available ID for current generation
+get_next_id() {
+  local generation="$1"
+  if [[ ! -f "$FULL_CSV_PATH" ]]; then
+    echo "gen${generation}-001"
+    return
+  fi
+  
+  # Find highest ID within this generation
+  local max_id=0
+  while IFS=, read -r id rest; do
+    # Match IDs for this specific generation
+    if [[ $id =~ ^gen${generation}-([0-9]+)$ ]]; then
+      local id_num=$((10#${BASH_REMATCH[1]}))
+      if (( id_num > max_id )); then
+        max_id=$id_num
+      fi
+    fi
+  done < <(tail -n +2 "$FULL_CSV_PATH")
+  
+  # Format next ID with generation and 3-digit number
+  printf "gen%s-%03d" "$generation" $((max_id + 1))
 }
 
 # Add idea to CSV manually (fallback for manual mode)
 add_idea_manual() {
   local description="$1"
   local based_on_id="$2"
+  local generation="$3"
   local id
-  id=$(get_next_id)
+  id=$(get_next_id "$generation")
 
   # Escape quotes in description
   local escaped_desc="${description//\"/\"\"}"
@@ -141,7 +210,7 @@ ideate_manual() {
       continue
     fi
 
-    add_idea_manual "$description" ""
+    add_idea_manual "$description" "" "$CURRENT_GENERATION"
     ((ideas_added++))
 
     if [[ $i -lt $TOTAL_IDEAS ]]; then
@@ -201,11 +270,16 @@ generate_novel_ideas_direct() {
 Current CSV content:
 $(cat "$FULL_CSV_PATH")
 
+Algorithm files you can examine for context:
+- Base algorithm: $FULL_ALGORITHM_PATH  
+- Evolved algorithms: $FULL_OUTPUT_DIR/evolution_id*.py (if any exist)
+
 Project Brief:
 $(cat "$FULL_BRIEF_PATH")
 
 Requirements for new CSV rows:
-- IDs must be numbers only (suitable for filenames)
+- IDs must use format: gen$CURRENT_GENERATION-XXX (e.g., gen$CURRENT_GENERATION-001, gen$CURRENT_GENERATION-002)
+- Continue numbering from the highest existing ID in generation $CURRENT_GENERATION
 - basedOnId should be empty (these are novel approaches) 
 - Each description should be one clear sentence describing a specific algorithmic change
 - Descriptions should explore completely different approaches than existing ones
@@ -219,7 +293,7 @@ Example descriptions:
 Add exactly $count rows to the CSV file now."
 
   echo "[INFO] Calling Claude Opus to generate $count novel exploration ideas..."
-  if ! echo "$prompt" | claude --dangerously-skip-permissions --model opus -p; then
+  if ! call_claude_with_limit_check "$prompt" "opus"; then
     echo "[WARN] Claude failed to generate novel ideas" >&2
     return 1
   fi
@@ -236,6 +310,10 @@ generate_hill_climbing_direct() {
 Current CSV content:
 $(cat "$FULL_CSV_PATH")
 
+Algorithm files you can examine for context:
+- Base algorithm: $FULL_ALGORITHM_PATH  
+- Evolved algorithms: $FULL_OUTPUT_DIR/evolution_id*.py (if any exist)
+
 Successful algorithms to build on:
 $top_performers
 
@@ -243,7 +321,8 @@ Project Brief:
 $(cat "$FULL_BRIEF_PATH")
 
 Requirements for new CSV rows:
-- IDs must be numbers only (suitable for filenames)
+- IDs must use format: gen$CURRENT_GENERATION-XXX (e.g., gen$CURRENT_GENERATION-001, gen$CURRENT_GENERATION-002)
+- Continue numbering from the highest existing ID in generation $CURRENT_GENERATION
 - basedOnId should reference ONE of the successful algorithm IDs above (pick the best one)
 - Each description should be one clear sentence about parameter tuning
 - Focus on adjusting hyperparameters, thresholds, sizes, learning rates
@@ -257,7 +336,7 @@ Example descriptions:
 Add exactly $count parameter tuning rows to the CSV file now."
 
   echo "[INFO] Calling Claude Opus to generate $count hill climbing ideas..."
-  if ! echo "$prompt" | claude --dangerously-skip-permissions --model opus -p; then
+  if ! call_claude_with_limit_check "$prompt" "opus"; then
     echo "[WARN] Claude failed to generate hill climbing ideas" >&2
     return 1
   fi
@@ -274,6 +353,10 @@ generate_structural_mutation_direct() {
 Current CSV content:
 $(cat "$FULL_CSV_PATH")
 
+Algorithm files you can examine for context:
+- Base algorithm: $FULL_ALGORITHM_PATH  
+- Evolved algorithms: $FULL_OUTPUT_DIR/evolution_id*.py (if any exist)
+
 Successful algorithms to build on:
 $top_performers
 
@@ -281,7 +364,8 @@ Project Brief:
 $(cat "$FULL_BRIEF_PATH")
 
 Requirements for new CSV rows:
-- IDs must be numbers only (suitable for filenames)
+- IDs must use format: gen$CURRENT_GENERATION-XXX (e.g., gen$CURRENT_GENERATION-001, gen$CURRENT_GENERATION-002)
+- Continue numbering from the highest existing ID in generation $CURRENT_GENERATION
 - basedOnId should reference ONE of the successful algorithm IDs above (pick the best one)
 - Each description should be one clear sentence about architectural changes
 - Keep core insights but change implementation approach
@@ -295,7 +379,7 @@ Example descriptions:
 Add exactly $count structural modification rows to the CSV file now."
 
   echo "[INFO] Calling Claude Opus to generate $count structural mutation ideas..."
-  if ! echo "$prompt" | claude --dangerously-skip-permissions --model opus -p; then
+  if ! call_claude_with_limit_check "$prompt" "opus"; then
     echo "[WARN] Claude failed to generate structural mutation ideas" >&2
     return 1
   fi
@@ -312,6 +396,10 @@ generate_crossover_direct() {
 Current CSV content:
 $(cat "$FULL_CSV_PATH")
 
+Algorithm files you can examine for context:
+- Base algorithm: $FULL_ALGORITHM_PATH  
+- Evolved algorithms: $FULL_OUTPUT_DIR/evolution_id*.py (if any exist)
+
 Top performers to combine:
 $top_performers
 
@@ -319,7 +407,8 @@ Project Brief:
 $(cat "$FULL_BRIEF_PATH")
 
 Requirements for new CSV rows:
-- IDs must be numbers only (suitable for filenames)
+- IDs must use format: gen$CURRENT_GENERATION-XXX (e.g., gen$CURRENT_GENERATION-001, gen$CURRENT_GENERATION-002)
+- Continue numbering from the highest existing ID in generation $CURRENT_GENERATION
 - basedOnId should reference ONE of the successful algorithm IDs above (pick the best one as base)
 - Each description should be one clear sentence combining elements from different algorithms
 - Be specific about what elements to merge
@@ -333,7 +422,7 @@ Example descriptions:
 Add exactly $count hybrid combination rows to the CSV file now."
 
   echo "[INFO] Calling Claude Opus to generate $count crossover hybrid ideas..."
-  if ! echo "$prompt" | claude --dangerously-skip-permissions --model opus -p; then
+  if ! call_claude_with_limit_check "$prompt" "opus"; then
     echo "[WARN] Claude failed to generate crossover ideas" >&2
     return 1
   fi
@@ -366,6 +455,10 @@ ideate_ai_legacy() {
 Current CSV content:
 $(cat "$FULL_CSV_PATH")
 
+Algorithm files you can examine for context:
+- Base algorithm: $FULL_ALGORITHM_PATH  
+- Evolved algorithms: $FULL_OUTPUT_DIR/evolution_id*.py (if any exist)
+
 Project Brief:
 $(cat "$FULL_BRIEF_PATH")"
 
@@ -379,7 +472,8 @@ $top_performers"
   prompt+="
 
 Requirements for new CSV rows:
-- IDs must be numbers only (suitable for filenames)
+- IDs must use format: gen$CURRENT_GENERATION-XXX (e.g., gen$CURRENT_GENERATION-001, gen$CURRENT_GENERATION-002)
+- Continue numbering from the highest existing ID in generation $CURRENT_GENERATION
 - basedOnId should be empty or reference existing algorithm ID
 - Each description should be one clear sentence describing an algorithmic approach
 - All new rows should have empty performance and status fields
@@ -387,12 +481,16 @@ Requirements for new CSV rows:
 Add exactly $TOTAL_IDEAS algorithm variation rows to the CSV file now."
 
   echo "[INFO] Calling Claude Opus to generate $TOTAL_IDEAS ideas (legacy mode)..."
-  if ! echo "$prompt" | claude --dangerously-skip-permissions --model opus -p; then
+  if ! call_claude_with_limit_check "$prompt" "opus"; then
     echo "[WARN] Claude failed to generate ideas" >&2
     return 1
   fi
   echo "[INFO] Legacy ideas generated"
 }
+
+# Determine generation number for this ideation run
+CURRENT_GENERATION=$(get_next_generation)
+echo "[INFO] Starting ideation for generation $CURRENT_GENERATION"
 
 # Main execution
 if [[ $no_ai == true ]]; then

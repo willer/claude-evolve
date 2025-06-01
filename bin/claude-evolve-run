@@ -141,6 +141,71 @@ update_csv_row() {
   mv "$temp_file" "$FULL_CSV_PATH"
 }
 
+# Auto-recovery mechanism for common failures
+attempt_recovery() {
+  local failure_type="$1"
+  local error_output="$2"
+  local row_num="$3"
+  local id="$4"
+  local description="$5"
+  
+  echo "[INFO] Attempting auto-recovery for $failure_type..."
+  
+  case "$failure_type" in
+    "import_error")
+      # Extract missing module name
+      missing_module=$(echo "$error_output" | grep -o "No module named '[^']*'" | sed "s/No module named '\\([^']*\\)'/\\1/" | head -1)
+      if [[ -n $missing_module ]]; then
+        echo "[INFO] Detected missing module: $missing_module"
+        echo "[INFO] Attempting to install via pip..."
+        
+        # Try to install the missing module
+        if pip install "$missing_module" 2>&1; then
+          echo "[INFO] Successfully installed $missing_module. Retrying evaluation..."
+          return 0  # Signal to retry
+        else
+          echo "[WARN] Failed to install $missing_module automatically"
+          echo "[INFO] Please install manually: pip install $missing_module"
+        fi
+      fi
+      ;;
+      
+    "syntax_error")
+      # For syntax errors, we could retry the mutation with additional guidance
+      echo "[INFO] Detected syntax error in generated code"
+      echo "[INFO] Retrying mutation with additional constraints..."
+      
+      # Update the CSV to retry this candidate with enhanced prompt
+      update_csv_row "$row_num" "" "pending"
+      
+      # Add a recovery marker to the description to guide the next attempt
+      new_desc="[RETRY: Fix syntax] $description"
+      temp_file=$(mktemp)
+      current_row=1
+      
+      while IFS=, read -r csv_id csv_based_on csv_desc csv_perf csv_stat; do
+        if [[ $current_row -eq $row_num ]]; then
+          echo "$csv_id,$csv_based_on,$new_desc,$csv_perf,pending"
+        else
+          echo "$csv_id,$csv_based_on,$csv_desc,$csv_perf,$csv_stat"
+        fi
+        ((current_row++))
+      done <"$FULL_CSV_PATH" >"$temp_file"
+      
+      mv "$temp_file" "$FULL_CSV_PATH"
+      return 0  # Signal to retry
+      ;;
+      
+    "zero_score")
+      # For zero scores, log additional diagnostic info
+      echo "[INFO] Algorithm produced zero score - likely a logic error"
+      echo "[INFO] Consider adding constraints to BRIEF.md to avoid this approach"
+      ;;
+  esac
+  
+  return 1  # No recovery possible
+}
+
 # Main evolution loop
 while true; do
   # Find next candidate
@@ -198,7 +263,15 @@ if [[ -z $based_on_id || $based_on_id == "0" || $based_on_id == '""' ]]; then
   parent_file="$FULL_ALGORITHM_PATH"
   echo "[INFO] Using base algorithm (basedonID is empty or 0)"
 else
-  parent_file="$FULL_OUTPUT_DIR/evolution_id${based_on_id}.py"
+  # Handle both old format (numeric) and new format (genXX-XXX)
+  if [[ $based_on_id =~ ^[0-9]+$ ]]; then
+    # Old numeric format
+    parent_file="$FULL_OUTPUT_DIR/evolution_id${based_on_id}.py"
+  else
+    # New generation format
+    parent_file="$FULL_OUTPUT_DIR/evolution_${based_on_id}.py"
+  fi
+  
   if [[ ! -f $parent_file ]]; then
     echo "[ERROR] Parent algorithm file not found: $parent_file" >&2
     update_csv_row "$row_num" "" "failed"
@@ -212,8 +285,15 @@ fi
 
 echo "[INFO] Using parent algorithm: $parent_file"
 
-# Generate mutation
-output_file="$FULL_OUTPUT_DIR/evolution_id${id}.py"
+# Generate mutation output file
+# Handle both old format (numeric) and new format (genXX-XXX)
+if [[ $id =~ ^[0-9]+$ ]]; then
+  # Old numeric format
+  output_file="$FULL_OUTPUT_DIR/evolution_id${id}.py"
+else
+  # New generation format
+  output_file="$FULL_OUTPUT_DIR/evolution_${id}.py"
+fi
 echo "[INFO] Generating algorithm mutation..."
 
 # Copy parent algorithm to output file first
@@ -267,8 +347,34 @@ else
     echo "=== CLAUDE RESPONSE ==="
   } >> "${LOGFILE}-developer"
   
-  # Use tee to show output and log simultaneously
-  if ! echo "$prompt" | "$claude_cmd" --dangerously-skip-permissions --model $CLAUDE_MODEL -p 2>&1 | tee -a "${LOGFILE}-developer"; then
+  # Use tee to show output and log simultaneously, and capture output for limit detection
+  claude_output=$(echo "$prompt" | "$claude_cmd" --dangerously-skip-permissions --model $CLAUDE_MODEL -p 2>&1 | tee -a "${LOGFILE}-developer")
+  claude_exit_code=${PIPESTATUS[1]}  # Get exit code from claude command, not tee
+  
+  # Check for usage limit
+  if echo "$claude_output" | grep -q "Claude AI usage limit reached"; then
+    # Extract timestamp if available
+    limit_timestamp=$(echo "$claude_output" | grep -o "Claude AI usage limit reached|[0-9]*" | cut -d'|' -f2)
+    
+    # Print red error message
+    echo -e "\033[31m[ERROR] CLAUDE AI USAGE LIMIT REACHED!\033[0m" >&2
+    echo -e "\033[31m[ERROR] Evolution halted due to API rate limits.\033[0m" >&2
+    
+    if [[ -n $limit_timestamp ]]; then
+      # Convert timestamp to human-readable format
+      limit_date=$(date -r "$limit_timestamp" "+%Y-%m-%d %H:%M:%S" 2>/dev/null || echo "Unknown time")
+      echo -e "\033[31m[ERROR] Limit will be released at: $limit_date\033[0m" >&2
+    fi
+    
+    echo -e "\033[33m[INFO] Please wait for the rate limit to reset before continuing.\033[0m" >&2
+    echo -e "\033[33m[INFO] The current candidate will remain in 'pending' status.\033[0m" >&2
+    
+    # Don't mark as failed - leave it pending for retry later
+    exit 1
+  fi
+  
+  # Check for other failures
+  if [[ $claude_exit_code -ne 0 ]]; then
     echo "[ERROR] Claude failed to mutate algorithm" >&2
     update_csv_row "$row_num" "" "failed"
     if should_continue_after_failure; then
@@ -338,15 +444,39 @@ if [[ $eval_exit_code -eq 0 ]]; then
   # Extract score from JSON (simple grep approach)
   if score=$(echo "$eval_output" | grep -o '"score"[[:space:]]*:[[:space:]]*[0-9.]*' | cut -d: -f2 | tr -d ' '); then
     if [[ -n $score ]]; then
-      update_csv_row "$row_num" "$score" "complete"
-      echo "[INFO] ✓ Evaluation completed successfully"
-      echo "[INFO] Performance score: $score"
-    else
-      # Try "performance" field
-      if score=$(echo "$eval_output" | grep -o '"performance"[[:space:]]*:[[:space:]]*[0-9.]*' | cut -d: -f2 | tr -d ' '); then
+      # Check if score is 0 and mark as failed
+      if (( $(echo "$score == 0" | bc -l) )); then
+        update_csv_row "$row_num" "$score" "failed"
+        echo "[INFO] ✗ Evaluation failed with score 0"
+        echo "[INFO] Performance score: $score"
+        if should_continue_after_failure; then
+          continue 2
+        else
+          exit 1
+        fi
+      else
         update_csv_row "$row_num" "$score" "complete"
         echo "[INFO] ✓ Evaluation completed successfully"
         echo "[INFO] Performance score: $score"
+      fi
+    else
+      # Try "performance" field
+      if score=$(echo "$eval_output" | grep -o '"performance"[[:space:]]*:[[:space:]]*[0-9.]*' | cut -d: -f2 | tr -d ' '); then
+        # Check if score is 0 and mark as failed
+        if (( $(echo "$score == 0" | bc -l) )); then
+          update_csv_row "$row_num" "$score" "failed"
+          echo "[INFO] ✗ Evaluation failed with score 0"
+          echo "[INFO] Performance score: $score"
+          if should_continue_after_failure; then
+            continue 2
+          else
+            exit 1
+          fi
+        else
+          update_csv_row "$row_num" "$score" "complete"
+          echo "[INFO] ✓ Evaluation completed successfully"
+          echo "[INFO] Performance score: $score"
+        fi
       else
         echo "[ERROR] No score found in evaluator output" >&2
         echo "[ERROR] Output: $eval_output" >&2
@@ -371,7 +501,50 @@ if [[ $eval_exit_code -eq 0 ]]; then
 else
   echo "[ERROR] Evaluator failed with exit code $eval_exit_code" >&2
   echo "[ERROR] Output: $eval_output" >&2
-  update_csv_row "$row_num" "" "failed"
+  
+  # Check for common failure patterns and attempt recovery
+  recovery_attempted=false
+  
+  # Check for import errors
+  if echo "$eval_output" | grep -q "No module named"; then
+    if attempt_recovery "import_error" "$eval_output" "$row_num" "$id" "$description"; then
+      recovery_attempted=true
+      # Retry the evaluation
+      echo "[INFO] Retrying evaluation after recovery attempt..."
+      if eval_output=$("$PYTHON_CMD" "$FULL_EVALUATOR_PATH" "$output_file" 2>&1); then
+        # Re-process the successful result
+        if score=$(echo "$eval_output" | grep -o '"score"[[:space:]]*:[[:space:]]*[0-9.]*' | cut -d: -f2 | tr -d ' '); then
+          if [[ -n $score ]]; then
+            if (( $(echo "$score == 0" | bc -l) )); then
+              update_csv_row "$row_num" "$score" "failed"
+              echo "[INFO] ✗ Evaluation failed with score 0"
+            else
+              update_csv_row "$row_num" "$score" "complete"
+              echo "[INFO] ✓ Recovery successful! Performance score: $score"
+              consecutive_failures=0
+              continue
+            fi
+          fi
+        fi
+      fi
+    fi
+  fi
+  
+  # Check for syntax errors
+  if echo "$eval_output" | grep -q "SyntaxError"; then
+    if attempt_recovery "syntax_error" "$eval_output" "$row_num" "$id" "$description"; then
+      recovery_attempted=true
+      # Skip to next iteration to retry with enhanced prompt
+      consecutive_failures=0
+      continue
+    fi
+  fi
+  
+  # If no recovery was successful, mark as failed
+  if [[ $recovery_attempted == false ]]; then
+    update_csv_row "$row_num" "" "failed"
+  fi
+  
   if should_continue_after_failure; then
     continue
   else

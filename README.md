@@ -130,6 +130,43 @@ This isn't sci-fi level "sleep through the entire evolution" automation - it's m
 - **Restart later** with `claude-evolve run` to continue from where you left off
 - **Perfect for long-term optimization** - run overnight, over weekends, or while working on other projects
 
+## Handling Failures and Recovery
+
+Evolution experiments can fail for various reasons. The system tracks these failures and provides recovery options.
+
+**Common failure types:**
+- **Infrastructure failures** - Missing dependencies (e.g., xgboost not installed)
+- **Code generation bugs** - Claude occasionally generates syntactically incorrect code
+- **Evaluation errors** - Evaluator crashes or returns invalid output
+- **Performance score 0** - Algorithm runs but produces no meaningful results (now marked as "failed")
+
+**Failure tracking in evolution.csv:**
+- `failed` - Evaluation error or performance score of 0
+- `timeout` - Evaluation exceeded time limit
+- `interrupted` - User interrupted with Ctrl+C
+- Check the `status` column to identify failed candidates
+
+**Manual recovery strategies:**
+1. **Force retry of failed candidates:**
+   - Edit `evolution.csv` and change status from "failed" to "pending"
+   - Clear the performance value for that row
+   - Run `claude-evolve run` to retry the candidate
+
+2. **Fix infrastructure issues:**
+   - Install missing dependencies: `pip install xgboost numpy scipy`
+   - Update Python environment if needed
+   - Check that evaluator.py has proper error handling
+
+3. **Guide around persistent failures:**
+   - If a specific approach keeps failing, add constraints to BRIEF.md
+   - Use `claude-evolve ideate` with explicit directions to avoid problematic patterns
+   - Consider updating evaluator.py to catch and handle specific error types
+
+**Future auto-recovery (planned):**
+- Automatic retry with different prompts for code generation failures
+- Dependency detection and installation suggestions
+- Smart failure pattern recognition to avoid similar mutations
+
 ## Requirements
 
 ### Required
