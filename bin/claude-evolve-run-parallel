@@ -222,11 +222,8 @@ check_stuck_candidates
 set +e  # Don't exit on error in the main loop
 
 while true; do
-  # Check if too many consecutive failures
-  if [[ $consecutive_failures -ge $MAX_FAILURES ]]; then
-    echo "[ERROR] Too many consecutive failures ($consecutive_failures). Stopping." >&2
-    break
-  fi
+  # In parallel mode, let individual algorithm failures happen
+  # The generation is finite, so worst case it just completes with many failures
   
   # Check if rate limit was hit
   if [[ $rate_limit_hit == true ]]; then
