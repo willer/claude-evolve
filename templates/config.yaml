@@ -36,3 +36,14 @@ ideation_strategies:
 
 # Python command to use for evaluation
 python_cmd: "python3"
+
+# Parallel execution configuration
+parallel:
+  # Enable parallel execution of evolution candidates
+  enabled: false
+  
+  # Maximum number of worker processes to run simultaneously
+  max_workers: 4
+  
+  # Timeout in seconds when waiting for CSV locks
+  lock_timeout: 30

@@ -19,6 +19,11 @@ DEFAULT_STRUCTURAL_MUTATION=3
 DEFAULT_CROSSOVER_HYBRID=4
 DEFAULT_NUM_ELITES=3
 
+# Default parallel execution values
+DEFAULT_PARALLEL_ENABLED=false
+DEFAULT_MAX_WORKERS=4
+DEFAULT_LOCK_TIMEOUT=30
+
 # Load configuration from config file
 load_config() {
   # Set defaults first
@@ -38,6 +43,11 @@ load_config() {
   STRUCTURAL_MUTATION="$DEFAULT_STRUCTURAL_MUTATION"
   CROSSOVER_HYBRID="$DEFAULT_CROSSOVER_HYBRID"
   NUM_ELITES="$DEFAULT_NUM_ELITES"
+  
+  # Set parallel execution defaults
+  PARALLEL_ENABLED="$DEFAULT_PARALLEL_ENABLED"
+  MAX_WORKERS="$DEFAULT_MAX_WORKERS"
+  LOCK_TIMEOUT="$DEFAULT_LOCK_TIMEOUT"
 
   # Single config file location: evolution/config.yaml
   local config_file="evolution/config.yaml"
@@ -47,24 +57,46 @@ load_config() {
     echo "[INFO] Loading configuration from: $config_file"
     # Simple YAML parsing for key: value pairs and nested structures
     local in_ideation_section=false
-    while IFS=': ' read -r key value; do
+    local in_parallel_section=false
+    while IFS='' read -r line; do
       # Skip comments and empty lines
-      [[ $key =~ ^[[:space:]]*# ]] || [[ -z $key ]] && continue
+      [[ $line =~ ^[[:space:]]*# ]] || [[ -z $line ]] && continue
+      
+      # Parse key:value from line
+      if [[ ! $line =~ ^([^:]+):(.*)$ ]]; then
+        continue
+      fi
+      key="${BASH_REMATCH[1]}"
+      value="${BASH_REMATCH[2]}"
+      
+      # Check if key is indented (for nested sections)
+      local is_indented=false
+      [[ $key =~ ^[[:space:]]+ ]] && is_indented=true
+      
       
       # Remove leading/trailing whitespace
       key=$(echo "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
       value=$(echo "$value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
       
+      # Remove inline comments from value
+      value=$(echo "$value" | sed 's/[[:space:]]*#.*$//')
+      
       # Remove quotes from value
       value=$(echo "$value" | sed 's/^"//;s/"$//')
       
-      # Handle nested ideation_strategies section
+      # Handle nested sections
       if [[ $key == "ideation_strategies" ]]; then
         in_ideation_section=true
+        in_parallel_section=false
         continue
-      elif [[ $key =~ ^[a-z_]+ ]] && [[ $in_ideation_section == true ]]; then
-        # Top-level key found, exit ideation section
+      elif [[ $key == "parallel" ]]; then
+        in_parallel_section=true
         in_ideation_section=false
+        continue
+      elif [[ $is_indented == false ]] && [[ $in_ideation_section == true || $in_parallel_section == true ]]; then
+        # Non-indented key found while in a section, exit nested sections
+        in_ideation_section=false
+        in_parallel_section=false
       fi
       
       if [[ $in_ideation_section == true ]]; then
@@ -76,6 +108,13 @@ load_config() {
           structural_mutation) STRUCTURAL_MUTATION="$value" ;;
           crossover_hybrid) CROSSOVER_HYBRID="$value" ;;
           num_elites) NUM_ELITES="$value" ;;
+        esac
+      elif [[ $in_parallel_section == true ]]; then
+        # Handle indented keys in parallel section
+        case $key in
+          enabled) PARALLEL_ENABLED="$value" ;;
+          max_workers) MAX_WORKERS="$value" ;;
+          lock_timeout) LOCK_TIMEOUT="$value" ;;
         esac
       else
         # Handle top-level keys
@@ -149,6 +188,8 @@ show_config() {
   echo "  CSV file: $FULL_CSV_PATH"
   echo "  Output directory: $FULL_OUTPUT_DIR"
   echo "  Parent selection: $PARENT_SELECTION"
-  echo "  Max ideas: $MAX_IDEAS"
   echo "  Python command: $PYTHON_CMD"
+  echo "  Parallel enabled: $PARALLEL_ENABLED"
+  echo "  Max workers: $MAX_WORKERS"
+  echo "  Lock timeout: $LOCK_TIMEOUT"
 }

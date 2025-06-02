@@ -21,6 +21,18 @@ while [[ $# -gt 0 ]]; do
     timeout_seconds="$2"
     shift 2
     ;;
+  --parallel)
+    force_parallel="true"
+    shift
+    ;;
+  --sequential)
+    force_sequential="true"
+    shift
+    ;;
+  --keep-awake|--caffeinate)
+    use_caffeinate="true"
+    shift
+    ;;
   --help)
     cat <<EOF
 claude-evolve run - Execute evolution candidates
@@ -30,6 +42,9 @@ USAGE:
 
 OPTIONS:
   --timeout <sec>  Kill evaluator after specified seconds (default: no timeout)
+  --parallel       Force parallel execution mode
+  --sequential     Force sequential execution mode
+  --keep-awake     Prevent system sleep during execution (macOS only)
   --help           Show this help message
 
 DESCRIPTION:
@@ -49,8 +64,36 @@ EOF
   esac
 done
 
-echo "[INFO] Starting continuous evolution run..."
-echo "[INFO] Will continue running until no more pending candidates or 5 consecutive failures"
+# Check if caffeinate should be used
+if [[ "$use_caffeinate" == "true" ]] && command -v caffeinate >/dev/null 2>&1; then
+  echo "[INFO] Using caffeinate to prevent system sleep"
+  # Re-run this script with caffeinate
+  exec caffeinate -dims "$0" "$@"
+fi
+
+# Determine execution mode
+use_parallel=false
+if [[ "$force_parallel" == "true" ]]; then
+  use_parallel=true
+  echo "[INFO] Using parallel mode (forced via --parallel)"
+elif [[ "$force_sequential" == "true" ]]; then
+  use_parallel=false
+  echo "[INFO] Using sequential mode (forced via --sequential)"
+elif [[ "$PARALLEL_ENABLED" == "true" || "$PARALLEL_ENABLED" == "1" ]]; then
+  use_parallel=true
+  echo "[INFO] Using parallel mode (enabled in config)"
+else
+  echo "[INFO] Using sequential mode (default)"
+fi
+
+if [[ "$use_parallel" == "true" ]]; then
+  echo "[INFO] Starting parallel evolution run with up to $MAX_WORKERS workers"
+  exec "$SCRIPT_DIR/claude-evolve-run-parallel" ${timeout_seconds:+--timeout "$timeout_seconds"}
+else
+  echo "[INFO] Starting continuous evolution run..."
+  echo "[INFO] Will continue running until no more pending candidates or 5 consecutive failures"
+fi
+
 [[ -n $timeout_seconds ]] && echo "[INFO] Using timeout: ${timeout_seconds} seconds per evaluation"
 
 # Prepare logging directory

@@ -1,0 +1,261 @@
+#!/bin/bash
+# Worker process for parallel evolution execution
+# Processes a single evolution candidate and exits
+
+set -e
+
+# Load configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/config.sh
+source "$SCRIPT_DIR/../lib/config.sh"
+# shellcheck source=../lib/csv-lock.sh
+source "$SCRIPT_DIR/../lib/csv-lock.sh"
+load_config
+
+# Parse arguments
+timeout_seconds=""
+candidate_id=""
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+  --timeout)
+    if [[ -z ${2:-} ]] || [[ ! $2 =~ ^[0-9]+$ ]] || [[ $2 -eq 0 ]]; then
+      echo "[ERROR] --timeout requires a positive integer (seconds)" >&2
+      exit 1
+    fi
+    timeout_seconds="$2"
+    shift 2
+    ;;
+  --id)
+    candidate_id="$2"
+    shift 2
+    ;;
+  *)
+    echo "[ERROR] Unknown option: $1" >&2
+    exit 1
+    ;;
+  esac
+done
+
+# If no ID provided, find next pending
+if [[ -z $candidate_id ]]; then
+  candidate_id=$(find_next_pending_with_lock)
+  if [[ -z $candidate_id ]]; then
+    echo "[INFO] No pending candidates found"
+    exit 0
+  fi
+else
+  # Mark specified candidate as running
+  update_csv_row_with_lock "$candidate_id" "status" "running"
+fi
+
+echo "[WORKER-$$] Processing candidate ID: $candidate_id"
+
+# Validate workspace
+if [[ ! -d "$FULL_EVOLUTION_DIR" ]]; then
+  echo "[ERROR] Evolution directory not found: $FULL_EVOLUTION_DIR" >&2
+  exit 1
+fi
+
+# Create log file for this run
+mkdir -p logs
+LOGFILE="logs/worker-${candidate_id}-$(date +%Y%m%d_%H%M%S).txt"
+
+# Find candidate in CSV
+row_data=""
+if ! read_csv_with_lock csv_content; then
+  echo "[ERROR] Failed to read CSV" >&2
+  exit 1
+fi
+
+# Extract candidate data
+found=false
+while IFS=, read -r csv_id csv_based_on csv_desc csv_perf csv_stat; do
+  if [[ $csv_id == "$candidate_id" ]]; then
+    id="$csv_id"
+    based_on_id="$csv_based_on"
+    description="$csv_desc"
+    performance="$csv_perf"
+    status="$csv_stat"
+    found=true
+    break
+  fi
+done <<< "$csv_content"
+
+if [[ $found == false ]]; then
+  echo "[ERROR] Candidate ID not found: $candidate_id" >&2
+  exit 1
+fi
+
+# Clean up description
+description=${description#\"}
+description=${description%\"}
+
+echo "[WORKER-$$] Description: $description"
+echo "[WORKER-$$] Based on ID: $based_on_id"
+
+# Determine parent algorithm
+if [[ -z $based_on_id || $based_on_id == "0" || $based_on_id == '""' ]]; then
+  parent_file="$FULL_ALGORITHM_PATH"
+  echo "[WORKER-$$] Using base algorithm"
+else
+  # Handle both old and new format IDs
+  if [[ $based_on_id =~ ^[0-9]+$ ]]; then
+    parent_file="$FULL_OUTPUT_DIR/evolution_id${based_on_id}.py"
+  else
+    parent_file="$FULL_OUTPUT_DIR/evolution_${based_on_id}.py"
+  fi
+  
+  if [[ ! -f $parent_file ]]; then
+    echo "[ERROR] Parent algorithm not found: $parent_file" >&2
+    update_csv_row_with_lock "$candidate_id" "status" "failed"
+    exit 1
+  fi
+fi
+
+# Generate output file
+if [[ $id =~ ^[0-9]+$ ]]; then
+  output_file="$FULL_OUTPUT_DIR/evolution_id${id}.py"
+else
+  output_file="$FULL_OUTPUT_DIR/evolution_${id}.py"
+fi
+
+# Copy parent to output
+cp "$parent_file" "$output_file"
+echo "[WORKER-$$] Copied parent to: $output_file"
+
+# Generate mutation (skip for baseline)
+if [[ $id == "000" || $id == "0" || $id == "gen00-000" ]]; then
+  echo "[WORKER-$$] Baseline algorithm - skipping mutation"
+else
+  # Check for claude CLI
+  claude_cmd="${CLAUDE_CMD:-claude}"
+  if ! command -v "$claude_cmd" >/dev/null 2>&1; then
+    echo "[ERROR] Claude CLI not found" >&2
+    update_csv_row_with_lock "$candidate_id" "status" "failed"
+    exit 1
+  fi
+  
+  CLAUDE_MODEL="sonnet"
+  echo "[WORKER-$$] Using Claude $CLAUDE_MODEL for mutation"
+  
+  # Create mutation prompt
+  prompt="Edit the file $output_file to implement this specific change: $description
+
+Requirements:
+- Edit the file directly (don't just provide comments or suggestions)
+- Maintain the same function signatures and interfaces
+- Make the specific change described above
+- Ensure the code runs without syntax errors
+- Add proper error handling if needed
+
+The file currently contains the parent algorithm. Modify it according to the description above."
+  
+  # Log prompt
+  {
+    echo "=== WORKER $$ - MUTATION PROMPT ==="
+    echo "ID: $id"
+    echo "Timestamp: $(date)"
+    echo "$prompt"
+    echo
+  } >> "$LOGFILE"
+  
+  # Call Claude
+  echo "[WORKER-$$] Calling Claude to apply mutation..."
+  claude_output=$(echo "$prompt" | "$claude_cmd" --dangerously-skip-permissions --model $CLAUDE_MODEL -p 2>&1 | tee -a "$LOGFILE")
+  claude_exit_code=${PIPESTATUS[1]}
+  
+  # Check for rate limit
+  if echo "$claude_output" | grep -q "Claude AI usage limit reached"; then
+    echo "[ERROR] Claude API rate limit reached" >&2
+    # Reset to pending so it can be retried later
+    update_csv_row_with_lock "$candidate_id" "status" "pending"
+    exit 2  # Special exit code for rate limit
+  fi
+  
+  if [[ $claude_exit_code -ne 0 ]]; then
+    echo "[ERROR] Claude failed to mutate algorithm" >&2
+    update_csv_row_with_lock "$candidate_id" "status" "failed"
+    exit 1
+  fi
+fi
+
+# Run evaluator
+echo "[WORKER-$$] Running evaluation..."
+eval_output=""
+eval_exit_code=0
+
+if [[ -n $timeout_seconds ]]; then
+  echo "[WORKER-$$] Evaluation timeout: ${timeout_seconds}s"
+  # For Modal compatibility, don't capture stderr
+  if eval_output=$(timeout "$timeout_seconds" "$PYTHON_CMD" "$FULL_EVALUATOR_PATH" "$output_file"); then
+    eval_exit_code=0
+  else
+    eval_exit_code=$?
+    if [[ $eval_exit_code -eq 124 ]]; then
+      echo "[ERROR] Evaluation timed out" >&2
+      update_csv_row_with_lock "$candidate_id" "status" "timeout"
+      exit 1
+    fi
+  fi
+else
+  # For Modal compatibility, don't capture stderr
+  if eval_output=$("$PYTHON_CMD" "$FULL_EVALUATOR_PATH" "$output_file"); then
+    eval_exit_code=0
+  else
+    eval_exit_code=$?
+  fi
+fi
+
+# Log evaluator output
+{
+  echo "=== WORKER $$ - EVALUATOR OUTPUT ==="
+  echo "Exit code: $eval_exit_code"
+  echo "$eval_output"
+  echo
+} >> "$LOGFILE"
+
+# Process results
+if [[ $eval_exit_code -eq 0 ]]; then
+  # Extract score
+  if score=$(echo "$eval_output" | grep -o '"score"[[:space:]]*:[[:space:]]*[0-9.]*' | cut -d: -f2 | tr -d ' '); then
+    if [[ -n $score ]]; then
+      if (( $(echo "$score == 0" | bc -l) )); then
+        update_csv_row_with_lock "$candidate_id" "status" "failed"
+        update_csv_row_with_lock "$candidate_id" "performance" "$score"
+        echo "[WORKER-$$] ✗ Evaluation failed with score 0"
+        exit 1
+      else
+        update_csv_row_with_lock "$candidate_id" "performance" "$score"
+        update_csv_row_with_lock "$candidate_id" "status" "complete"
+        echo "[WORKER-$$] ✓ Evaluation complete, score: $score"
+        exit 0
+      fi
+    fi
+  fi
+  
+  # Try "performance" field
+  if score=$(echo "$eval_output" | grep -o '"performance"[[:space:]]*:[[:space:]]*[0-9.]*' | cut -d: -f2 | tr -d ' '); then
+    if [[ -n $score ]]; then
+      if (( $(echo "$score == 0" | bc -l) )); then
+        update_csv_row_with_lock "$candidate_id" "status" "failed"
+        update_csv_row_with_lock "$candidate_id" "performance" "$score"
+        echo "[WORKER-$$] ✗ Evaluation failed with score 0"
+        exit 1
+      else
+        update_csv_row_with_lock "$candidate_id" "performance" "$score"
+        update_csv_row_with_lock "$candidate_id" "status" "complete"
+        echo "[WORKER-$$] ✓ Evaluation complete, score: $score"
+        exit 0
+      fi
+    fi
+  fi
+  
+  echo "[ERROR] No score found in evaluator output" >&2
+  update_csv_row_with_lock "$candidate_id" "status" "failed"
+  exit 1
+else
+  echo "[ERROR] Evaluator failed with exit code $eval_exit_code" >&2
+  update_csv_row_with_lock "$candidate_id" "status" "failed"
+  exit 1
+fi
