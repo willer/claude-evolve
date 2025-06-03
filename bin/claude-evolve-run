@@ -434,13 +434,13 @@ echo "[INFO] Algorithm ready at: $output_file"
 
 # Run evaluator
 echo "[INFO] Running evaluation..."
-echo "[INFO] Executing: $PYTHON_CMD $FULL_EVALUATOR_PATH $output_file"
+echo "[INFO] Executing: EXPERIMENT_ID=$id $PYTHON_CMD $FULL_EVALUATOR_PATH $output_file"
 eval_output=""
 eval_exit_code=0
 
 if [[ -n $timeout_seconds ]]; then
   echo "[INFO] Evaluation timeout: ${timeout_seconds}s"
-  if eval_output=$(timeout "$timeout_seconds" "$PYTHON_CMD" "$FULL_EVALUATOR_PATH" "$output_file" 2>&1); then
+  if eval_output=$(EXPERIMENT_ID="$id" timeout "$timeout_seconds" "$PYTHON_CMD" "$FULL_EVALUATOR_PATH" "$output_file" 2>&1); then
     eval_exit_code=0
   else
     eval_exit_code=$?
@@ -455,7 +455,7 @@ if [[ -n $timeout_seconds ]]; then
     fi
   fi
 else
-  if eval_output=$("$PYTHON_CMD" "$FULL_EVALUATOR_PATH" "$output_file" 2>&1); then
+  if eval_output=$(EXPERIMENT_ID="$id" "$PYTHON_CMD" "$FULL_EVALUATOR_PATH" "$output_file" 2>&1); then
     eval_exit_code=0
   else
     eval_exit_code=$?
@@ -473,7 +473,7 @@ echo "----------------------------------------"
   echo "=== EVALUATOR EXECUTION ==="
   echo "ID: $id"
   echo "Algorithm: $output_file"
-  echo "Command: $PYTHON_CMD $FULL_EVALUATOR_PATH $output_file"
+  echo "Command: EXPERIMENT_ID=$id $PYTHON_CMD $FULL_EVALUATOR_PATH $output_file"
   echo "Exit code: $eval_exit_code"
   echo "Timestamp: $(date)"
   echo
@@ -554,7 +554,7 @@ else
       recovery_attempted=true
       # Retry the evaluation
       echo "[INFO] Retrying evaluation after recovery attempt..."
-      if eval_output=$("$PYTHON_CMD" "$FULL_EVALUATOR_PATH" "$output_file" 2>&1); then
+      if eval_output=$(EXPERIMENT_ID="$id" "$PYTHON_CMD" "$FULL_EVALUATOR_PATH" "$output_file" 2>&1); then
         # Re-process the successful result
         if score=$(echo "$eval_output" | grep -o '"score"[[:space:]]*:[[:space:]]*[0-9.]*' | cut -d: -f2 | tr -d ' '); then
           if [[ -n $score ]]; then

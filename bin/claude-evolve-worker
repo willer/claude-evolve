@@ -188,7 +188,7 @@ eval_exit_code=0
 if [[ -n $timeout_seconds ]]; then
   echo "[WORKER-$$] Evaluation timeout: ${timeout_seconds}s"
   # For Modal compatibility, don't capture stderr
-  if eval_output=$(timeout "$timeout_seconds" "$PYTHON_CMD" "$FULL_EVALUATOR_PATH" "$output_file"); then
+  if eval_output=$(EXPERIMENT_ID="$id" timeout "$timeout_seconds" "$PYTHON_CMD" "$FULL_EVALUATOR_PATH" "$output_file"); then
     eval_exit_code=0
   else
     eval_exit_code=$?
@@ -200,7 +200,7 @@ if [[ -n $timeout_seconds ]]; then
   fi
 else
   # For Modal compatibility, don't capture stderr
-  if eval_output=$("$PYTHON_CMD" "$FULL_EVALUATOR_PATH" "$output_file"); then
+  if eval_output=$(EXPERIMENT_ID="$id" "$PYTHON_CMD" "$FULL_EVALUATOR_PATH" "$output_file"); then
     eval_exit_code=0
   else
     eval_exit_code=$?

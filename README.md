@@ -196,6 +196,27 @@ your-project/
 └── (your main project files)
 ```
 
+## Environment Variables for Evaluators
+
+When your evaluator.py runs, it has access to the `EXPERIMENT_ID` environment variable containing the current experiment's ID (e.g., `gen07-001`). This allows evaluators to:
+
+- Save experiment-specific output files
+- Log metrics with experiment identifiers
+- Implement experiment-aware logic
+- Track which algorithm variant is being evaluated
+
+Example usage in evaluator.py:
+```python
+import os
+
+# Get the current experiment ID
+experiment_id = os.environ.get('EXPERIMENT_ID', 'unknown')
+
+# Use it for logging or file naming
+output_file = f"results_{experiment_id}.json"
+print(f"Evaluating experiment: {experiment_id}")
+```
+
 ## Configuration
 
 Edit `evolution/config.yaml` to customize:
