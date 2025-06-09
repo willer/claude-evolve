@@ -47,7 +47,7 @@ show_help() {
 claude-evolve - AI-powered algorithm evolution tool
 
 USAGE:
-    claude-evolve [COMMAND] [OPTIONS]
+    claude-evolve [--config=PATH] [COMMAND] [OPTIONS]
 
 COMMANDS:
     setup       Initialize evolution workspace
@@ -56,7 +56,8 @@ COMMANDS:
     analyze     Analyze evolution results
     help        Show this help message
 
-OPTIONS:
+GLOBAL OPTIONS:
+    --config=PATH  Use alternate config file (default: evolution/config.yaml)
     -h, --help     Show help message
     -v, --version  Show version
 
@@ -65,6 +66,7 @@ EXAMPLES:
     claude-evolve ideate 5
     claude-evolve run --timeout 300
     claude-evolve analyze --open
+    claude-evolve --config=evolution-abc/config.yaml run
 
 For more information, visit: https://github.com/anthropics/claude-evolve
 EOF
@@ -93,6 +95,33 @@ show_menu() {
   [[ -f evolution/evolution.csv ]] && echo "  ✓ evolution.csv exists" || echo "  ✗ evolution.csv missing"
   echo
 }
+
+# Parse global options
+CONFIG_FILE=""
+while [[ $# -gt 0 ]] && [[ "$1" =~ ^-- ]]; do
+  case "$1" in
+  --config)
+    if [[ -z ${2:-} ]]; then
+      echo -e "${RED}[ERROR] --config requires a file path${NC}" >&2
+      exit 1
+    fi
+    CONFIG_FILE="$2"
+    shift 2
+    ;;
+  --config=*)
+    CONFIG_FILE="${1#*=}"
+    shift
+    ;;
+  *)
+    break
+    ;;
+  esac
+done
+
+# Export CONFIG_FILE for subcommands
+if [[ -n $CONFIG_FILE ]]; then
+  export CLAUDE_EVOLVE_CONFIG="$CONFIG_FILE"
+fi
 
 # Check for updates (quick, non-blocking)
 check_for_updates

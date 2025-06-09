@@ -24,8 +24,14 @@ DEFAULT_PARALLEL_ENABLED=false
 DEFAULT_MAX_WORKERS=4
 DEFAULT_LOCK_TIMEOUT=30
 
+# Default auto ideation value
+DEFAULT_AUTO_IDEATE=true
+
 # Load configuration from config file
 load_config() {
+  # Accept config file path as parameter
+  local config_file="${1:-evolution/config.yaml}"
+  
   # Set defaults first
   EVOLUTION_DIR="$DEFAULT_EVOLUTION_DIR"
   ALGORITHM_FILE="$DEFAULT_ALGORITHM_FILE"
@@ -48,9 +54,9 @@ load_config() {
   PARALLEL_ENABLED="$DEFAULT_PARALLEL_ENABLED"
   MAX_WORKERS="$DEFAULT_MAX_WORKERS"
   LOCK_TIMEOUT="$DEFAULT_LOCK_TIMEOUT"
-
-  # Single config file location: evolution/config.yaml
-  local config_file="evolution/config.yaml"
+  
+  # Set auto ideation default
+  AUTO_IDEATE="$DEFAULT_AUTO_IDEATE"
   
   # Load config if found
   if [[ -f "$config_file" ]]; then
@@ -127,11 +133,22 @@ load_config() {
           output_dir) OUTPUT_DIR="$value" ;;
           parent_selection) PARENT_SELECTION="$value" ;;
           python_cmd) PYTHON_CMD="$value" ;;
+          auto_ideate) AUTO_IDEATE="$value" ;;
         esac
       fi
     done < "$config_file"
   fi
 
+  # If config file is in a different directory, use that as the evolution dir
+  if [[ "$config_file" != "evolution/config.yaml" ]]; then
+    # Extract directory from config file path
+    local config_dir=$(dirname "$config_file")
+    if [[ "$config_dir" != "." && "$config_dir" != "" ]]; then
+      EVOLUTION_DIR="$config_dir"
+      echo "[INFO] Using evolution directory from config path: $EVOLUTION_DIR"
+    fi
+  fi
+  
   # Create full paths - ALL paths are relative to evolution_dir
   FULL_EVOLUTION_DIR="$EVOLUTION_DIR"
   FULL_ALGORITHM_PATH="$EVOLUTION_DIR/$ALGORITHM_FILE"
@@ -192,4 +209,5 @@ show_config() {
   echo "  Parallel enabled: $PARALLEL_ENABLED"
   echo "  Max workers: $MAX_WORKERS"
   echo "  Lock timeout: $LOCK_TIMEOUT"
+  echo "  Auto ideate: $AUTO_IDEATE"
 }

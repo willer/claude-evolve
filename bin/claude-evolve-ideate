@@ -6,7 +6,13 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/config.sh
 source "$SCRIPT_DIR/../lib/config.sh"
-load_config
+
+# Use CLAUDE_EVOLVE_CONFIG if set, otherwise default
+if [[ -n ${CLAUDE_EVOLVE_CONFIG:-} ]]; then
+  load_config "$CLAUDE_EVOLVE_CONFIG"
+else
+  load_config
+fi
 
 # Helper function to call Claude with usage limit detection
 call_claude_with_limit_check() {

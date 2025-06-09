@@ -61,7 +61,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Load current config
-load_config
+# Use CLAUDE_EVOLVE_CONFIG if set, otherwise default
+if [[ -n ${CLAUDE_EVOLVE_CONFIG:-} ]]; then
+  load_config "$CLAUDE_EVOLVE_CONFIG"
+else
+  load_config
+fi
 
 case $action in
 show)
