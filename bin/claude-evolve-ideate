@@ -194,10 +194,31 @@ get_top_performers() {
     return
   fi
   
-  # Get completed algorithms with performance scores, sort by performance descending
-  awk -F, 'NR > 1 && $4 != "" && $5 == "complete" { print $1 "," $3 "," $4 }' "$FULL_CSV_PATH" | \
-    sort -t, -k3 -nr | \
-    head -n "$num_requested"
+  # Use Python to properly parse CSV with quoted fields
+  "$PYTHON_CMD" -c "
+import csv
+import sys
+
+with open('$FULL_CSV_PATH', 'r') as f:
+    reader = csv.reader(f)
+    next(reader)  # Skip header
+    
+    completed = []
+    for row in reader:
+        if len(row) >= 5 and row[3] and row[4] == 'complete':
+            try:
+                score = float(row[3])
+                completed.append((row[0], row[2], score))
+            except ValueError:
+                pass
+    
+    # Sort by score descending
+    completed.sort(key=lambda x: x[2], reverse=True)
+    
+    # Output top N
+    for i, (id, desc, score) in enumerate(completed[:$num_requested]):
+        print(f'{id},{desc},{score}')
+"
 }
 
 # Manual entry mode
@@ -276,9 +297,15 @@ generate_novel_ideas_direct() {
 Current CSV content:
 $(cat "$FULL_CSV_PATH")
 
-Algorithm files you can examine for context:
+Algorithm files you MUST examine for context:
 - Base algorithm: $FULL_ALGORITHM_PATH  
-- Evolved algorithms: $FULL_OUTPUT_DIR/evolution_id*.py (if any exist)
+- Evolved algorithms: $FULL_OUTPUT_DIR/evolution_*.py (examine ALL to see what's been tried)
+
+IMPORTANT: Before generating ideas, you should:
+1. Read the base algorithm to understand the codebase structure and possibilities
+2. Read ALL existing evolution_*.py files to see what modifications have been attempted
+3. Analyze the CSV to see which approaches worked (high scores) and which failed
+4. Avoid repeating failed approaches unless trying them with significant modifications
 
 Project Brief:
 $(cat "$FULL_BRIEF_PATH")
@@ -290,6 +317,10 @@ Requirements for new CSV rows:
 - Each description should be one clear sentence describing a specific algorithmic change
 - Descriptions should explore completely different approaches than existing ones
 - All new rows should have empty performance and status fields
+- CRITICAL: You must read existing evolution files to avoid suggesting changes that:
+  * Have already been tried and failed
+  * Are impossible given the codebase structure
+  * Would break the algorithm interface requirements
 
 Example descriptions:
 - Use ensemble of 3 random forests with different feature subsets
@@ -316,9 +347,15 @@ generate_hill_climbing_direct() {
 Current CSV content:
 $(cat "$FULL_CSV_PATH")
 
-Algorithm files you can examine for context:
+Algorithm files you MUST examine for context:
 - Base algorithm: $FULL_ALGORITHM_PATH  
-- Evolved algorithms: $FULL_OUTPUT_DIR/evolution_id*.py (if any exist)
+- Evolved algorithms: $FULL_OUTPUT_DIR/evolution_*.py (examine ALL to see what's been tried)
+
+IMPORTANT: Before generating ideas, you should:
+1. Read the base algorithm to understand the codebase structure and possibilities
+2. Read ALL existing evolution_*.py files to see what modifications have been attempted
+3. Analyze the CSV to see which approaches worked (high scores) and which failed
+4. Avoid repeating failed approaches unless trying them with significant modifications
 
 Successful algorithms to build on:
 $top_performers
@@ -333,6 +370,10 @@ Requirements for new CSV rows:
 - Each description should be one clear sentence about parameter tuning
 - Focus on adjusting hyperparameters, thresholds, sizes, learning rates
 - All new rows should have empty performance and status fields
+- CRITICAL: You must read the parent algorithm file to understand:
+  * What parameters are actually tunable in the code
+  * What changes made this algorithm successful vs its parent
+  * What parameter ranges make sense given the implementation
 
 Example descriptions:
 - Increase learning rate from 0.001 to 0.01 for faster convergence
@@ -359,9 +400,15 @@ generate_structural_mutation_direct() {
 Current CSV content:
 $(cat "$FULL_CSV_PATH")
 
-Algorithm files you can examine for context:
+Algorithm files you MUST examine for context:
 - Base algorithm: $FULL_ALGORITHM_PATH  
-- Evolved algorithms: $FULL_OUTPUT_DIR/evolution_id*.py (if any exist)
+- Evolved algorithms: $FULL_OUTPUT_DIR/evolution_*.py (examine ALL to see what's been tried)
+
+IMPORTANT: Before generating ideas, you should:
+1. Read the base algorithm to understand the codebase structure and possibilities
+2. Read ALL existing evolution_*.py files to see what modifications have been attempted
+3. Analyze the CSV to see which approaches worked (high scores) and which failed
+4. Avoid repeating failed approaches unless trying them with significant modifications
 
 Successful algorithms to build on:
 $top_performers
@@ -376,6 +423,10 @@ Requirements for new CSV rows:
 - Each description should be one clear sentence about architectural changes
 - Keep core insights but change implementation approach
 - All new rows should have empty performance and status fields
+- CRITICAL: You must read the parent algorithm file to understand:
+  * What structural elements can be modified within the codebase constraints
+  * What architectural decisions led to this algorithm's success
+  * Which components are essential vs which can be replaced
 
 Example descriptions:
 - Replace linear layers with convolutional layers for spatial feature learning
@@ -402,9 +453,15 @@ generate_crossover_direct() {
 Current CSV content:
 $(cat "$FULL_CSV_PATH")
 
-Algorithm files you can examine for context:
+Algorithm files you MUST examine for context:
 - Base algorithm: $FULL_ALGORITHM_PATH  
-- Evolved algorithms: $FULL_OUTPUT_DIR/evolution_id*.py (if any exist)
+- Evolved algorithms: $FULL_OUTPUT_DIR/evolution_*.py (examine ALL to see what's been tried)
+
+IMPORTANT: Before generating ideas, you should:
+1. Read the base algorithm to understand the codebase structure and possibilities
+2. Read ALL existing evolution_*.py files to see what modifications have been attempted
+3. Analyze the CSV to see which approaches worked (high scores) and which failed
+4. Avoid repeating failed approaches unless trying them with significant modifications
 
 Top performers to combine:
 $top_performers
@@ -419,6 +476,10 @@ Requirements for new CSV rows:
 - Each description should be one clear sentence combining elements from different algorithms
 - Be specific about what elements to merge
 - All new rows should have empty performance and status fields
+- CRITICAL: You must read the relevant algorithm files to:
+  * Identify the specific improvements that made each algorithm successful
+  * Understand which components are compatible for merging
+  * Ensure the combined approach is technically feasible in the codebase
 
 Example descriptions:
 - Combine ensemble voting from algorithm 3 with feature selection from algorithm 5
@@ -461,9 +522,15 @@ ideate_ai_legacy() {
 Current CSV content:
 $(cat "$FULL_CSV_PATH")
 
-Algorithm files you can examine for context:
+Algorithm files you MUST examine for context:
 - Base algorithm: $FULL_ALGORITHM_PATH  
-- Evolved algorithms: $FULL_OUTPUT_DIR/evolution_id*.py (if any exist)
+- Evolved algorithms: $FULL_OUTPUT_DIR/evolution_*.py (examine ALL to see what's been tried)
+
+IMPORTANT: Before generating ideas, you should:
+1. Read the base algorithm to understand the codebase structure and possibilities
+2. Read ALL existing evolution_*.py files to see what modifications have been attempted
+3. Analyze the CSV to see which approaches worked (high scores) and which failed
+4. Avoid repeating failed approaches unless trying them with significant modifications
 
 Project Brief:
 $(cat "$FULL_BRIEF_PATH")"
