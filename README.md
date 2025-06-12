@@ -12,7 +12,7 @@ Think of it like **genetic algorithms for code** - it handles the mutations and 
 
 The system operates with specialized phases working together:
 
-- 🧠 **Ideation Phase**: Generates creative algorithm variations using Claude Opus
+- 🧠 **Ideation Phase**: Generates creative algorithm variations using codex o3-pro (if available) or Claude Opus
 - 🔬 **Development Phase**: Implements mutations using Claude Sonnet (with periodic Opus "megathinking")
 - 📊 **Evaluation Phase**: Tests performance against your custom evaluator
 - 📈 **Analysis Phase**: Tracks evolution progress and identifies top performers
@@ -172,10 +172,15 @@ Evolution experiments can fail for various reasons. The system tracks these fail
 ### Required
 - Node.js >= 14.0.0
 - Python 3.x (for algorithm execution)
-- Unix-like environment (macOS, Linux)
+  - Automatically detected on all platforms
+  - Windows: Uses `python` if it's Python 3
+  - macOS/Linux: Prefers `python3`
+  - Can override in config.yaml: `python_cmd: "C:\\Python39\\python.exe"`
+- Bash shell (Git Bash on Windows, native on macOS/Linux)
 - [Claude CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude` command)
 
 ### Optional (but recommended)
+- [Codex CLI](https://github.com/aboutgaurav/codex) (`codex` command) - Uses o3-pro model for superior ideation when available
 - Scientific Python libraries (numpy, scipy, etc.) depending on your algorithms
 - Plotting libraries (matplotlib, plotly) for analyzing results
 

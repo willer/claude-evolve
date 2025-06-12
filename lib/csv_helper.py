@@ -12,7 +12,11 @@ def find_pending_row(csv_path):
         reader = csv.reader(f)
         next(reader)  # Skip header
         for row_num, row in enumerate(reader, start=2):
-            # Ensure row has at least 5 fields
+            # If row has fewer than 5 fields, it's pending
+            if len(row) < 5:
+                return row_num
+            
+            # Ensure row has at least 5 fields for status check
             while len(row) < 5:
                 row.append('')
             

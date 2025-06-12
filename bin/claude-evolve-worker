@@ -74,28 +74,38 @@ if ! read_csv_with_lock csv_content; then
   exit 1
 fi
 
-# Extract candidate data
-found=false
-while IFS=, read -r csv_id csv_based_on csv_desc csv_perf csv_stat; do
-  if [[ $csv_id == "$candidate_id" ]]; then
-    id="$csv_id"
-    based_on_id="$csv_based_on"
-    description="$csv_desc"
-    performance="$csv_perf"
-    status="$csv_stat"
-    found=true
-    break
-  fi
-done <<< "$csv_content"
+# Extract candidate data using Python
+eval "$("$PYTHON_CMD" -c "
+import csv
+import sys
+import io
+
+csv_content = '''$csv_content'''
+reader = csv.reader(io.StringIO(csv_content))
+next(reader)  # Skip header
+
+found = False
+for row in reader:
+    if len(row) >= 5 and row[0] == '$candidate_id':
+        # Escape special characters for shell
+        desc = row[2].replace('\\\\', '\\\\\\\\').replace('\"', '\\\\\"').replace('\$', '\\\\\$').replace('\`', '\\\\\`')
+        print(f'id=\"{row[0]}\"')
+        print(f'based_on_id=\"{row[1]}\"')
+        print(f'description=\"{desc}\"')
+        print(f'performance=\"{row[3]}\"')
+        print(f'status=\"{row[4]}\"')
+        print('found=true')
+        found = True
+        break
+
+if not found:
+    print('found=false')
+")"
 
 if [[ $found == false ]]; then
   echo "[ERROR] Candidate ID not found: $candidate_id" >&2
   exit 1
 fi
-
-# Clean up description
-description=${description#\"}
-description=${description%\"}
 
 echo "[WORKER-$$] Description: $description"
 echo "[WORKER-$$] Based on ID: $based_on_id"

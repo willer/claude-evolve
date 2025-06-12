@@ -94,19 +94,19 @@ update_csv_row_with_lock() {
     local target_id="$1"
     local field="$2"
     local value="$3"
-    local csv_file="${EVOLUTION_DIR:-evolution}/evolution.csv"
+    local csv_file="${FULL_CSV_PATH:-${EVOLUTION_DIR:-evolution}/evolution.csv}"
     
     if ! acquire_csv_lock; then
         return 1
     fi
     
-    # Determine field position
+    # Determine field position (0-based for Python)
     local field_pos
     case "$field" in
-        "status") field_pos=5 ;;
-        "performance") field_pos=4 ;;
-        "description") field_pos=3 ;;
-        "basedOnId") field_pos=2 ;;
+        "status") field_pos=4 ;;
+        "performance") field_pos=3 ;;
+        "description") field_pos=2 ;;
+        "basedOnId") field_pos=1 ;;
         *) 
             echo "ERROR: Unknown field: $field" >&2
             release_csv_lock
@@ -114,11 +114,27 @@ update_csv_row_with_lock() {
             ;;
     esac
     
-    # Update CSV using awk
-    awk -F',' -v OFS=',' -v id="$target_id" -v pos="$field_pos" -v val="$value" '
-        NR==1 || $1 != id { print }
-        $1 == id { $pos = val; print }
-    ' "$csv_file" > "${csv_file}.tmp" && mv -f "${csv_file}.tmp" "$csv_file"
+    # Update CSV using Python
+    "$PYTHON_CMD" -c "
+import csv
+import sys
+
+# Read CSV
+with open('$csv_file', 'r') as f:
+    reader = csv.reader(f)
+    rows = list(reader)
+
+# Update the specific field
+for i in range(1, len(rows)):
+    if rows[i][0] == '$target_id':
+        rows[i][$field_pos] = '$value'
+        break
+
+# Write back
+with open('${csv_file}.tmp', 'w', newline='') as f:
+    writer = csv.writer(f)
+    writer.writerows(rows)
+" && mv -f "${csv_file}.tmp" "$csv_file"
     
     release_csv_lock
     return 0
@@ -127,27 +143,48 @@ update_csv_row_with_lock() {
 # Find next pending candidate with lock
 # Usage: next_pending=$(find_next_pending_with_lock)
 find_next_pending_with_lock() {
-    local csv_file="${EVOLUTION_DIR:-evolution}/evolution.csv"
+    local csv_file="${FULL_CSV_PATH:-${EVOLUTION_DIR:-evolution}/evolution.csv}"
     
     if ! acquire_csv_lock; then
         return 1
     fi
     
-    # Find oldest pending candidate and update to running
-    local candidate=$(awk -F',' '
-        NR>1 && ($5 == "pending" || $5 == "") { print $1; exit }
-    ' "$csv_file")
+    # Find oldest pending candidate and update to running using Python
+    local candidate=$("$PYTHON_CMD" -c "
+import csv
+import sys
+
+# Read CSV
+with open('$csv_file', 'r') as f:
+    reader = csv.reader(f)
+    rows = list(reader)
+
+# Find first pending candidate
+candidate_id = None
+for i in range(1, len(rows)):
+    # If row has fewer than 5 fields, it's pending
+    if len(rows[i]) < 5:
+        candidate_id = rows[i][0]
+        # Ensure row has 5 fields before setting status
+        while len(rows[i]) < 5:
+            rows[i].append('')
+        rows[i][4] = 'running'  # Update status
+        break
+    elif len(rows[i]) >= 5 and (rows[i][4] == 'pending' or rows[i][4] == ''):
+        candidate_id = rows[i][0]
+        rows[i][4] = 'running'  # Update status
+        break
+
+# Write back if we found a candidate
+if candidate_id:
+    with open('${csv_file}.tmp', 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerows(rows)
+    print(candidate_id)
+")
     
     if [ -n "$candidate" ]; then
-        # Update status to running while we have the lock
-        awk -F',' -v OFS=',' -v id="$candidate" '
-            NR==1 || $1 != id { print }
-            $1 == id { 
-                # Preserve existing fields but set status to running
-                if ($5 == "" || $5 == "pending") $5 = "running"
-                print 
-            }
-        ' "$csv_file" > "${csv_file}.tmp" && mv -f "${csv_file}.tmp" "$csv_file"
+        mv -f "${csv_file}.tmp" "$csv_file"
     fi
     
     release_csv_lock

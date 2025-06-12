@@ -92,35 +92,69 @@ top_score=""
 top_id=""
 top_desc=""
 
-while IFS=, read -r id _ desc perf status; do
-  [[ $id == "id" ]] && continue # Skip header
+# Use Python to parse CSV and generate stats
+eval "$("$PYTHON_CMD" -c "
+import csv
 
-  ((total++))
+# Initialize counters
+total = 0
+completed = 0
+running = 0
+failed = 0
+pending = 0
+total_performance = 0
+count_with_performance = 0
+top_score = None
+top_id = ''
+top_desc = ''
 
-  case "$status" in
-  "complete" | "completed") 
-    ((completed++))
-    # Only count performance for completed runs with non-zero values
-    if [[ -n $perf && $perf != "" ]]; then
-      # Skip zeros (they're errors)
-      if (( $(echo "$perf > 0" | bc -l 2>/dev/null || echo "0") )); then
-        total_performance=$(echo "$total_performance + $perf" | bc -l 2>/dev/null || echo "$total_performance")
-        ((count_with_performance++))
+with open('$csv_file', 'r') as f:
+    reader = csv.reader(f)
+    next(reader)  # Skip header
+    
+    for row in reader:
+        if len(row) < 5:
+            continue
+            
+        id, _, desc, perf, status = row[:5]
+        total += 1
+        
+        if status in ['complete', 'completed']:
+            completed += 1
+            if perf and perf != '':
+                try:
+                    perf_val = float(perf)
+                    if perf_val > 0:  # Skip zeros (they're errors)
+                        total_performance += perf_val
+                        count_with_performance += 1
+                        
+                        if top_score is None or perf_val > top_score:
+                            top_score = perf_val
+                            top_id = id
+                            top_desc = desc
+                except ValueError:
+                    pass
+        elif status == 'running':
+            running += 1
+        elif status in ['failed', 'timeout', 'interrupted']:
+            failed += 1
+        else:
+            pending += 1
 
-        # Check if this is the top performer
-        if [[ -z $top_score ]] || (($(echo "$perf > $top_score" | bc -l 2>/dev/null || echo "0"))); then
-          top_score="$perf"
-          top_id="$id"
-          top_desc="$desc"
-        fi
-      fi
-    fi
-    ;;
-  "running") ((running++)) ;;
-  "failed" | "timeout" | "interrupted") ((failed++)) ;;
-  *) ((pending++)) ;;
-  esac
-done <"$csv_file"
+# Output shell variable assignments
+print(f'total={total}')
+print(f'completed={completed}')
+print(f'running={running}')
+print(f'failed={failed}')
+print(f'pending={pending}')
+print(f'total_performance={total_performance}')
+print(f'count_with_performance={count_with_performance}')
+print(f'top_score={top_score if top_score is not None else \"\"}')
+print(f'top_id=\"{top_id}\"')
+# Escape special characters in description
+desc_escaped = top_desc.replace('\\\\', '\\\\\\\\').replace('\"', '\\\\\"').replace('\$', '\\\\\$').replace('\`', '\\\\\`')
+print(f'top_desc=\"{desc_escaped}\"')
+")"
 
 # Display summary
 echo "Total Candidates: $total"
@@ -154,30 +188,44 @@ echo "=== Generation Analysis ==="
 gen_stats_file="/tmp/evolution_gen_stats_$$.tmp"
 >"$gen_stats_file"
 
-while IFS=, read -r id _ desc perf status; do
-  [[ $id == "id" ]] && continue # Skip header
-  
-  # Extract generation from ID
-  gen="gen01" # default for old numeric IDs
-  if [[ $id =~ ^(gen[0-9]+)- ]]; then
-    gen="${BASH_REMATCH[1]}"
-  elif [[ $id =~ ^[0-9]+$ ]]; then
-    gen="gen00" # Mark old numeric IDs as gen00
-  fi
-  
-  # Write generation data to temp file
-  echo -n "$gen " >> "$gen_stats_file"
-  if [[ $status =~ ^(complete|completed)$ && -n $perf && $perf != "" ]]; then
-    # Exclude zeros from statistics (they're errors)
-    if (( $(echo "$perf > 0" | bc -l 2>/dev/null || echo "0") )); then
-      echo "completed $perf" >> "$gen_stats_file"
-    else
-      echo "error" >> "$gen_stats_file"
-    fi
-  else
-    echo "incomplete" >> "$gen_stats_file"
-  fi
-done <"$csv_file"
+# Use Python to write generation stats
+"$PYTHON_CMD" -c "
+import csv
+import re
+
+with open('$csv_file', 'r') as f:
+    reader = csv.reader(f)
+    next(reader)  # Skip header
+    
+    with open('$gen_stats_file', 'w') as out:
+        for row in reader:
+            if len(row) < 5:
+                continue
+                
+            id, _, desc, perf, status = row[:5]
+            
+            # Extract generation from ID
+            gen = 'gen01'  # default for old numeric IDs
+            match = re.match(r'^(gen[0-9]+)-', id)
+            if match:
+                gen = match.group(1)
+            elif re.match(r'^[0-9]+$', id):
+                gen = 'gen00'  # Mark old numeric IDs as gen00
+            
+            # Write generation data
+            out.write(gen + ' ')
+            if status in ['complete', 'completed'] and perf and perf != '':
+                try:
+                    perf_val = float(perf)
+                    if perf_val > 0:
+                        out.write(f'completed {perf}\\n')
+                    else:
+                        out.write('error\\n')
+                except ValueError:
+                    out.write('error\\n')
+            else:
+                out.write('incomplete\\n')
+"
 
 # Process generation stats
 for gen in $(cut -d' ' -f1 "$gen_stats_file" | sort -u || echo ""); do
@@ -206,14 +254,30 @@ rm -f "$gen_stats_file"
 
 # Count valid performance entries for chart (excluding zeros)
 valid_performance_count=0
-while IFS=, read -r id _ desc perf status; do
-  [[ $id == "id" ]] && continue # Skip header
-  if [[ $status =~ ^(complete|completed)$ && -n $perf && $perf != "" ]]; then
-    if (( $(echo "$perf > 0" | bc -l 2>/dev/null || echo "0") )); then
-      ((valid_performance_count++))
-    fi
-  fi
-done <"$csv_file"
+# Count valid performance entries using Python
+valid_performance_count=$("$PYTHON_CMD" -c "
+import csv
+
+count = 0
+with open('$csv_file', 'r') as f:
+    reader = csv.reader(f)
+    next(reader)  # Skip header
+    
+    for row in reader:
+        if len(row) < 5:
+            continue
+        status = row[4]
+        perf = row[3]
+        
+        if status in ['complete', 'completed'] and perf and perf != '':
+            try:
+                if float(perf) > 0:
+                    count += 1
+            except ValueError:
+                pass
+                
+print(count)
+")
 
 # Simple chart generation using gnuplot if available
 if command -v gnuplot >/dev/null 2>&1 && [[ $valid_performance_count -gt 0 ]]; then
@@ -228,16 +292,18 @@ if command -v gnuplot >/dev/null 2>&1 && [[ $valid_performance_count -gt 0 ]]; t
   echo "# Row ID Performance Generation" >"$data_file"
   echo "# Generation AvgPerformance Color" >"$gen_avg_file"
 
-  # Get color by generation number (rotates through 5 colors)
+  # Get color by generation number (rotates through 7 colors)
   get_gen_color() {
     local gen_num="$1"
-    local color_index=$(( (gen_num - 1) % 5 + 1 ))
+    local color_index=$(( gen_num % 7 ))
     case $color_index in
-      1) echo "#1f77b4" ;;  # blue
-      2) echo "#ff7f0e" ;;  # orange  
-      3) echo "#2ca02c" ;;  # green
-      4) echo "#d62728" ;;  # red
-      5) echo "#9467bd" ;;  # purple
+      0) echo "#1f77b4" ;;  # blue
+      1) echo "#ff7f0e" ;;  # orange  
+      2) echo "#2ca02c" ;;  # green
+      3) echo "#d62728" ;;  # red
+      4) echo "#9467bd" ;;  # purple
+      5) echo "#8c564b" ;;  # brown
+      6) echo "#e377c2" ;;  # pink
     esac
   }
 
@@ -250,40 +316,101 @@ if command -v gnuplot >/dev/null 2>&1 && [[ $valid_performance_count -gt 0 ]]; t
   max_row=0
   max_id=""
   
-  while IFS=, read -r id _ desc perf status; do
-    [[ $id == "id" ]] && continue # Skip header
-    ((row_num++))
+  # Use Python to generate chart data
+  "$PYTHON_CMD" -c "
+import csv
+import re
+
+with open('$csv_file', 'r') as f:
+    reader = csv.reader(f)
+    next(reader)  # Skip header
     
-    # Extract generation from ID
-    gen="gen01" # default
-    if [[ $id =~ ^(gen[0-9]+)- ]]; then
-      gen="${BASH_REMATCH[1]}"
-    fi
+    completed_order = 0  # Track order of completion
     
-    # Only include completed algorithms with non-zero performance
-    if [[ -n $perf && $perf != "" && $status =~ ^(complete|completed)$ ]]; then
-      # Skip zero values (they're errors)
-      if (( $(echo "$perf > 0" | bc -l) )); then
-        # Assign generation number for coloring (1-based)
-        gen_num=1
-        if [[ $id =~ ^gen([0-9]+)- ]]; then
-          gen_num=$((10#${BASH_REMATCH[1]}))
-        fi
+    with open('$data_file', 'w') as data_f:
+        data_f.write('# Order ID Performance Generation\\n')
         
-        echo "$row_num \"$id\" $perf $gen_num" >>"$data_file"
+    with open('$gen_data_temp', 'w') as gen_f:
+        pass  # Clear file
+    
+    max_perf = 0
+    max_id = ''
+    max_order = 0
+    
+    for row in reader:
+        if len(row) < 5:
+            continue
+            
+        id, _, desc, perf, status = row[:5]
         
-        # Track for generation averages
-        echo "$gen $perf" >>"$gen_data_temp"
+        # Extract generation from ID
+        gen = 'gen01'  # default
+        gen_num = 1
+        match = re.match(r'^gen([0-9]+)-', id)
+        if match:
+            gen = f'gen{match.group(1)}'
+            gen_num = int(match.group(1))
         
-        # Track the winner
-        if (( $(echo "$perf > $max_perf" | bc -l) )); then
-          max_perf=$perf
-          max_row=$row_num
-          max_id=$id
-        fi
-      fi
-    fi
-  done <"$csv_file"
+        # Only include completed algorithms with non-zero performance
+        if perf and perf != '' and status in ['complete', 'completed']:
+            try:
+                perf_val = float(perf)
+                if perf_val > 0:
+                    completed_order += 1
+                    
+                    # Write to data file
+                    with open('$data_file', 'a') as f:
+                        f.write(f'{completed_order} \"{id}\" {perf} {gen_num}\\n')
+                    
+                    # Write to gen temp file
+                    with open('$gen_data_temp', 'a') as f:
+                        f.write(f'{gen} {perf}\\n')
+                    
+                    # Track the winner
+                    if perf_val > max_perf:
+                        max_perf = perf_val
+                        max_order = completed_order
+                        max_id = id
+            except ValueError:
+                pass
+
+# Output max values for shell
+print(f'max_perf={max_perf}')
+print(f'max_row={max_order}')
+print(f'max_id=\"{max_id}\"')
+"
+  
+  # Capture the output properly
+  eval "$("$PYTHON_CMD" -c "
+import csv
+import re
+
+with open('$csv_file', 'r') as f:
+    reader = csv.reader(f)
+    next(reader)
+    
+    max_perf = 0
+    max_id = ''
+    max_order = 0
+    completed_order = 0
+    
+    for row in reader:
+        if len(row) >= 5 and row[3] and row[4] in ['complete', 'completed']:
+            try:
+                perf_val = float(row[3])
+                if perf_val > 0:
+                    completed_order += 1
+                    if perf_val > max_perf:
+                        max_perf = perf_val
+                        max_order = completed_order
+                        max_id = row[0]
+            except ValueError:
+                pass
+
+print(f'max_perf={max_perf}')
+print(f'max_row={max_order}')
+print(f'max_id=\"{max_id}\"')
+")"
 
   # Create generation averages file and track max generation
   gen_index=1
@@ -297,43 +424,78 @@ if command -v gnuplot >/dev/null 2>&1 && [[ $valid_performance_count -gt 0 ]]; t
         avg=$(echo "scale=4; $sum / $count" | bc -l 2>/dev/null || echo "0")
         gen_num=$(echo "$gen" | sed 's/gen0*//')
         # Track max generation number
-        if [[ $gen_num -gt $max_gen_num ]]; then
+        if [[ $gen_num =~ ^[0-9]+$ ]] && [[ $gen_num -gt $max_gen_num ]]; then
           max_gen_num=$gen_num
         fi
         color=$(get_gen_color "$gen_num")
-        echo "$gen_index \"$gen\" $avg \"$color\"" >>"$gen_avg_file"
+        echo "$gen_index \"Gen$gen_num\" $avg \"$color\"" >>"$gen_avg_file"
         ((gen_index++))
       fi
     fi
   done
 
   # Create winner data point
-  if [[ -n $max_id ]]; then
+  if [[ -n $max_id && -n $max_row && -n $max_perf ]]; then
     echo "$max_row \"$max_id\" $max_perf" >"$winner_file"
+  else
+    # Create empty winner file to avoid gnuplot warning
+    echo "0 \"\" 0" >"$winner_file"
   fi
 
   # Generate dual plot
   if [[ -s "$data_file" ]]; then
-    # Build dynamic plot command for generations
+    # Debug: show data file content
+    # echo "DEBUG: Data file content:"
+    # cat "$data_file"
+    # echo "DEBUG: max_gen_num=$max_gen_num"
+    
+    # Plot all algorithms in order of completion, colored by generation
     plot_cmd=""
-    for ((i=1; i<=max_gen_num; i++)); do
-      color=$(get_gen_color "$i")
-      if [[ -n $plot_cmd ]]; then
+    gen_plots_added=0
+    
+    # Find all generations that have data
+    generations=($(awk '{if(NR>1) print $4}' "$data_file" | sort -n | uniq))
+    
+    for gen_num in "${generations[@]}"; do
+      if [[ -n $gen_num ]]; then
+        color=$(get_gen_color "$gen_num")
+        if [[ $gen_plots_added -gt 0 ]]; then
+          plot_cmd="$plot_cmd, \\"$'\n'
+        fi
+        plot_cmd="${plot_cmd}     \"$data_file\" using (\$4==$gen_num?\$1:1/0):3 with linespoints linewidth 2 linecolor rgb \"$color\" pointsize 1.2 title \"Gen $gen_num\""
+        ((gen_plots_added++))
+      fi
+    done
+    
+    # Add winner point
+    if [[ -n $max_id && -s "$winner_file" ]]; then
+      if [[ $gen_plots_added -gt 0 ]]; then
         plot_cmd="$plot_cmd, \\"$'\n'
       fi
-      plot_cmd="${plot_cmd}     \"$data_file\" using (\$4==$i?\$1:1/0):3 with linespoints linewidth 2 linecolor rgb \"$color\" pointsize 0.8 title \"Gen $i\""
-    done
-    # Add winner point
-    plot_cmd="$plot_cmd, \\"$'\n'
-    plot_cmd="${plot_cmd}     \"$winner_file\" using 1:3 with points pointtype 7 pointsize 2 linecolor rgb \"#0066cc\" title \"Winner\""
+      plot_cmd="${plot_cmd}     \"$winner_file\" using 1:3 with points pointtype 7 pointsize 3 linecolor rgb \"gold\" title \"Best ($max_id)\""
+    fi
     
-    # Build x-axis labels for generation chart
-    xtics_labels=""
-    for ((i=1; i<=max_gen_num; i++)); do
-      if [[ -n $xtics_labels ]]; then
-        xtics_labels="$xtics_labels, "
+    # Fallback if no generation-specific plots
+    if [[ $gen_plots_added -eq 0 ]]; then
+      plot_cmd="\"$data_file\" using 1:3 with linespoints linewidth 2 linecolor rgb \"#1f77b4\" pointsize 1.2 title \"Evolution Progress\""
+      if [[ -n $max_id && -s "$winner_file" ]]; then
+        plot_cmd="$plot_cmd, \\"$'\n'
+        plot_cmd="${plot_cmd}     \"$winner_file\" using 1:3 with points pointtype 7 pointsize 3 linecolor rgb \"gold\" title \"Best ($max_id)\""
       fi
-      xtics_labels="${xtics_labels}\"Gen$i\" $i"
+    fi
+    
+    # Build x-axis labels for generation chart (include all generations from data)
+    xtics_labels=""
+    label_index=1
+    for gen in $(cut -d' ' -f1 "$gen_data_temp" | sort -u); do
+      if [[ -n $gen ]]; then
+        gen_display=$(echo "$gen" | sed 's/gen0*//')
+        if [[ -n $xtics_labels ]]; then
+          xtics_labels="$xtics_labels, "
+        fi
+        xtics_labels="${xtics_labels}\"Gen$gen_display\" $label_index"
+        ((label_index++))
+      fi
     done
     
     gnuplot <<EOF
@@ -345,11 +507,12 @@ set multiplot layout 2,1 margins 0.08,0.82,0.15,0.95 spacing 0.1,0.15
 
 #=================== TOP PLOT: Performance Over Time ===================
 set title "Algorithm Evolution Performance Over Time" font ",14"
-set xlabel "Evolution Run"
+set xlabel "Completion Order (Algorithm #)"
 set ylabel "Performance Score"
 set grid
 set key outside right
-set xtics auto
+set xtics 1
+set autoscale y
 
 # Define colors for generations
 plot $plot_cmd

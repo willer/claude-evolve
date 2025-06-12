@@ -340,6 +340,11 @@ echo "[INFO] Using Claude Sonnet for development"
 # Create mutation prompt - Claude will edit the file directly
 prompt="Edit the file $output_file to implement this specific change: $description
 
+IMPORTANT: Before starting the task, you MUST read and understand:
+1. The project's CLAUDE.md file (if it exists) - this contains project-specific instructions
+2. The user's global CLAUDE.md file at ~/.claude/CLAUDE.md (if it exists) - this contains general development principles
+3. Ensure all your work follows the architectural and development guidelines from both files
+
 Requirements:
 - Edit the file directly (don't just provide comments or suggestions)
 - Maintain the same function signatures and interfaces
@@ -347,7 +352,7 @@ Requirements:
 - Ensure the code runs without syntax errors
 - Add proper error handling if needed
 
-The file currently contains the parent algorithm. Modify it according to the description above."
+The file currently contains the parent algorithm. Modify it according to the description above while adhering to all guidelines from the CLAUDE.md files."
 
 # Generate mutation (skip for baseline)
 if [[ $id == "000" || $id == "0" ]]; then

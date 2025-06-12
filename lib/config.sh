@@ -9,7 +9,25 @@ DEFAULT_BRIEF_FILE="BRIEF.md"
 DEFAULT_EVOLUTION_CSV="evolution.csv"
 DEFAULT_OUTPUT_DIR=""
 DEFAULT_PARENT_SELECTION="best"
-DEFAULT_PYTHON_CMD="python3"
+# Detect Python command based on platform
+detect_python_cmd() {
+  # Try python3 first (macOS, Linux)
+  if command -v python3 >/dev/null 2>&1; then
+    echo "python3"
+  # Try python (Windows, some Linux)
+  elif command -v python >/dev/null 2>&1; then
+    # Verify it's Python 3
+    if python -c "import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)" 2>/dev/null; then
+      echo "python"
+    else
+      echo "python3"  # Fallback
+    fi
+  else
+    echo "python3"  # Default fallback
+  fi
+}
+
+DEFAULT_PYTHON_CMD="$(detect_python_cmd)"
 
 # Default ideation strategy values
 DEFAULT_TOTAL_IDEAS=15
@@ -150,16 +168,22 @@ load_config() {
   fi
   
   # Create full paths - ALL paths are relative to evolution_dir
-  FULL_EVOLUTION_DIR="$EVOLUTION_DIR"
-  FULL_ALGORITHM_PATH="$EVOLUTION_DIR/$ALGORITHM_FILE"
-  FULL_EVALUATOR_PATH="$EVOLUTION_DIR/$EVALUATOR_FILE"
-  FULL_BRIEF_PATH="$EVOLUTION_DIR/$BRIEF_FILE"
-  FULL_CSV_PATH="$EVOLUTION_DIR/$EVOLUTION_CSV"
+  # Make evolution_dir absolute if it's relative
+  if [[ "$EVOLUTION_DIR" = /* ]]; then
+    FULL_EVOLUTION_DIR="$EVOLUTION_DIR"
+  else
+    FULL_EVOLUTION_DIR="$(cd "$EVOLUTION_DIR" 2>/dev/null && pwd)" || FULL_EVOLUTION_DIR="$EVOLUTION_DIR"
+  fi
+  
+  FULL_ALGORITHM_PATH="$FULL_EVOLUTION_DIR/$ALGORITHM_FILE"
+  FULL_EVALUATOR_PATH="$FULL_EVOLUTION_DIR/$EVALUATOR_FILE"
+  FULL_BRIEF_PATH="$FULL_EVOLUTION_DIR/$BRIEF_FILE"
+  FULL_CSV_PATH="$FULL_EVOLUTION_DIR/$EVOLUTION_CSV"
   
   if [[ -n $OUTPUT_DIR ]]; then
-    FULL_OUTPUT_DIR="$EVOLUTION_DIR/$OUTPUT_DIR"
+    FULL_OUTPUT_DIR="$FULL_EVOLUTION_DIR/$OUTPUT_DIR"
   else
-    FULL_OUTPUT_DIR="$EVOLUTION_DIR"
+    FULL_OUTPUT_DIR="$FULL_EVOLUTION_DIR"
   fi
 }
 
@@ -189,7 +213,16 @@ validate_config() {
 
   if ! command -v "$PYTHON_CMD" >/dev/null 2>&1; then
     echo "[ERROR] Python command not found: $PYTHON_CMD" >&2
+    echo "[ERROR] Please install Python 3.x or set python_cmd in config.yaml" >&2
+    echo "[ERROR] Examples: python_cmd: \"python\" or python_cmd: \"C:\\Python39\\python.exe\"" >&2
     ((errors++))
+  else
+    # Verify Python version is 3.x
+    if ! "$PYTHON_CMD" -c "import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)" 2>/dev/null; then
+      echo "[ERROR] Python 3.x required, but $PYTHON_CMD appears to be Python 2" >&2
+      echo "[ERROR] Please set python_cmd in config.yaml to point to Python 3" >&2
+      ((errors++))
+    fi
   fi
 
   return $errors

@@ -14,14 +14,34 @@ else
   load_config
 fi
 
-# Helper function to call Claude with usage limit detection
-call_claude_with_limit_check() {
+# Helper function to call AI model (codex o3-pro if available, else Claude)
+call_ai_with_limit_check() {
   local prompt="$1"
-  local model="${2:-opus}"
+  local fallback_model="${2:-opus}"
+  
+  # Check if codex is available
+  if command -v codex >/dev/null 2>&1; then
+    echo "[INFO] Using codex o3-pro for ideation (smartest available model)" >&2
+    
+    # Call codex with o3-pro model
+    local ai_output
+    ai_output=$(echo "$prompt" | codex -m o3-pro 2>&1)
+    local ai_exit_code=$?
+    
+    if [[ $ai_exit_code -eq 0 ]]; then
+      echo "$ai_output"
+      return 0
+    else
+      echo "[WARN] Codex failed, falling back to Claude" >&2
+    fi
+  fi
+  
+  # Fall back to Claude
+  echo "[INFO] Using Claude $fallback_model for ideation" >&2
   
   # Call Claude and capture output
   local claude_output
-  claude_output=$(echo "$prompt" | claude --dangerously-skip-permissions --model "$model" -p 2>&1)
+  claude_output=$(echo "$prompt" | claude --dangerously-skip-permissions --model "$fallback_model" -p 2>&1)
   local claude_exit_code=$?
   
   # Check for usage limit
@@ -49,6 +69,11 @@ call_claude_with_limit_check() {
   echo "$claude_output"
   
   return $claude_exit_code
+}
+
+# Backward compatibility alias
+call_claude_with_limit_check() {
+  call_ai_with_limit_check "$@"
 }
 
 # Parse arguments
@@ -253,9 +278,9 @@ ideate_manual() {
 
 # Generate ideas using AI with multi-strategy approach
 ideate_ai_strategies() {
-  # Check for claude CLI
-  if ! command -v claude >/dev/null 2>&1; then
-    echo "[WARN] Claude CLI not found. Falling back to manual entry."
+  # Check for AI CLI (codex or claude)
+  if ! command -v codex >/dev/null 2>&1 && ! command -v claude >/dev/null 2>&1; then
+    echo "[WARN] No AI CLI found (codex or claude). Falling back to manual entry."
     return 1
   fi
 
@@ -329,9 +354,9 @@ Example descriptions:
 
 Add exactly $count rows to the CSV file now."
 
-  echo "[INFO] Calling Claude Opus to generate $count novel exploration ideas..."
-  if ! call_claude_with_limit_check "$prompt" "opus"; then
-    echo "[WARN] Claude failed to generate novel ideas" >&2
+  echo "[INFO] Generating $count novel exploration ideas..."
+  if ! call_ai_with_limit_check "$prompt" "opus"; then
+    echo "[WARN] AI failed to generate novel ideas" >&2
     return 1
   fi
   echo "[INFO] Novel exploration ideas generated"
@@ -382,9 +407,9 @@ Example descriptions:
 
 Add exactly $count parameter tuning rows to the CSV file now."
 
-  echo "[INFO] Calling Claude Opus to generate $count hill climbing ideas..."
-  if ! call_claude_with_limit_check "$prompt" "opus"; then
-    echo "[WARN] Claude failed to generate hill climbing ideas" >&2
+  echo "[INFO] Generating $count hill climbing ideas..."
+  if ! call_ai_with_limit_check "$prompt" "opus"; then
+    echo "[WARN] AI failed to generate hill climbing ideas" >&2
     return 1
   fi
   echo "[INFO] Hill climbing ideas generated"
@@ -435,9 +460,9 @@ Example descriptions:
 
 Add exactly $count structural modification rows to the CSV file now."
 
-  echo "[INFO] Calling Claude Opus to generate $count structural mutation ideas..."
-  if ! call_claude_with_limit_check "$prompt" "opus"; then
-    echo "[WARN] Claude failed to generate structural mutation ideas" >&2
+  echo "[INFO] Generating $count structural mutation ideas..."
+  if ! call_ai_with_limit_check "$prompt" "opus"; then
+    echo "[WARN] AI failed to generate structural mutation ideas" >&2
     return 1
   fi
   echo "[INFO] Structural mutation ideas generated"
@@ -488,9 +513,9 @@ Example descriptions:
 
 Add exactly $count hybrid combination rows to the CSV file now."
 
-  echo "[INFO] Calling Claude Opus to generate $count crossover hybrid ideas..."
-  if ! call_claude_with_limit_check "$prompt" "opus"; then
-    echo "[WARN] Claude failed to generate crossover ideas" >&2
+  echo "[INFO] Generating $count crossover hybrid ideas..."
+  if ! call_ai_with_limit_check "$prompt" "opus"; then
+    echo "[WARN] AI failed to generate crossover ideas" >&2
     return 1
   fi
   echo "[INFO] Crossover hybrid ideas generated"
@@ -498,9 +523,9 @@ Add exactly $count hybrid combination rows to the CSV file now."
 
 # Legacy AI generation mode (for backward compatibility)
 ideate_ai_legacy() {
-  # Check for claude CLI
-  if ! command -v claude >/dev/null 2>&1; then
-    echo "[WARN] Claude CLI not found. Falling back to manual entry."
+  # Check for AI CLI (codex or claude)
+  if ! command -v codex >/dev/null 2>&1 && ! command -v claude >/dev/null 2>&1; then
+    echo "[WARN] No AI CLI found (codex or claude). Falling back to manual entry."
     return 1
   fi
 
@@ -553,9 +578,9 @@ Requirements for new CSV rows:
 
 Add exactly $TOTAL_IDEAS algorithm variation rows to the CSV file now."
 
-  echo "[INFO] Calling Claude Opus to generate $TOTAL_IDEAS ideas (legacy mode)..."
-  if ! call_claude_with_limit_check "$prompt" "opus"; then
-    echo "[WARN] Claude failed to generate ideas" >&2
+  echo "[INFO] Generating $TOTAL_IDEAS ideas (legacy mode)..."
+  if ! call_ai_with_limit_check "$prompt" "opus"; then
+    echo "[WARN] AI failed to generate ideas" >&2
     return 1
   fi
   echo "[INFO] Legacy ideas generated"
