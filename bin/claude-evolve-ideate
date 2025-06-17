@@ -23,9 +23,9 @@ call_ai_with_limit_check() {
   if command -v codex >/dev/null 2>&1; then
     echo "[INFO] Using codex o3-pro for ideation (smartest available model)" >&2
     
-    # Call codex with o3-pro model
+    # Call codex with o3-pro model using -q flag and --full-auto
     local ai_output
-    ai_output=$(echo "$prompt" | codex -m o3-pro 2>&1)
+    ai_output=$(codex -m o3-pro --full-auto -q "$prompt" 2>&1)
     local ai_exit_code=$?
     
     if [[ $ai_exit_code -eq 0 ]]; then

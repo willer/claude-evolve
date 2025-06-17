@@ -8,6 +8,8 @@ claude-evolve is an automated algorithm evolution system that runs continuous ev
 
 Think of it like **genetic algorithms for code** - it handles the mutations and testing, and runs **indefinitely** until you stop it. The system automatically generates new ideas when it runs out of candidates.
 
+![claude-evolve in action](./screenshot.png)
+
 ### How the Evolution System Works
 
 The system operates with specialized phases working together:

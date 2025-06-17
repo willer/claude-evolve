@@ -136,13 +136,19 @@ else
   output_file="$FULL_OUTPUT_DIR/evolution_${id}.py"
 fi
 
-# Copy parent to output
-cp "$parent_file" "$output_file"
-echo "[WORKER-$$] Copied parent to: $output_file"
+# Copy parent to output (skip if destination already exists)
+if [[ -f "$output_file" ]]; then
+  echo "[WORKER-$$] ⚠️  Skipping copy - child algorithm already exists: $output_file"
+else
+  cp "$parent_file" "$output_file"
+  echo "[WORKER-$$] Copied parent to: $output_file"
+fi
 
-# Generate mutation (skip for baseline)
+# Generate mutation (skip for baseline or self-parent)
 if [[ $id == "000" || $id == "0" || $id == "gen00-000" ]]; then
   echo "[WORKER-$$] Baseline algorithm - skipping mutation"
+elif [[ "$parent_file" == "$output_file" ]]; then
+  echo "[WORKER-$$] ⚠️  Self-parent detected - skipping mutation to preserve existing code"
 else
   # Check for claude CLI
   claude_cmd="${CLAUDE_CMD:-claude}"
