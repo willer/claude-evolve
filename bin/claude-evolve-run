@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -e
+# Removed 'set -e' to prevent silent exits on CSV helper failures
 
 # Load configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -233,6 +233,7 @@ while true; do
     echo "[INFO] No more pending candidates found."
     
     # Check if auto ideation is enabled
+    echo "[DEBUG] AUTO_IDEATE value: '$AUTO_IDEATE'"
     if [[ "$AUTO_IDEATE" == "true" || "$AUTO_IDEATE" == "1" ]]; then
       echo "[INFO] Auto ideation is enabled. Generating new ideas..."
       
@@ -321,14 +322,20 @@ else
 fi
 echo "[INFO] Generating algorithm mutation..."
 
-# Copy parent algorithm to output file first
-cp "$parent_file" "$output_file"
-echo "[INFO] Copied parent algorithm to: $output_file"
+# AIDEV-NOTE: File existence check prevents overwriting existing algorithm files
+# when processing self-referential CSV entries (parent=child scenario).
+# Copy parent to output (skip if destination already exists)
+if [[ -f "$output_file" ]]; then
+  echo "[INFO] ⚠️  Skipping copy - child algorithm already exists: $output_file"
+else
+  cp "$parent_file" "$output_file"
+  echo "[INFO] Copied parent algorithm to: $output_file"
+fi
 
 # Check for claude CLI
 claude_cmd="${CLAUDE_CMD:-claude}"
 if ! command -v "$claude_cmd" >/dev/null 2>&1; then
-  echo "[ERROR] Claude CLI not found. Please install claude-cli." >&2
+  echo "[ERROR] Claude CLI not found. Please install 'claude' CLI tool or set CLAUDE_CMD environment variable." >&2
   update_csv_row "$row_num" "" "failed"
   exit 1
 fi
@@ -354,9 +361,14 @@ Requirements:
 
 The file currently contains the parent algorithm. Modify it according to the description above while adhering to all guidelines from the CLAUDE.md files."
 
-# Generate mutation (skip for baseline)
-if [[ $id == "000" || $id == "0" ]]; then
+# AIDEV-NOTE: Self-parent detection logic ensures consistency with claude-evolve-worker
+# when CSV entries have parent=child (same ID for id and basedOnId columns).
+# This prevents overwriting existing algorithms and unnecessary Claude processing.
+# Generate mutation (skip for baseline or self-parent)
+if [[ $id == "000" || $id == "0" || $id == "gen00-000" ]]; then
   echo "[INFO] Baseline algorithm - skipping mutation, using original"
+elif [[ "$parent_file" == "$output_file" ]]; then
+  echo "[INFO] ⚠️  Self-parent detected - skipping mutation to preserve existing code"
 else
   echo "[INFO] Calling Claude $CLAUDE_MODEL to apply mutation..."
   echo "[INFO] Claude will edit: $output_file"
@@ -471,12 +483,45 @@ echo "----------------------------------------"
 
 # Process results
 if [[ $eval_exit_code -eq 0 ]]; then
-  # Extract score from JSON (simple grep approach)
-  if score=$(echo "$eval_output" | grep -o '"score"[[:space:]]*:[[:space:]]*[0-9.]*' | cut -d: -f2 | tr -d ' '); then
+  # DEBUG: Show raw evaluator output
+  echo "[DEBUG] Raw evaluator output:"
+  echo "----------------------------------------"
+  echo "$eval_output"
+  echo "----------------------------------------"
+  
+  # Extract the last valid JSON line and score
+  last_json=$(echo "$eval_output" | grep '^{.*}$' | tail -1)
+  
+  if [[ -n "$last_json" ]]; then
+    echo "[DEBUG] Found JSON: $last_json"
+    
+    # Extract score from JSON
+    score=$(echo "$last_json" | python3 -c "
+import sys, json
+try:
+    data = json.loads(sys.stdin.read().strip())
+    if 'performance' in data:
+        print(data['performance'])
+    elif 'score' in data:
+        print(data['score'])
+    else:
+        sys.exit(1)
+except:
+    sys.exit(1)
+" 2>/dev/null)
+  fi
+  
+  if [[ -n "$score" ]]; then
+    echo "[DEBUG] Extracted score via 'score' field: '$score'"
     if [[ -n $score ]]; then
       # Check if score is 0 and mark as failed
       if (( $(echo "$score == 0" | bc -l) )); then
-        update_csv_row "$row_num" "$score" "failed"
+        # Update CSV with full JSON data
+        if [[ -n "$last_json" ]]; then
+          python3 "${SCRIPT_DIR}/../lib/csv_helper.py" update_with_json "${FULL_CSV_PATH}" "$id" "$last_json"
+        else
+          update_csv_row "$row_num" "$score" "failed"
+        fi
         echo "[INFO] ✗ Evaluation failed with score 0"
         echo "[INFO] Performance score: $score"
         if should_continue_after_failure; then
@@ -485,16 +530,35 @@ if [[ $eval_exit_code -eq 0 ]]; then
           exit 1
         fi
       else
-        update_csv_row "$row_num" "$score" "complete"
+        # Update CSV with full JSON data
+        if [[ -n "$last_json" ]]; then
+          echo "[DEBUG] Updating CSV with full JSON data (branch 1)"
+          echo "[DEBUG] CSV path: ${FULL_CSV_PATH}"
+          echo "[DEBUG] Target ID: $id (row $row_num)"
+          echo "[DEBUG] JSON data: $last_json"
+          echo "[DEBUG] Running CSV helper..."
+          if python3 "${SCRIPT_DIR}/../lib/csv_helper.py" update_with_json "${FULL_CSV_PATH}" "$id" "$last_json"; then
+            echo "[DEBUG] CSV helper succeeded"
+          else
+            echo "[DEBUG] CSV helper failed with exit code $?"
+          fi
+        else
+          update_csv_row "$row_num" "$score" "complete"
+        fi
         echo "[INFO] ✓ Evaluation completed successfully"
         echo "[INFO] Performance score: $score"
       fi
     else
-      # Try "performance" field
-      if score=$(echo "$eval_output" | grep -o '"performance"[[:space:]]*:[[:space:]]*[0-9.]*' | cut -d: -f2 | tr -d ' '); then
+      # Try "performance" field - get only the last occurrence
+      if score=$(echo "$eval_output" | grep -o '"performance"[[:space:]]*:[[:space:]]*[0-9.]*' | cut -d: -f2 | tr -d ' ' | tail -1); then
+        echo "[DEBUG] Extracted score via 'performance' field: '$score'"
         # Check if score is 0 and mark as failed
-        if (( $(echo "$score == 0" | bc -l) )); then
-          update_csv_row "$row_num" "$score" "failed"
+        if [ "$(echo "$score == 0" | bc -l)" = "1" ]; then
+          if [[ -n "$last_json" ]]; then
+            python3 "${SCRIPT_DIR}/../lib/csv_helper.py" update_with_json "${FULL_CSV_PATH}" "$id" "$last_json"
+          else
+            update_csv_row "$row_num" "$score" "failed"
+          fi
           echo "[INFO] ✗ Evaluation failed with score 0"
           echo "[INFO] Performance score: $score"
           if should_continue_after_failure; then
@@ -503,7 +567,21 @@ if [[ $eval_exit_code -eq 0 ]]; then
             exit 1
           fi
         else
-          update_csv_row "$row_num" "$score" "complete"
+          # Update CSV with full JSON data
+          if [[ -n "$last_json" ]]; then
+            echo "[DEBUG] Updating CSV with full JSON data (branch 2)"
+            echo "[DEBUG] CSV path: ${FULL_CSV_PATH}"
+            echo "[DEBUG] Target ID: $id (row $row_num)"
+            echo "[DEBUG] JSON data: $last_json"
+            echo "[DEBUG] Running CSV helper..."
+            if python3 "${SCRIPT_DIR}/../lib/csv_helper.py" update_with_json "${FULL_CSV_PATH}" "$id" "$last_json"; then
+              echo "[DEBUG] CSV helper succeeded"
+            else
+              echo "[DEBUG] CSV helper failed with exit code $?"
+            fi
+          else
+            update_csv_row "$row_num" "$score" "complete"
+          fi
           echo "[INFO] ✓ Evaluation completed successfully"
           echo "[INFO] Performance score: $score"
         fi
@@ -545,7 +623,7 @@ else
         # Re-process the successful result
         if score=$(echo "$eval_output" | grep -o '"score"[[:space:]]*:[[:space:]]*[0-9.]*' | cut -d: -f2 | tr -d ' '); then
           if [[ -n $score ]]; then
-            if (( $(echo "$score == 0" | bc -l) )); then
+            if [ "$(echo "$score == 0" | bc -l)" = "1" ]; then
               update_csv_row "$row_num" "$score" "failed"
               echo "[INFO] ✗ Evaluation failed with score 0"
             else
