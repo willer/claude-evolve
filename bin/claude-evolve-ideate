@@ -14,14 +14,40 @@ else
   load_config
 fi
 
-# Helper function to call AI model (codex o3-pro if available, else Claude)
+# Function to determine which model to use based on generation
+get_model_for_generation() {
+  local generation="$1"
+  local gen_num
+  
+  # Extract numeric part of generation (e.g., "05" from gen05)
+  if [[ $generation =~ ^0*([0-9]+)$ ]]; then
+    gen_num=$((10#${BASH_REMATCH[1]}))
+  else
+    gen_num=1  # Default for malformed input
+  fi
+  
+  # Alternate between models by generation
+  if (( gen_num % 2 == 1 )); then
+    echo "opus"    # Odd generations: use Opus for exploration
+  else
+    echo "o3-pro"  # Even generations: use o3-pro for refinement
+  fi
+}
+
+# Helper function to call AI model (alternating based on generation)
 call_ai_with_limit_check() {
   local prompt="$1"
-  local fallback_model="${2:-opus}"
+  local generation="${2:-01}"  # Default to generation 01 if not provided
   
-  # Check if codex is available
-  if command -v codex >/dev/null 2>&1; then
-    echo "[INFO] Using codex o3-pro for ideation (smartest available model)" >&2
+  # Determine which model to use for this generation
+  local preferred_model
+  preferred_model=$(get_model_for_generation "$generation")
+  
+  echo "[INFO] Generation $generation: Using $preferred_model" >&2
+  
+  # Try preferred model first
+  if [[ "$preferred_model" == "o3-pro" ]] && command -v codex >/dev/null 2>&1; then
+    echo "[INFO] Using codex o3-pro for ideation" >&2
     
     # Call codex with o3-pro model using -q flag and --full-auto
     local ai_output
@@ -32,16 +58,17 @@ call_ai_with_limit_check() {
       echo "$ai_output"
       return 0
     else
-      echo "[WARN] Codex failed, falling back to Claude" >&2
+      echo "[WARN] Codex o3-pro failed, falling back to Claude Opus" >&2
+      preferred_model="opus"
     fi
   fi
   
-  # Fall back to Claude
-  echo "[INFO] Using Claude $fallback_model for ideation" >&2
+  # Use Claude with preferred model (or fallback)
+  echo "[INFO] Using Claude $preferred_model for ideation" >&2
   
   # Call Claude and capture output
   local claude_output
-  claude_output=$(echo "$prompt" | claude --dangerously-skip-permissions --model "$fallback_model" -p 2>&1)
+  claude_output=$(echo "$prompt" | claude --dangerously-skip-permissions --model "$preferred_model" -p 2>&1)
   local claude_exit_code=$?
   
   # Check for usage limit
@@ -78,7 +105,6 @@ call_claude_with_limit_check() {
 
 # Parse arguments
 use_strategies=true
-no_ai=false
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -87,11 +113,10 @@ while [[ $# -gt 0 ]]; do
 claude-evolve ideate - Generate new algorithm ideas using evolutionary strategies
 
 USAGE:
-  claude-evolve ideate [--legacy N] [--no-ai]
+  claude-evolve ideate [--legacy N]
 
 OPTIONS:
   --legacy N  Use legacy mode with N ideas (ignores strategy config)
-  --no-ai     Use manual entry mode instead of AI generation
   --help      Show this help message
 
 DESCRIPTION:
@@ -115,10 +140,6 @@ EOF
       echo "[ERROR] --legacy requires a number" >&2
       exit 1
     fi
-    ;;
-  --no-ai)
-    no_ai=true
-    shift
     ;;
   *)
     echo "[ERROR] Unknown option: $1" >&2
@@ -195,21 +216,6 @@ get_next_id() {
   printf "gen%s-%03d" "$generation" $((max_id + 1))
 }
 
-# Add idea to CSV manually (fallback for manual mode)
-add_idea_manual() {
-  local description="$1"
-  local based_on_id="$2"
-  local generation="$3"
-  local id
-  id=$(get_next_id "$generation")
-
-  # Escape quotes in description
-  local escaped_desc="${description//\"/\"\"}"
-
-  # Append to CSV
-  echo "${id},${based_on_id},\"${escaped_desc}\",," >>"$FULL_CSV_PATH"
-  echo "[INFO] Added idea: $description"
-}
 
 # Get top performers for parent selection
 get_top_performers() {
@@ -246,47 +252,12 @@ with open('$FULL_CSV_PATH', 'r') as f:
 "
 }
 
-# Manual entry mode
-ideate_manual() {
-  local ideas_added=0
-
-  for ((i = 1; i <= TOTAL_IDEAS; i++)); do
-    if [[ $TOTAL_IDEAS -eq 1 ]]; then
-      read -r -p "Enter algorithm idea (or empty to skip): " description
-    else
-      read -r -p "Enter algorithm idea $i/$TOTAL_IDEAS (or empty to skip): " description
-    fi
-
-    if [[ -z $description ]]; then
-      echo "[INFO] Empty description, skipping idea"
-      continue
-    fi
-
-    add_idea_manual "$description" "" "$CURRENT_GENERATION"
-    ((ideas_added++))
-
-    if [[ $i -lt $TOTAL_IDEAS ]]; then
-      read -r -p "Add another idea? (y/N) " continue_adding
-      if [[ $continue_adding != "y" && $continue_adding != "Y" ]]; then
-        break
-      fi
-    fi
-  done
-
-  echo "[INFO] Added $ideas_added idea(s) to $EVOLUTION_CSV"
-}
 
 # Generate ideas using AI with multi-strategy approach
 ideate_ai_strategies() {
-  # Check for AI CLI (codex or claude)
-  if ! command -v codex >/dev/null 2>&1 && ! command -v claude >/dev/null 2>&1; then
-    echo "[WARN] No AI CLI found (codex or claude). Falling back to manual entry."
-    return 1
-  fi
-
   if [[ ! -f "$FULL_BRIEF_PATH" ]]; then
-    echo "[WARN] $BRIEF_FILE not found. Falling back to manual entry."
-    return 1
+    echo "[ERROR] $BRIEF_FILE not found. Run 'claude-evolve setup' first." >&2
+    exit 1
   fi
 
   # Get top performers
@@ -342,6 +313,16 @@ Requirements for new CSV rows:
 - Each description should be one clear sentence describing a specific algorithmic change
 - Descriptions should explore completely different approaches than existing ones
 - All new rows should have empty performance and status fields
+
+CRITICAL CSV FORMAT RULES:
+- DO NOT modify the CSV header row
+- DO NOT change the column order
+- DO NOT add extra columns or fields
+- DO NOT modify existing rows - only append new ones
+- DO NOT add extra blank lines or formatting
+- Maintain exact CSV format: id,basedOnId,description,performance,status
+- Leave performance and status fields completely empty (just commas)
+- Use proper CSV quoting only when descriptions contain commas
 - CRITICAL: You must read existing evolution files to avoid suggesting changes that:
   * Have already been tried and failed
   * Are impossible given the codebase structure
@@ -355,7 +336,7 @@ Example descriptions:
 Add exactly $count rows to the CSV file now."
 
   echo "[INFO] Generating $count novel exploration ideas..."
-  if ! call_ai_with_limit_check "$prompt" "opus"; then
+  if ! call_ai_with_limit_check "$prompt" "$CURRENT_GENERATION"; then
     echo "[WARN] AI failed to generate novel ideas" >&2
     return 1
   fi
@@ -395,6 +376,16 @@ Requirements for new CSV rows:
 - Each description should be one clear sentence about parameter tuning
 - Focus on adjusting hyperparameters, thresholds, sizes, learning rates
 - All new rows should have empty performance and status fields
+
+CRITICAL CSV FORMAT RULES:
+- DO NOT modify the CSV header row
+- DO NOT change the column order
+- DO NOT add extra columns or fields
+- DO NOT modify existing rows - only append new ones
+- DO NOT add extra blank lines or formatting
+- Maintain exact CSV format: id,basedOnId,description,performance,status
+- Leave performance and status fields completely empty (just commas)
+- Use proper CSV quoting only when descriptions contain commas
 - CRITICAL: You must read the parent algorithm file to understand:
   * What parameters are actually tunable in the code
   * What changes made this algorithm successful vs its parent
@@ -408,7 +399,7 @@ Example descriptions:
 Add exactly $count parameter tuning rows to the CSV file now."
 
   echo "[INFO] Generating $count hill climbing ideas..."
-  if ! call_ai_with_limit_check "$prompt" "opus"; then
+  if ! call_ai_with_limit_check "$prompt" "$CURRENT_GENERATION"; then
     echo "[WARN] AI failed to generate hill climbing ideas" >&2
     return 1
   fi
@@ -448,6 +439,16 @@ Requirements for new CSV rows:
 - Each description should be one clear sentence about architectural changes
 - Keep core insights but change implementation approach
 - All new rows should have empty performance and status fields
+
+CRITICAL CSV FORMAT RULES:
+- DO NOT modify the CSV header row
+- DO NOT change the column order
+- DO NOT add extra columns or fields
+- DO NOT modify existing rows - only append new ones
+- DO NOT add extra blank lines or formatting
+- Maintain exact CSV format: id,basedOnId,description,performance,status
+- Leave performance and status fields completely empty (just commas)
+- Use proper CSV quoting only when descriptions contain commas
 - CRITICAL: You must read the parent algorithm file to understand:
   * What structural elements can be modified within the codebase constraints
   * What architectural decisions led to this algorithm's success
@@ -461,7 +462,7 @@ Example descriptions:
 Add exactly $count structural modification rows to the CSV file now."
 
   echo "[INFO] Generating $count structural mutation ideas..."
-  if ! call_ai_with_limit_check "$prompt" "opus"; then
+  if ! call_ai_with_limit_check "$prompt" "$CURRENT_GENERATION"; then
     echo "[WARN] AI failed to generate structural mutation ideas" >&2
     return 1
   fi
@@ -501,6 +502,16 @@ Requirements for new CSV rows:
 - Each description should be one clear sentence combining elements from different algorithms
 - Be specific about what elements to merge
 - All new rows should have empty performance and status fields
+
+CRITICAL CSV FORMAT RULES:
+- DO NOT modify the CSV header row
+- DO NOT change the column order
+- DO NOT add extra columns or fields
+- DO NOT modify existing rows - only append new ones
+- DO NOT add extra blank lines or formatting
+- Maintain exact CSV format: id,basedOnId,description,performance,status
+- Leave performance and status fields completely empty (just commas)
+- Use proper CSV quoting only when descriptions contain commas
 - CRITICAL: You must read the relevant algorithm files to:
   * Identify the specific improvements that made each algorithm successful
   * Understand which components are compatible for merging
@@ -514,7 +525,7 @@ Example descriptions:
 Add exactly $count hybrid combination rows to the CSV file now."
 
   echo "[INFO] Generating $count crossover hybrid ideas..."
-  if ! call_ai_with_limit_check "$prompt" "opus"; then
+  if ! call_ai_with_limit_check "$prompt" "$CURRENT_GENERATION"; then
     echo "[WARN] AI failed to generate crossover ideas" >&2
     return 1
   fi
@@ -523,15 +534,9 @@ Add exactly $count hybrid combination rows to the CSV file now."
 
 # Legacy AI generation mode (for backward compatibility)
 ideate_ai_legacy() {
-  # Check for AI CLI (codex or claude)
-  if ! command -v codex >/dev/null 2>&1 && ! command -v claude >/dev/null 2>&1; then
-    echo "[WARN] No AI CLI found (codex or claude). Falling back to manual entry."
-    return 1
-  fi
-
   if [[ ! -f "$FULL_BRIEF_PATH" ]]; then
-    echo "[WARN] $BRIEF_FILE not found. Falling back to manual entry."
-    return 1
+    echo "[ERROR] $BRIEF_FILE not found. Run 'claude-evolve setup' first." >&2
+    exit 1
   fi
 
   # Get top performers (pure shell)
@@ -576,10 +581,20 @@ Requirements for new CSV rows:
 - Each description should be one clear sentence describing an algorithmic approach
 - All new rows should have empty performance and status fields
 
+CRITICAL CSV FORMAT RULES:
+- DO NOT modify the CSV header row
+- DO NOT change the column order
+- DO NOT add extra columns or fields
+- DO NOT modify existing rows - only append new ones
+- DO NOT add extra blank lines or formatting
+- Maintain exact CSV format: id,basedOnId,description,performance,status
+- Leave performance and status fields completely empty (just commas)
+- Use proper CSV quoting only when descriptions contain commas
+
 Add exactly $TOTAL_IDEAS algorithm variation rows to the CSV file now."
 
   echo "[INFO] Generating $TOTAL_IDEAS ideas (legacy mode)..."
-  if ! call_ai_with_limit_check "$prompt" "opus"; then
+  if ! call_ai_with_limit_check "$prompt" "$CURRENT_GENERATION"; then
     echo "[WARN] AI failed to generate ideas" >&2
     return 1
   fi
@@ -591,19 +606,12 @@ CURRENT_GENERATION=$(get_next_generation)
 echo "[INFO] Starting ideation for generation $CURRENT_GENERATION"
 
 # Main execution
-if [[ $no_ai == true ]]; then
-  echo "[INFO] Manual entry mode"
-  ideate_manual
-elif [[ $use_strategies == true ]]; then
+if [[ $use_strategies == true ]]; then
   echo "[INFO] Multi-strategy AI generation mode"
-  if ! ideate_ai_strategies; then
-    echo "[INFO] Falling back to manual entry"
-    ideate_manual
-  fi
+  ideate_ai_strategies
+  echo "[INFO] Ideation complete! Check $EVOLUTION_CSV for new ideas."
 else
   echo "[INFO] Legacy AI generation mode"
-  if ! ideate_ai_legacy; then
-    echo "[INFO] Falling back to manual entry" 
-    ideate_manual
-  fi
+  ideate_ai_legacy
+  echo "[INFO] Ideation complete! Check $EVOLUTION_CSV for new ideas."
 fi

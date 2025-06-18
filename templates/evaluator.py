@@ -40,11 +40,10 @@ def evaluate_performance(algorithm_module):
     end_time = time.time()
     execution_time = end_time - start_time
     
-    return {
-        "execution_time": execution_time,
-        "score": 1.0 / execution_time if execution_time > 0 else 0,
-        "status": "success"
-    }
+    # Calculate a performance score (higher is better)
+    score = 1.0 / execution_time if execution_time > 0 else 0
+    
+    return score  # Simple: just return the number
 
 
 def main():
@@ -60,15 +59,18 @@ def main():
     
     try:
         algorithm_module = load_algorithm(algorithm_file)
-        metrics = evaluate_performance(algorithm_module)
-        print(json.dumps(metrics))
+        score = evaluate_performance(algorithm_module)
+        
+        # Option 1: Just print the number (simplest)
+        print(score)
+        
+        # Option 2: Print as JSON (if you need more structure)
+        # print(json.dumps({"score": score}))
+        
         sys.exit(0)
     except Exception as e:
-        error_result = {
-            "error": str(e),
-            "status": "failed"
-        }
-        print(json.dumps(error_result))
+        # Log errors to stderr, not stdout
+        print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
 

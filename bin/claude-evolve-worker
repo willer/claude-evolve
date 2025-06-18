@@ -110,6 +110,7 @@ fi
 echo "[WORKER-$$] Description: $description"
 echo "[WORKER-$$] Based on ID: $based_on_id"
 
+# AIDEV-NOTE: Using common evolution processor logic for consistent handling
 # Determine parent algorithm
 if [[ -z $based_on_id || $based_on_id == "0" || $based_on_id == '""' ]]; then
   parent_file="$FULL_ALGORITHM_PATH"
@@ -136,19 +137,20 @@ else
   output_file="$FULL_OUTPUT_DIR/evolution_${id}.py"
 fi
 
-# Copy parent to output (skip if destination already exists)
-if [[ -f "$output_file" ]]; then
-  echo "[WORKER-$$] ⚠️  Skipping copy - child algorithm already exists: $output_file"
+# Check if processing should be skipped using common logic
+eval "$("$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_processor.py" "$id" "$based_on_id" "$FULL_OUTPUT_DIR" "$ROOT_DIR" "$parent_file" "$output_file")"
+
+# Handle copy operation
+if [[ "$skip_copy" == "True" ]]; then
+  echo "[WORKER-$$] ⚠️  Skipping copy - $reason"
 else
   cp "$parent_file" "$output_file"
   echo "[WORKER-$$] Copied parent to: $output_file"
 fi
 
-# Generate mutation (skip for baseline or self-parent)
-if [[ $id == "000" || $id == "0" || $id == "gen00-000" ]]; then
-  echo "[WORKER-$$] Baseline algorithm - skipping mutation"
-elif [[ "$parent_file" == "$output_file" ]]; then
-  echo "[WORKER-$$] ⚠️  Self-parent detected - skipping mutation to preserve existing code"
+# Handle Claude mutation based on skip flags
+if [[ "$skip_claude" == "True" ]]; then
+  echo "[WORKER-$$] ⚠️  Skipping Claude processing - $reason"
 else
   # Check for claude CLI
   claude_cmd="${CLAUDE_CMD:-claude}"
@@ -239,7 +241,49 @@ fi
 
 # Process results
 if [[ $eval_exit_code -eq 0 ]]; then
-  # Extract score
+  # First, check if output is just a plain number
+  if [[ $eval_output =~ ^[[:space:]]*-?[0-9]+\.?[0-9]*[[:space:]]*$ ]]; then
+    score=$(echo "$eval_output" | tr -d ' ')
+    if (( $(echo "$score == 0" | bc -l) )); then
+      update_csv_row_with_lock "$candidate_id" "status" "failed"
+      update_csv_row_with_lock "$candidate_id" "performance" "$score"
+      echo "[WORKER-$$] ✗ Evaluation failed with score 0"
+      exit 1
+    else
+      update_csv_row_with_lock "$candidate_id" "performance" "$score"
+      update_csv_row_with_lock "$candidate_id" "status" "complete"
+      echo "[WORKER-$$] ✓ Evaluation complete, score: $score"
+      exit 0
+    fi
+  fi
+  
+  # Try to parse as JSON and extract all fields
+  if echo "$eval_output" | jq . >/dev/null 2>&1; then
+    # Valid JSON - use CSV helper to update with all fields
+    if ! acquire_csv_lock; then
+      echo "[ERROR] Failed to acquire CSV lock" >&2
+      exit 1
+    fi
+    
+    score=$("$PYTHON_CMD" "$SCRIPT_DIR/../lib/csv_helper.py" update_with_json "$FULL_CSV_PATH" "$candidate_id" "$eval_output")
+    release_csv_lock
+    
+    if [[ -n $score ]] && [[ $score != "0" ]]; then
+      echo "[WORKER-$$] ✓ Evaluation complete, score: $score"
+      # Extract and display additional fields if present
+      if additional_fields=$(echo "$eval_output" | jq -r 'to_entries | map(select(.key != "score" and .key != "performance")) | map("\(.key): \(.value)") | join(", ")' 2>/dev/null); then
+        if [[ -n $additional_fields ]]; then
+          echo "[WORKER-$$]   Additional metrics: $additional_fields"
+        fi
+      fi
+      exit 0
+    else
+      echo "[WORKER-$$] ✗ Evaluation failed with score 0"
+      exit 1
+    fi
+  fi
+  
+  # Fallback: Try simple grep for score/performance fields
   if score=$(echo "$eval_output" | grep -o '"score"[[:space:]]*:[[:space:]]*[0-9.]*' | cut -d: -f2 | tr -d ' '); then
     if [[ -n $score ]]; then
       if (( $(echo "$score == 0" | bc -l) )); then
@@ -274,6 +318,7 @@ if [[ $eval_exit_code -eq 0 ]]; then
   fi
   
   echo "[ERROR] No score found in evaluator output" >&2
+  echo "[ERROR] Expected: plain number (e.g., 1.23) or JSON with 'score' or 'performance' field" >&2
   update_csv_row_with_lock "$candidate_id" "status" "failed"
   exit 1
 else

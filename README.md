@@ -203,6 +203,46 @@ your-project/
 └── (your main project files)
 ```
 
+## Evaluator Output Format
+
+Your evaluator must output a performance score to stdout. Three formats are supported:
+
+### 1. Plain Number (Simplest)
+Just output a single floating-point number:
+```
+1.077506371224117
+```
+
+### 2. JSON with "score" field
+```json
+{"score": 0.95}
+```
+
+### 3. JSON with "performance" field
+```json
+{"performance": 1.234}
+```
+
+### 4. JSON with additional metrics (Advanced)
+You can include additional metrics that will be automatically added as new columns to the CSV:
+```json
+{
+  "score": 0.95,
+  "sharpe_ratio": 1.23,
+  "max_drawdown": -0.15,
+  "total_return": 0.42,
+  "win_rate": 0.65
+}
+```
+
+**Important notes:**
+- Higher scores indicate better performance
+- A score of 0 indicates complete failure
+- Non-zero exit codes indicate evaluation errors
+- Any additional output (warnings, logs) should go to stderr, not stdout
+- Additional JSON fields will be automatically added as new CSV columns
+- New columns are added after the standard columns (id, basedOnId, description, performance, status)
+
 ## Environment Variables for Evaluators
 
 When your evaluator.py runs, it has access to the `EXPERIMENT_ID` environment variable containing the current experiment's ID (e.g., `gen07-001`). This allows evaluators to:
@@ -221,7 +261,10 @@ experiment_id = os.environ.get('EXPERIMENT_ID', 'unknown')
 
 # Use it for logging or file naming
 output_file = f"results_{experiment_id}.json"
-print(f"Evaluating experiment: {experiment_id}")
+print(f"Evaluating experiment: {experiment_id}", file=sys.stderr)  # Use stderr for logs!
+
+# Output just the score
+print(score)  # Simple number to stdout
 ```
 
 ## Configuration

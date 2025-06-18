@@ -1,0 +1,94 @@
+#!/bin/bash
+
+# Simple, robust version - fail fast on malformed evaluator output
+
+# Extract the score parsing section only
+parse_evaluator_output() {
+  local eval_output="$1"
+  local score=""
+  
+  echo "[DEBUG] Raw evaluator output:"
+  echo "----------------------------------------"
+  echo "$eval_output"
+  echo "----------------------------------------"
+  
+  # Try to extract the last valid JSON line
+  last_json=$(echo "$eval_output" | grep '^{.*}$' | tail -1)
+  
+  if [[ -n "$last_json" ]]; then
+    echo "[DEBUG] Found JSON line: $last_json"
+    
+    # Parse with Python for robustness
+    score=$(echo "$last_json" | python3 -c "
+import sys, json
+try:
+    data = json.loads(sys.stdin.read().strip())
+    if 'performance' in data:
+        print(data['performance'])
+    elif 'score' in data:
+        print(data['score'])
+    else:
+        sys.exit(1)
+except:
+    sys.exit(1)
+" 2>/dev/null)
+    
+    if [[ -n "$score" ]]; then
+      echo "[DEBUG] Extracted score: $score"
+      
+      # Validate it's a clean number
+      if [[ "$score" =~ ^[0-9]+\.?[0-9]*$ ]]; then
+        echo "$score"
+        return 0
+      else
+        echo "[ERROR] Score is not a valid number: '$score'" >&2
+        return 1
+      fi
+    else
+      echo "[ERROR] Could not extract score from JSON" >&2
+      return 1
+    fi
+  else
+    echo "[ERROR] No valid JSON found in evaluator output" >&2
+    echo "[ERROR] Evaluator must output clean JSON with 'score' or 'performance' field" >&2
+    echo "[ERROR] Mixed logging/output is not allowed" >&2
+    return 1
+  fi
+}
+
+# Test with your sample
+test_output='Evaluating algorithm: /Users/willer/Documents/GitHub/trading-strategies/evolution-mats/evolution_gen01-001.py
+Copied /Users/willer/Documents/GitHub/trading-strategies/evolution-mats/evolution_gen01-001.py -> algorithm.py for evaluation
+Starting MATS evaluation...
+Running backtest from 2015-01-01 to 2025-06-01...
+
+Evaluation completed successfully!
+Performance: 1.0775
+Total Return: 2839.30%
+Sharpe: 1.310, Sortino: 1.661
+Max Drawdown: -20.87%
+Total Trades: 2604, Win Rate: 64.0%
+
+Full results JSON:
+{
+  "performance": 1.077506371224117,
+  "total_return": 28.392963641910857,
+  "yearly_return": 0.24689362518462943,
+  "sharpe": 1.3100255343786216,
+  "sortino": 1.6612254920789753,
+  "max_drawdown": -0.2086643676866254,
+  "volatility": 0.18846474263704896,
+  "total_trades": 2604,
+  "win_rate": 0.6401689708141322,
+  "profit_factor": 1.9441283380055399,
+  "final_value": 2939296.3641910856
+}
+Restored original algorithm.py
+{"performance": 1.077506371224117, "total_return": 28.392963641910857, "yearly_return": 0.24689362518462943, "sharpe": 1.3100255343786216, "sortino": 1.6612254920789753, "max_drawdown": -0.2086643676866254, "volatility": 0.18846474263704896, "total_trades": 2604, "win_rate": 0.6401689708141322, "profit_factor": 1.9441283380055399, "final_value": 2939296.3641910856}'
+
+echo "Testing parser..."
+if result=$(parse_evaluator_output "$test_output"); then
+  echo "SUCCESS: Got score: $result"
+else
+  echo "FAILED: Could not parse"
+fi

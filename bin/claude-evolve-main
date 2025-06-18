@@ -25,19 +25,27 @@ get_version() {
   fi
 }
 
-# Function to check for updates (non-blocking)
+# Function to check for updates and auto-update if needed
 check_for_updates() {
   # Only check if we can reach npm registry quickly
   if timeout 2 npm view claude-evolve version >/dev/null 2>&1; then
     local current_version
-    current_version=$(npm list -g claude-evolve --depth=0 2>/dev/null | grep claude-evolve | sed 's/.*@//')
+    current_version=$(npm list -g claude-evolve --depth=0 2>/dev/null | grep claude-evolve | sed 's/.*@//' | sed 's/ ->.*//')
     local latest_version
     latest_version=$(timeout 2 npm view claude-evolve version 2>/dev/null)
     
     if [[ -n $current_version ]] && [[ -n $latest_version ]] && [[ $current_version != "$latest_version" ]]; then
       echo -e "${YELLOW}📦 Update available: claude-evolve $current_version → $latest_version${NC}"
-      echo -e "${YELLOW}   Run: npm update -g claude-evolve${NC}"
-      echo
+      echo -e "${GREEN}🔄 Auto-updating claude-evolve...${NC}"
+      
+      # Attempt automatic update
+      if npm update -g claude-evolve >/dev/null 2>&1; then
+        echo -e "${GREEN}✅ Successfully updated to claude-evolve $latest_version${NC}"
+        echo
+      else
+        echo -e "${YELLOW}⚠️  Auto-update failed. Please run manually: npm update -g claude-evolve${NC}"
+        echo
+      fi
     fi
   fi
 }

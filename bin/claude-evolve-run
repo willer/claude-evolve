@@ -268,7 +268,7 @@ while true; do
 eval "$("$PYTHON_CMD" "$SCRIPT_DIR/../lib/csv_helper.py" get_row "$FULL_CSV_PATH" "$row_num")"
 
 # Variables are now set: id, basedOnId, description, performance, status
-based_on_id="$basedOnId"  # Convert to expected variable name
+# based_on_id is already set correctly by csv_helper.py
 
 # Check if ID is empty
 if [[ -z $id ]]; then
@@ -283,18 +283,18 @@ echo "[INFO] Based on ID: $based_on_id"
 # Set interrupt handler - just exit without updating CSV status
 trap 'echo "[INFO] Evolution interrupted"; exit 130' INT
 
-# Determine parent algorithm
+# AIDEV-NOTE: Using common evolution processor logic to determine parent/output files
+# and check if processing should be skipped (handles self-parent detection)
+
+# Determine parent algorithm path
 if [[ -z $based_on_id || $based_on_id == "0" || $based_on_id == '""' ]]; then
-  # Empty or zero basedonID means use the base algorithm
   parent_file="$FULL_ALGORITHM_PATH"
   echo "[INFO] Using base algorithm (basedonID is empty or 0)"
 else
   # Handle both old format (numeric) and new format (genXX-XXX)
   if [[ $based_on_id =~ ^[0-9]+$ ]]; then
-    # Old numeric format
     parent_file="$FULL_OUTPUT_DIR/evolution_id${based_on_id}.py"
   else
-    # New generation format
     parent_file="$FULL_OUTPUT_DIR/evolution_${based_on_id}.py"
   fi
   
@@ -311,22 +311,20 @@ fi
 
 echo "[INFO] Using parent algorithm: $parent_file"
 
-# Generate mutation output file
-# Handle both old format (numeric) and new format (genXX-XXX)
+# Generate output file path
 if [[ $id =~ ^[0-9]+$ ]]; then
-  # Old numeric format
   output_file="$FULL_OUTPUT_DIR/evolution_id${id}.py"
 else
-  # New generation format
   output_file="$FULL_OUTPUT_DIR/evolution_${id}.py"
 fi
 echo "[INFO] Generating algorithm mutation..."
 
-# AIDEV-NOTE: File existence check prevents overwriting existing algorithm files
-# when processing self-referential CSV entries (parent=child scenario).
-# Copy parent to output (skip if destination already exists)
-if [[ -f "$output_file" ]]; then
-  echo "[INFO] ⚠️  Skipping copy - child algorithm already exists: $output_file"
+# Check if processing should be skipped using common logic
+eval "$("$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_processor.py" "$id" "$based_on_id" "$FULL_OUTPUT_DIR" "$ROOT_DIR" "$parent_file" "$output_file")"
+
+# Handle copy operation
+if [[ "$skip_copy" == "True" ]]; then
+  echo "[INFO] ⚠️  Skipping copy - $reason"
 else
   cp "$parent_file" "$output_file"
   echo "[INFO] Copied parent algorithm to: $output_file"
@@ -361,14 +359,10 @@ Requirements:
 
 The file currently contains the parent algorithm. Modify it according to the description above while adhering to all guidelines from the CLAUDE.md files."
 
-# AIDEV-NOTE: Self-parent detection logic ensures consistency with claude-evolve-worker
-# when CSV entries have parent=child (same ID for id and basedOnId columns).
-# This prevents overwriting existing algorithms and unnecessary Claude processing.
-# Generate mutation (skip for baseline or self-parent)
-if [[ $id == "000" || $id == "0" || $id == "gen00-000" ]]; then
-  echo "[INFO] Baseline algorithm - skipping mutation, using original"
-elif [[ "$parent_file" == "$output_file" ]]; then
-  echo "[INFO] ⚠️  Self-parent detected - skipping mutation to preserve existing code"
+# AIDEV-NOTE: Using common evolution processor logic for Claude processing decisions
+# Handle Claude mutation based on skip flags
+if [[ "$skip_claude" == "True" ]]; then
+  echo "[INFO] ⚠️  Skipping Claude processing - $reason"
 else
   echo "[INFO] Calling Claude $CLAUDE_MODEL to apply mutation..."
   echo "[INFO] Claude will edit: $output_file"
