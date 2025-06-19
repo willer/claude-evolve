@@ -473,6 +473,19 @@ print(f'max_id=\"{max_id}\"')
     # cat "$data_file"
     # echo "DEBUG: max_gen_num=$max_gen_num"
     
+    # Calculate total data points for dynamic sizing
+    total_data_points=$(awk 'END {print NR-1}' "$data_file")  # Subtract header row
+    
+    # AIDEV-NOTE: Dynamic dot sizing based on data point count
+    # Use larger dots when there are fewer data points for better visibility
+    if [[ $total_data_points -lt 35 ]]; then
+      regular_dot_size="1.0"
+      winner_dot_size="2.0"
+    else
+      regular_dot_size="0.6"
+      winner_dot_size="1.5"
+    fi
+    
     # Plot all algorithms in order of completion, colored by generation
     plot_cmd=""
     gen_plots_added=0
@@ -486,7 +499,7 @@ print(f'max_id=\"{max_id}\"')
         if [[ $gen_plots_added -gt 0 ]]; then
           plot_cmd="$plot_cmd, \\"$'\n'
         fi
-        plot_cmd="${plot_cmd}     \"$data_file\" using (\$4==$gen_num?\$1:1/0):3 with points linecolor rgb \"$color\" pointsize 0.6 title \"Gen $gen_num\""
+        plot_cmd="${plot_cmd}     \"$data_file\" using (\$4==$gen_num?\$1:1/0):3 with points linecolor rgb \"$color\" pointsize $regular_dot_size title \"Gen $gen_num\""
         ((gen_plots_added++))
       fi
     done
@@ -496,15 +509,15 @@ print(f'max_id=\"{max_id}\"')
       if [[ $gen_plots_added -gt 0 ]]; then
         plot_cmd="$plot_cmd, \\"$'\n'
       fi
-      plot_cmd="${plot_cmd}     \"$winner_file\" using 1:3 with points pointtype 7 pointsize 1.5 linecolor rgb \"gold\" title \"Best ($max_id)\""
+      plot_cmd="${plot_cmd}     \"$winner_file\" using 1:3 with points pointtype 7 pointsize $winner_dot_size linecolor rgb \"gold\" title \"Best ($max_id)\""
     fi
     
     # Fallback if no generation-specific plots
     if [[ $gen_plots_added -eq 0 ]]; then
-      plot_cmd="\"$data_file\" using 1:3 with points linecolor rgb \"#1f77b4\" pointsize 0.6 title \"Evolution Progress\""
+      plot_cmd="\"$data_file\" using 1:3 with points linecolor rgb \"#1f77b4\" pointsize $regular_dot_size title \"Evolution Progress\""
       if [[ -n $max_id && -s "$winner_file" ]]; then
         plot_cmd="$plot_cmd, \\"$'\n'
-        plot_cmd="${plot_cmd}     \"$winner_file\" using 1:3 with points pointtype 7 pointsize 1.5 linecolor rgb \"gold\" title \"Best ($max_id)\""
+        plot_cmd="${plot_cmd}     \"$winner_file\" using 1:3 with points pointtype 7 pointsize $winner_dot_size linecolor rgb \"gold\" title \"Best ($max_id)\""
       fi
     fi
     
