@@ -477,10 +477,10 @@ print(f'max_id=\"{max_id}\"')
     total_data_points=$(awk 'END {print NR-1}' "$data_file")  # Subtract header row
     
     # AIDEV-NOTE: Dynamic dot sizing based on data point count
-    # Use larger dots when there are fewer data points for better visibility
+    # Use significantly larger dots when there are fewer data points for better visibility
     if [[ $total_data_points -lt 35 ]]; then
-      regular_dot_size="1.0"
-      winner_dot_size="2.0"
+      regular_dot_size="1.8"
+      winner_dot_size="3.0"
     else
       regular_dot_size="0.6"
       winner_dot_size="1.5"
