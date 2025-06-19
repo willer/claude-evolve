@@ -1,0 +1,662 @@
+#!/bin/bash
+
+# Removed 'set -e' to prevent silent exits on CSV helper failures
+
+# Load configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/config.sh
+source "$SCRIPT_DIR/../lib/config.sh"
+
+# Use CLAUDE_EVOLVE_CONFIG if set, otherwise default
+if [[ -n ${CLAUDE_EVOLVE_CONFIG:-} ]]; then
+  load_config "$CLAUDE_EVOLVE_CONFIG"
+else
+  load_config
+fi
+
+# Parse arguments
+timeout_seconds=""
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+  --timeout)
+    if [[ -z ${2:-} ]] || [[ ! $2 =~ ^[0-9]+$ ]] || [[ $2 -eq 0 ]]; then
+      echo "[ERROR] --timeout requires a positive integer (seconds)" >&2
+      exit 1
+    fi
+    timeout_seconds="$2"
+    shift 2
+    ;;
+  --parallel)
+    force_parallel="true"
+    shift
+    ;;
+  --sequential)
+    force_sequential="true"
+    shift
+    ;;
+  --keep-awake|--caffeinate)
+    use_caffeinate="true"
+    shift
+    ;;
+  --help)
+    cat <<EOF
+claude-evolve run - Execute evolution candidates
+
+USAGE:
+  claude-evolve run [OPTIONS]
+
+OPTIONS:
+  --timeout <sec>  Kill evaluator after specified seconds (default: no timeout)
+  --parallel       Force parallel execution mode
+  --sequential     Force sequential execution mode
+  --keep-awake     Prevent system sleep during execution (macOS only)
+  --help           Show this help message
+
+DESCRIPTION:
+  Processes the oldest pending candidate from evolution.csv by:
+  1. Generating algorithm mutation using Claude
+  2. Running evaluator.py on the generated algorithm
+  3. Updating CSV with performance score and completion status
+
+  Use --timeout to prevent runaway evaluations from blocking progress.
+EOF
+    exit 0
+    ;;
+  *)
+    echo "[ERROR] Unknown option: $1" >&2
+    exit 1
+    ;;
+  esac
+done
+
+# Check if caffeinate should be used
+if [[ "$use_caffeinate" == "true" ]] && command -v caffeinate >/dev/null 2>&1; then
+  echo "[INFO] Using caffeinate to prevent system sleep"
+  # Re-run this script with caffeinate
+  exec caffeinate -dims "$0" "$@"
+fi
+
+# Determine execution mode
+use_parallel=false
+if [[ "$force_parallel" == "true" ]]; then
+  use_parallel=true
+  echo "[INFO] Using parallel mode (forced via --parallel)"
+elif [[ "$force_sequential" == "true" ]]; then
+  use_parallel=false
+  echo "[INFO] Using sequential mode (forced via --sequential)"
+elif [[ "$PARALLEL_ENABLED" == "true" || "$PARALLEL_ENABLED" == "1" ]]; then
+  use_parallel=true
+  echo "[INFO] Using parallel mode (enabled in config)"
+else
+  echo "[INFO] Using sequential mode (default)"
+fi
+
+if [[ "$use_parallel" == "true" ]]; then
+  echo "[INFO] Starting parallel evolution run with up to $MAX_WORKERS workers"
+  exec "$SCRIPT_DIR/claude-evolve-run-parallel" ${timeout_seconds:+--timeout "$timeout_seconds"}
+else
+  echo "[INFO] Starting continuous evolution run..."
+  echo "[INFO] Will continue running until no more pending candidates or 5 consecutive failures"
+fi
+
+[[ -n $timeout_seconds ]] && echo "[INFO] Using timeout: ${timeout_seconds} seconds per evaluation"
+
+# Prepare logging directory
+mkdir -p logs
+
+# Track consecutive failures
+consecutive_failures=0
+MAX_FAILURES=5
+
+# Track if we should continue after a failure
+should_continue_after_failure() {
+  ((consecutive_failures++))
+  
+  if [[ $consecutive_failures -ge $MAX_FAILURES ]]; then
+    echo "[ERROR] Too many consecutive failures ($consecutive_failures). Stopping evolution run." >&2
+    return 1
+  else
+    echo "[WARN] Failure $consecutive_failures of $MAX_FAILURES. Continuing to next candidate..." >&2
+    echo "----------------------------------------"
+    return 0
+  fi
+}
+
+# Validate workspace using config
+if [[ ! -d "$FULL_EVOLUTION_DIR" ]]; then
+  echo "[ERROR] Evolution directory not found: $FULL_EVOLUTION_DIR. Run 'claude-evolve setup' first." >&2
+  exit 1
+fi
+
+# Check required files
+if [[ ! -f "$FULL_CSV_PATH" ]]; then
+  echo "[ERROR] CSV file not found: $FULL_CSV_PATH" >&2
+  exit 1
+fi
+
+if [[ ! -f "$FULL_EVALUATOR_PATH" ]]; then
+  echo "[ERROR] Evaluator not found: $FULL_EVALUATOR_PATH" >&2
+  exit 1
+fi
+
+if [[ ! -f "$FULL_ALGORITHM_PATH" ]]; then
+  echo "[ERROR] Algorithm not found: $FULL_ALGORITHM_PATH" >&2
+  exit 1
+fi
+
+# Find oldest pending row (using CSV helper)
+find_empty_row() {
+  "$PYTHON_CMD" "$SCRIPT_DIR/../lib/csv_helper.py" find_pending "$FULL_CSV_PATH"
+}
+
+# Get CSV row - replaced by csv_helper.py
+
+# Update CSV row (using CSV helper)
+update_csv_row() {
+  local row_num="$1"
+  local performance="$2"
+  local status="$3"
+  
+  "$PYTHON_CMD" "$SCRIPT_DIR/../lib/csv_helper.py" update_row "$FULL_CSV_PATH" "$row_num" "$performance" "$status"
+}
+
+# Auto-recovery mechanism for common failures
+attempt_recovery() {
+  local failure_type="$1"
+  local error_output="$2"
+  local row_num="$3"
+  local id="$4"
+  local description="$5"
+  
+  echo "[INFO] Attempting auto-recovery for $failure_type..."
+  
+  case "$failure_type" in
+    "import_error")
+      # Extract missing module name
+      missing_module=$(echo "$error_output" | grep -o "No module named '[^']*'" | sed "s/No module named '\\([^']*\\)'/\\1/" | head -1)
+      if [[ -n $missing_module ]]; then
+        echo "[INFO] Detected missing module: $missing_module"
+        echo "[INFO] Attempting to install via pip..."
+        
+        # Try to install the missing module
+        if pip install "$missing_module" 2>&1; then
+          echo "[INFO] Successfully installed $missing_module. Retrying evaluation..."
+          return 0  # Signal to retry
+        else
+          echo "[WARN] Failed to install $missing_module automatically"
+          echo "[INFO] Please install manually: pip install $missing_module"
+        fi
+      fi
+      ;;
+      
+    "syntax_error")
+      # For syntax errors, we could retry the mutation with additional guidance
+      echo "[INFO] Detected syntax error in generated code"
+      echo "[INFO] Retrying mutation with additional constraints..."
+      
+      # Update the CSV to retry this candidate with enhanced prompt
+      update_csv_row "$row_num" "" "pending"
+      
+      # Add a recovery marker to the description to guide the next attempt
+      new_desc="[RETRY: Fix syntax] $description"
+      temp_file=$(mktemp)
+      current_row=1
+      
+      while IFS=, read -r csv_id csv_based_on csv_desc csv_perf csv_stat; do
+        if [[ $current_row -eq $row_num ]]; then
+          echo "$csv_id,$csv_based_on,$new_desc,$csv_perf,pending"
+        else
+          echo "$csv_id,$csv_based_on,$csv_desc,$csv_perf,$csv_stat"
+        fi
+        ((current_row++))
+      done <"$FULL_CSV_PATH" >"$temp_file"
+      
+      mv "$temp_file" "$FULL_CSV_PATH"
+      return 0  # Signal to retry
+      ;;
+      
+    "zero_score")
+      # For zero scores, log additional diagnostic info
+      echo "[INFO] Algorithm produced zero score - likely a logic error"
+      echo "[INFO] Consider adding constraints to BRIEF.md to avoid this approach"
+      ;;
+  esac
+  
+  return 1  # No recovery possible
+}
+
+# Main evolution loop
+while true; do
+  # Find next candidate
+  if ! row_num=$(find_empty_row); then
+    echo "[INFO] No more pending candidates found."
+    
+    # Check if auto ideation is enabled
+    echo "[DEBUG] AUTO_IDEATE value: '$AUTO_IDEATE'"
+    if [[ "$AUTO_IDEATE" == "true" || "$AUTO_IDEATE" == "1" ]]; then
+      echo "[INFO] Auto ideation is enabled. Generating new ideas..."
+      
+      # Check if claude-evolve-ideate exists
+      ideate_script="$SCRIPT_DIR/claude-evolve-ideate"
+      if [[ ! -f "$ideate_script" ]]; then
+        echo "[ERROR] claude-evolve-ideate script not found: $ideate_script" >&2
+        echo "[INFO] Evolution run complete - no way to generate more ideas."
+        exit 0
+      fi
+      
+      # Generate new ideas using the multi-strategy approach
+      echo "[INFO] Calling claude-evolve-ideate to generate new candidates..."
+      if ! "$ideate_script"; then
+        echo "[ERROR] Failed to generate new ideas" >&2
+        echo "[INFO] Evolution run complete - ideation failed."
+        exit 1
+      fi
+      
+      echo "[INFO] New ideas generated successfully. Continuing evolution..."
+      continue  # Go back to start of loop to find the new candidates
+    else
+      echo "[INFO] Auto ideation is disabled. Evolution run complete."
+      exit 0
+    fi
+  fi
+  
+  # Create log file for this iteration
+  LOGFILE="logs/claude-$(date +%Y%m%d_%H%M%S).txt"
+
+# Get row data using CSV helper
+eval "$("$PYTHON_CMD" "$SCRIPT_DIR/../lib/csv_helper.py" get_row "$FULL_CSV_PATH" "$row_num")"
+
+# Variables are now set: id, basedOnId, description, performance, status
+# based_on_id is already set correctly by csv_helper.py
+
+# Check if ID is empty
+if [[ -z $id ]]; then
+  echo "[ERROR] Empty ID found at row $row_num. CSV may be malformed." >&2
+  exit 1
+fi
+
+echo "[INFO] Processing candidate ID: $id"
+echo "[INFO] Description: $description"
+echo "[INFO] Based on ID: $based_on_id"
+
+# Set interrupt handler - just exit without updating CSV status
+trap 'echo "[INFO] Evolution interrupted"; exit 130' INT
+
+# AIDEV-NOTE: Using common evolution processor logic to determine parent/output files
+# and check if processing should be skipped (handles self-parent detection)
+
+# Determine parent algorithm path
+if [[ -z $based_on_id || $based_on_id == "0" || $based_on_id == '""' ]]; then
+  parent_file="$FULL_ALGORITHM_PATH"
+  echo "[INFO] Using base algorithm (basedonID is empty or 0)"
+else
+  # Handle both old format (numeric) and new format (genXX-XXX)
+  if [[ $based_on_id =~ ^[0-9]+$ ]]; then
+    parent_file="$FULL_OUTPUT_DIR/evolution_id${based_on_id}.py"
+  else
+    parent_file="$FULL_OUTPUT_DIR/evolution_${based_on_id}.py"
+  fi
+  
+  if [[ ! -f $parent_file ]]; then
+    echo "[ERROR] Parent algorithm file not found: $parent_file" >&2
+    update_csv_row "$row_num" "" "failed"
+    if should_continue_after_failure; then
+      continue
+    else
+      exit 1
+    fi
+  fi
+fi
+
+echo "[INFO] Using parent algorithm: $parent_file"
+
+# Generate output file path
+if [[ $id =~ ^[0-9]+$ ]]; then
+  output_file="$FULL_OUTPUT_DIR/evolution_id${id}.py"
+else
+  output_file="$FULL_OUTPUT_DIR/evolution_${id}.py"
+fi
+echo "[INFO] Generating algorithm mutation..."
+
+# Check if processing should be skipped using common logic
+eval "$("$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_processor.py" "$id" "$based_on_id" "$FULL_OUTPUT_DIR" "$ROOT_DIR" "$parent_file" "$output_file")"
+
+# Handle copy operation
+if [[ "$skip_copy" == "True" ]]; then
+  echo "[INFO] ⚠️  Skipping copy - $reason"
+else
+  cp "$parent_file" "$output_file"
+  echo "[INFO] Copied parent algorithm to: $output_file"
+fi
+
+# Check for claude CLI
+claude_cmd="${CLAUDE_CMD:-claude}"
+if ! command -v "$claude_cmd" >/dev/null 2>&1; then
+  echo "[ERROR] Claude CLI not found. Please install 'claude' CLI tool or set CLAUDE_CMD environment variable." >&2
+  update_csv_row "$row_num" "" "failed"
+  exit 1
+fi
+
+# Always use Claude Sonnet
+CLAUDE_MODEL="sonnet"
+echo "[INFO] Using Claude Sonnet for development"
+
+# Create mutation prompt - Claude will edit the file directly
+prompt="Edit the file $output_file to implement this specific change: $description
+
+IMPORTANT: Before starting the task, you MUST read and understand:
+1. The project's CLAUDE.md file (if it exists) - this contains project-specific instructions
+2. The user's global CLAUDE.md file at ~/.claude/CLAUDE.md (if it exists) - this contains general development principles
+3. Ensure all your work follows the architectural and development guidelines from both files
+
+Requirements:
+- Edit the file directly (don't just provide comments or suggestions)
+- Maintain the same function signatures and interfaces
+- Make the specific change described above
+- Ensure the code runs without syntax errors
+- Add proper error handling if needed
+
+The file currently contains the parent algorithm. Modify it according to the description above while adhering to all guidelines from the CLAUDE.md files."
+
+# AIDEV-NOTE: Using common evolution processor logic for Claude processing decisions
+# Handle Claude mutation based on skip flags
+if [[ "$skip_claude" == "True" ]]; then
+  echo "[INFO] ⚠️  Skipping Claude processing - $reason"
+else
+  echo "[INFO] Calling Claude $CLAUDE_MODEL to apply mutation..."
+  echo "[INFO] Claude will edit: $output_file"
+  echo "[INFO] Logging to: ${LOGFILE}-developer"
+  
+  # Claude will edit the file directly - log both prompt and response
+  {
+    echo "=== EVOLUTION MUTATION PROMPT ==="
+    echo "ID: $id"
+    echo "Based on: $based_on_id"
+    echo "Description: $description"
+    echo "Output file: $output_file"
+    echo "Model: $CLAUDE_MODEL"
+    echo "Timestamp: $(date)"
+    echo
+    echo "$prompt"
+    echo
+    echo "=== CLAUDE RESPONSE ==="
+  } >> "${LOGFILE}-developer"
+  
+  # Use tee to show output and log simultaneously, and capture output for limit detection
+  claude_output=$(echo "$prompt" | "$claude_cmd" --dangerously-skip-permissions --model $CLAUDE_MODEL -p 2>&1 | tee -a "${LOGFILE}-developer")
+  claude_exit_code=${PIPESTATUS[1]}  # Get exit code from claude command, not tee
+  
+  # Check for usage limit
+  if echo "$claude_output" | grep -q "Claude AI usage limit reached"; then
+    # Extract timestamp if available
+    limit_timestamp=$(echo "$claude_output" | grep -o "Claude AI usage limit reached|[0-9]*" | cut -d'|' -f2)
+    
+    # Print red error message
+    echo -e "\033[31m[ERROR] CLAUDE AI USAGE LIMIT REACHED!\033[0m" >&2
+    echo -e "\033[31m[ERROR] Evolution halted due to API rate limits.\033[0m" >&2
+    
+    if [[ -n $limit_timestamp ]]; then
+      # Convert timestamp to human-readable format
+      limit_date=$(date -r "$limit_timestamp" "+%Y-%m-%d %H:%M:%S" 2>/dev/null || echo "Unknown time")
+      echo -e "\033[31m[ERROR] Limit will be released at: $limit_date\033[0m" >&2
+    fi
+    
+    echo -e "\033[33m[INFO] Please wait for the rate limit to reset before continuing.\033[0m" >&2
+    echo -e "\033[33m[INFO] The current candidate will remain in 'pending' status.\033[0m" >&2
+    
+    # Don't mark as failed - leave it pending for retry later
+    exit 1
+  fi
+  
+  # Check for other failures
+  if [[ $claude_exit_code -ne 0 ]]; then
+    echo "[ERROR] Claude failed to mutate algorithm" >&2
+    update_csv_row "$row_num" "" "failed"
+    if should_continue_after_failure; then
+      continue
+    else
+      exit 1
+    fi
+  fi
+  
+  echo "[INFO] Claude completed mutation"
+fi
+
+echo "[INFO] Algorithm ready at: $output_file"
+
+# Run evaluator
+echo "[INFO] Running evaluation..."
+echo "[INFO] Executing: EXPERIMENT_ID=$id $PYTHON_CMD $FULL_EVALUATOR_PATH $output_file"
+eval_output=""
+eval_exit_code=0
+
+if [[ -n $timeout_seconds ]]; then
+  echo "[INFO] Evaluation timeout: ${timeout_seconds}s"
+  if eval_output=$(EXPERIMENT_ID="$id" timeout "$timeout_seconds" "$PYTHON_CMD" "$FULL_EVALUATOR_PATH" "$output_file" 2>&1); then
+    eval_exit_code=0
+  else
+    eval_exit_code=$?
+    if [[ $eval_exit_code -eq 124 ]]; then
+      echo "[ERROR] Evaluation timed out after ${timeout_seconds} seconds" >&2
+      update_csv_row "$row_num" "" "timeout"
+      if should_continue_after_failure; then
+        continue 2  # Continue outer while loop from nested context
+      else
+        exit 1
+      fi
+    fi
+  fi
+else
+  if eval_output=$(EXPERIMENT_ID="$id" "$PYTHON_CMD" "$FULL_EVALUATOR_PATH" "$output_file" 2>&1); then
+    eval_exit_code=0
+  else
+    eval_exit_code=$?
+  fi
+fi
+
+# Show evaluator output and log it
+echo "[INFO] Evaluator output:"
+echo "----------------------------------------"
+echo "$eval_output"
+echo "----------------------------------------"
+
+# Log evaluator phase
+{
+  echo "=== EVALUATOR EXECUTION ==="
+  echo "ID: $id"
+  echo "Algorithm: $output_file"
+  echo "Command: EXPERIMENT_ID=$id $PYTHON_CMD $FULL_EVALUATOR_PATH $output_file"
+  echo "Exit code: $eval_exit_code"
+  echo "Timestamp: $(date)"
+  echo
+  echo "=== EVALUATOR OUTPUT ==="
+  echo "$eval_output"
+  echo
+} >> "${LOGFILE}-evaluator"
+
+# Process results
+if [[ $eval_exit_code -eq 0 ]]; then
+  # DEBUG: Show raw evaluator output
+  echo "[DEBUG] Raw evaluator output:"
+  echo "----------------------------------------"
+  echo "$eval_output"
+  echo "----------------------------------------"
+  
+  # Extract the last valid JSON line and score
+  last_json=$(echo "$eval_output" | grep '^{.*}$' | tail -1)
+  
+  if [[ -n "$last_json" ]]; then
+    echo "[DEBUG] Found JSON: $last_json"
+    
+    # Extract score from JSON
+    score=$(echo "$last_json" | python3 -c "
+import sys, json
+try:
+    data = json.loads(sys.stdin.read().strip())
+    if 'performance' in data:
+        print(data['performance'])
+    elif 'score' in data:
+        print(data['score'])
+    else:
+        sys.exit(1)
+except:
+    sys.exit(1)
+" 2>/dev/null)
+  fi
+  
+  if [[ -n "$score" ]]; then
+    echo "[DEBUG] Extracted score via 'score' field: '$score'"
+    if [[ -n $score ]]; then
+      # Check if score is 0 and mark as failed
+      if (( $(echo "$score == 0" | bc -l) )); then
+        # Update CSV with full JSON data
+        if [[ -n "$last_json" ]]; then
+          python3 "${SCRIPT_DIR}/../lib/csv_helper.py" update_with_json "${FULL_CSV_PATH}" "$id" "$last_json"
+        else
+          update_csv_row "$row_num" "$score" "failed"
+        fi
+        echo "[INFO] ✗ Evaluation failed with score 0"
+        echo "[INFO] Performance score: $score"
+        if should_continue_after_failure; then
+          continue 2
+        else
+          exit 1
+        fi
+      else
+        # Update CSV with full JSON data
+        if [[ -n "$last_json" ]]; then
+          echo "[DEBUG] Updating CSV with full JSON data (branch 1)"
+          echo "[DEBUG] CSV path: ${FULL_CSV_PATH}"
+          echo "[DEBUG] Target ID: $id (row $row_num)"
+          echo "[DEBUG] JSON data: $last_json"
+          echo "[DEBUG] Running CSV helper..."
+          if python3 "${SCRIPT_DIR}/../lib/csv_helper.py" update_with_json "${FULL_CSV_PATH}" "$id" "$last_json"; then
+            echo "[DEBUG] CSV helper succeeded"
+          else
+            echo "[DEBUG] CSV helper failed with exit code $?"
+          fi
+        else
+          update_csv_row "$row_num" "$score" "complete"
+        fi
+        echo "[INFO] ✓ Evaluation completed successfully"
+        echo "[INFO] Performance score: $score"
+      fi
+    else
+      # Try "performance" field - get only the last occurrence
+      if score=$(echo "$eval_output" | grep -o '"performance"[[:space:]]*:[[:space:]]*[0-9.]*' | cut -d: -f2 | tr -d ' ' | tail -1); then
+        echo "[DEBUG] Extracted score via 'performance' field: '$score'"
+        # Check if score is 0 and mark as failed
+        if [ "$(echo "$score == 0" | bc -l)" = "1" ]; then
+          if [[ -n "$last_json" ]]; then
+            python3 "${SCRIPT_DIR}/../lib/csv_helper.py" update_with_json "${FULL_CSV_PATH}" "$id" "$last_json"
+          else
+            update_csv_row "$row_num" "$score" "failed"
+          fi
+          echo "[INFO] ✗ Evaluation failed with score 0"
+          echo "[INFO] Performance score: $score"
+          if should_continue_after_failure; then
+            continue 2
+          else
+            exit 1
+          fi
+        else
+          # Update CSV with full JSON data
+          if [[ -n "$last_json" ]]; then
+            echo "[DEBUG] Updating CSV with full JSON data (branch 2)"
+            echo "[DEBUG] CSV path: ${FULL_CSV_PATH}"
+            echo "[DEBUG] Target ID: $id (row $row_num)"
+            echo "[DEBUG] JSON data: $last_json"
+            echo "[DEBUG] Running CSV helper..."
+            if python3 "${SCRIPT_DIR}/../lib/csv_helper.py" update_with_json "${FULL_CSV_PATH}" "$id" "$last_json"; then
+              echo "[DEBUG] CSV helper succeeded"
+            else
+              echo "[DEBUG] CSV helper failed with exit code $?"
+            fi
+          else
+            update_csv_row "$row_num" "$score" "complete"
+          fi
+          echo "[INFO] ✓ Evaluation completed successfully"
+          echo "[INFO] Performance score: $score"
+        fi
+      else
+        echo "[ERROR] No score found in evaluator output" >&2
+        echo "[ERROR] Output: $eval_output" >&2
+        update_csv_row "$row_num" "" "failed"
+        if should_continue_after_failure; then
+          continue 2
+        else
+          exit 1
+        fi
+      fi
+    fi
+  else
+    echo "[ERROR] Failed to parse evaluator output" >&2
+    echo "[ERROR] Output: $eval_output" >&2
+    update_csv_row "$row_num" "" "failed"
+    if should_continue_after_failure; then
+      continue
+    else
+      exit 1
+    fi
+  fi
+else
+  echo "[ERROR] Evaluator failed with exit code $eval_exit_code" >&2
+  echo "[ERROR] Output: $eval_output" >&2
+  
+  # Check for common failure patterns and attempt recovery
+  recovery_attempted=false
+  
+  # Check for import errors
+  if echo "$eval_output" | grep -q "No module named"; then
+    if attempt_recovery "import_error" "$eval_output" "$row_num" "$id" "$description"; then
+      recovery_attempted=true
+      # Retry the evaluation
+      echo "[INFO] Retrying evaluation after recovery attempt..."
+      if eval_output=$(EXPERIMENT_ID="$id" "$PYTHON_CMD" "$FULL_EVALUATOR_PATH" "$output_file" 2>&1); then
+        # Re-process the successful result
+        if score=$(echo "$eval_output" | grep -o '"score"[[:space:]]*:[[:space:]]*[0-9.]*' | cut -d: -f2 | tr -d ' '); then
+          if [[ -n $score ]]; then
+            if [ "$(echo "$score == 0" | bc -l)" = "1" ]; then
+              update_csv_row "$row_num" "$score" "failed"
+              echo "[INFO] ✗ Evaluation failed with score 0"
+            else
+              update_csv_row "$row_num" "$score" "complete"
+              echo "[INFO] ✓ Recovery successful! Performance score: $score"
+              consecutive_failures=0
+              continue
+            fi
+          fi
+        fi
+      fi
+    fi
+  fi
+  
+  # Check for syntax errors
+  if echo "$eval_output" | grep -q "SyntaxError"; then
+    if attempt_recovery "syntax_error" "$eval_output" "$row_num" "$id" "$description"; then
+      recovery_attempted=true
+      # Skip to next iteration to retry with enhanced prompt
+      consecutive_failures=0
+      continue
+    fi
+  fi
+  
+  # If no recovery was successful, mark as failed
+  if [[ $recovery_attempted == false ]]; then
+    update_csv_row "$row_num" "" "failed"
+  fi
+  
+  if should_continue_after_failure; then
+    continue
+  else
+    exit 1
+  fi
+fi
+
+  echo "[INFO] Evolution cycle completed successfully!"
+  consecutive_failures=0  # Reset failure counter on success
+  
+  echo "[INFO] Looking for next candidate..."
+  echo "----------------------------------------"
+done  # End of main evolution loop

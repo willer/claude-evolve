@@ -142,7 +142,7 @@ if [[ $# -eq 0 ]]; then
   case $choice in
   1) exec "$SCRIPT_DIR/claude-evolve-setup" ;;
   2) exec "$SCRIPT_DIR/claude-evolve-ideate" ;;
-  3) exec "$SCRIPT_DIR/claude-evolve-run" ;;
+  3) exec "$SCRIPT_DIR/claude-evolve-run-unified" ;;
   4) exec "$SCRIPT_DIR/claude-evolve-analyze" ;;
   5) exec "$SCRIPT_DIR/claude-evolve-config" ;;
   6) show_help ;;
@@ -174,7 +174,7 @@ ideate)
   ;;
 run)
   shift
-  exec "$SCRIPT_DIR/claude-evolve-run" "$@"
+  exec "$SCRIPT_DIR/claude-evolve-run-unified" "$@"
   ;;
 analyze)
   shift

@@ -165,7 +165,7 @@ echo "Pending: $pending"
 
 if [[ $count_with_performance -gt 0 ]]; then
   avg_performance=$(echo "scale=4; $total_performance / $count_with_performance" | bc -l 2>/dev/null || echo "0")
-  echo "Average Performance: $avg_performance"
+  echo "Average Performance: $avg_performance"  # Still showing mean for overall stats
 else
   echo "Average Performance: N/A"
 fi
@@ -238,13 +238,24 @@ for gen in $(cut -d' ' -f1 "$gen_stats_file" | sort -u || echo ""); do
   echo -n "$gen: $total_in_gen candidates"
   
   if [[ "$completed_in_gen" -gt 0 ]]; then
-    # Calculate average performance for this generation  
-    sum="0"
+    # Calculate median performance for this generation
+    # AIDEV-NOTE: Changed from mean to median to be more robust to outliers
+    median="0"
     if grep -q "^$gen completed" "$gen_stats_file"; then
-      sum=$(grep "^$gen completed" "$gen_stats_file" | awk '{s+=$3} END {printf "%.6f", s}' 2>/dev/null || echo "0")
+      median=$(grep "^$gen completed" "$gen_stats_file" | awk '{print $3}' | sort -n | awk '{
+        a[NR] = $0
+      }
+      END {
+        if (NR % 2) {
+          # Odd number of elements
+          print a[(NR + 1) / 2]
+        } else {
+          # Even number of elements - average of two middle values
+          printf "%.4f", (a[NR/2] + a[NR/2 + 1]) / 2.0
+        }
+      }' 2>/dev/null || echo "0")
     fi
-    avg=$(echo "scale=4; $sum / $completed_in_gen" | bc -l 2>/dev/null || echo "0")
-    echo " ($completed_in_gen completed, avg: $avg)"
+    echo " ($completed_in_gen completed, median: $median)"
   else
     echo " (0 completed)"
   fi
@@ -290,7 +301,7 @@ if command -v gnuplot >/dev/null 2>&1 && [[ $valid_performance_count -gt 0 ]]; t
   gen_avg_file="/tmp/evolution_gen_avg_$$.dat"
   
   echo "# Row ID Performance Generation" >"$data_file"
-  echo "# Generation AvgPerformance Color" >"$gen_avg_file"
+  echo "# Generation MedianPerformance Color" >"$gen_avg_file"
 
   # Get color by generation number (rotates through 7 colors)
   get_gen_color() {
@@ -417,18 +428,31 @@ print(f'max_id=\"{max_id}\"')
   max_gen_num=0
   for gen in $(cut -d' ' -f1 "$gen_data_temp" | sort -u); do
     if grep -q "^$gen " "$gen_data_temp"; then
-      # Calculate average for this generation
-      sum=$(grep "^$gen " "$gen_data_temp" | awk '{s+=$2} END {printf "%.6f", s}' 2>/dev/null || echo "0")
+      # Calculate median for this generation
+      # AIDEV-NOTE: Changed from mean to median to be more robust to outliers
+      # Extract all performance values for this generation and sort them
+      median=$(grep "^$gen " "$gen_data_temp" | awk '{print $2}' | sort -n | awk '{
+        a[NR] = $0
+      }
+      END {
+        if (NR % 2) {
+          # Odd number of elements
+          print a[(NR + 1) / 2]
+        } else {
+          # Even number of elements - average of two middle values
+          print (a[NR/2] + a[NR/2 + 1]) / 2.0
+        }
+      }' 2>/dev/null || echo "0")
       count=$(grep -c "^$gen " "$gen_data_temp")
       if [[ $count -gt 0 ]]; then
-        avg=$(echo "scale=4; $sum / $count" | bc -l 2>/dev/null || echo "0")
+        avg=$median  # Using median instead of mean
         gen_num=$(echo "$gen" | sed 's/gen0*//')
         # Track max generation number
         if [[ $gen_num =~ ^[0-9]+$ ]] && [[ $gen_num -gt $max_gen_num ]]; then
           max_gen_num=$gen_num
         fi
         color=$(get_gen_color "$gen_num")
-        echo "$gen_index \"Gen$gen_num\" $avg \"$color\"" >>"$gen_avg_file"
+        echo "$gen_index \"Gen$gen_num\" $avg \"$color\"" >>"$gen_avg_file"  # avg is now median
         ((gen_index++))
       fi
     fi
@@ -462,7 +486,7 @@ print(f'max_id=\"{max_id}\"')
         if [[ $gen_plots_added -gt 0 ]]; then
           plot_cmd="$plot_cmd, \\"$'\n'
         fi
-        plot_cmd="${plot_cmd}     \"$data_file\" using (\$4==$gen_num?\$1:1/0):3 with linespoints linewidth 2 linecolor rgb \"$color\" pointsize 1.2 title \"Gen $gen_num\""
+        plot_cmd="${plot_cmd}     \"$data_file\" using (\$4==$gen_num?\$1:1/0):3 with points linecolor rgb \"$color\" pointsize 0.6 title \"Gen $gen_num\""
         ((gen_plots_added++))
       fi
     done
@@ -472,15 +496,15 @@ print(f'max_id=\"{max_id}\"')
       if [[ $gen_plots_added -gt 0 ]]; then
         plot_cmd="$plot_cmd, \\"$'\n'
       fi
-      plot_cmd="${plot_cmd}     \"$winner_file\" using 1:3 with points pointtype 7 pointsize 3 linecolor rgb \"gold\" title \"Best ($max_id)\""
+      plot_cmd="${plot_cmd}     \"$winner_file\" using 1:3 with points pointtype 7 pointsize 1.5 linecolor rgb \"gold\" title \"Best ($max_id)\""
     fi
     
     # Fallback if no generation-specific plots
     if [[ $gen_plots_added -eq 0 ]]; then
-      plot_cmd="\"$data_file\" using 1:3 with linespoints linewidth 2 linecolor rgb \"#1f77b4\" pointsize 1.2 title \"Evolution Progress\""
+      plot_cmd="\"$data_file\" using 1:3 with points linecolor rgb \"#1f77b4\" pointsize 0.6 title \"Evolution Progress\""
       if [[ -n $max_id && -s "$winner_file" ]]; then
         plot_cmd="$plot_cmd, \\"$'\n'
-        plot_cmd="${plot_cmd}     \"$winner_file\" using 1:3 with points pointtype 7 pointsize 3 linecolor rgb \"gold\" title \"Best ($max_id)\""
+        plot_cmd="${plot_cmd}     \"$winner_file\" using 1:3 with points pointtype 7 pointsize 1.5 linecolor rgb \"gold\" title \"Best ($max_id)\""
       fi
     fi
     
@@ -506,21 +530,35 @@ set output "$output_file"
 set multiplot layout 2,1 margins 0.08,0.82,0.15,0.95 spacing 0.1,0.15
 
 #=================== TOP PLOT: Performance Over Time ===================
+# AIDEV-NOTE: Modified chart to show points only (no lines), smaller dots (0.6), 
+# and automatic x-axis tick thinning for 30+ data points
 set title "Algorithm Evolution Performance Over Time" font ",14"
 set xlabel "Completion Order (Algorithm #)"
 set ylabel "Performance Score"
 set grid
 set key outside right
-set xtics 1
+
+# Dynamic x-axis ticks based on data point count
+stats "$data_file" using 1 nooutput
+total_points = STATS_records - 1  # Subtract header line
+if (total_points > 30) {
+    tick_interval = int(total_points / 10.0 + 0.5)  # Show ~10 ticks for 30+ points
+    set xtics tick_interval
+} else if (total_points > 20) {
+    set xtics 2  # Show every 2nd tick for 20-30 points
+} else {
+    set xtics 1  # Show all ticks for < 20 points
+}
+
 set autoscale y
 
 # Define colors for generations
 plot $plot_cmd
 
-#=================== BOTTOM PLOT: Generation Averages ===================
-set title "Average Performance by Generation" font ",14"
+#=================== BOTTOM PLOT: Generation Medians ===================
+set title "Median Performance by Generation" font ",14"
 set xlabel "Generation"
-set ylabel "Avg Performance"
+set ylabel "Median Performance"
 set style fill solid 0.8
 set boxwidth 0.6
 unset key
