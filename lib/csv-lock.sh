@@ -4,36 +4,95 @@
 # Lock file location
 CSV_LOCKFILE="${EVOLUTION_DIR:-evolution}/.evolution.csv.lock"
 
-# Acquire exclusive lock on CSV file
+# Acquire exclusive lock on CSV file with automatic stale lock cleanup
 # Usage: acquire_csv_lock [timeout_seconds]
 acquire_csv_lock() {
-    local timeout="${1:-30}"
+    local timeout="${1:-${LOCK_TIMEOUT:-10}}"  # Reduced default timeout
     local lockdir="$(dirname "$CSV_LOCKFILE")"
     
     # Ensure lock directory exists
     mkdir -p "$lockdir"
     
-    # Try to acquire lock with timeout
-    if command -v flock >/dev/null 2>&1; then
-        # Use flock if available (Linux)
-        exec 200>"$CSV_LOCKFILE"
-        if ! flock -w "$timeout" -x 200; then
-            echo "ERROR: Failed to acquire CSV lock within $timeout seconds" >&2
-            return 1
-        fi
-    else
-        # Fallback for systems without flock (macOS)
-        local start_time=$(date +%s)
-        while ! (set -C; echo $$ > "$CSV_LOCKFILE") 2>/dev/null; do
-            local current_time=$(date +%s)
-            if [ $((current_time - start_time)) -ge $timeout ]; then
-                echo "ERROR: Failed to acquire CSV lock within $timeout seconds" >&2
-                return 1
+    # AIDEV-NOTE: Robust locking with automatic stale lock detection and cleanup
+    # CSV operations should be fast (<100ms), so long timeouts indicate problems
+    
+    # Clean up stale locks first
+    cleanup_stale_locks
+    
+    # Try to acquire lock with short timeout and fast retry
+    local end_time=$(($(date +%s) + timeout))
+    local sleep_time=0.01  # Start with 10ms sleep
+    
+    while [ $(date +%s) -lt $end_time ]; do
+        if command -v flock >/dev/null 2>&1; then
+            # Use flock if available (Linux) - this should be instant
+            exec 200>"$CSV_LOCKFILE"
+            if flock -n -x 200; then
+                return 0
             fi
-            sleep 0.1
-        done
+        else
+            # Fallback for systems without flock (macOS)
+            if (set -C; echo $$ > "$CSV_LOCKFILE") 2>/dev/null; then
+                return 0
+            fi
+            
+            # Check if existing lock is stale and clean it up
+            if [ -f "$CSV_LOCKFILE" ]; then
+                local lock_pid=$(cat "$CSV_LOCKFILE" 2>/dev/null)
+                if [[ "$lock_pid" =~ ^[0-9]+$ ]] && ! kill -0 "$lock_pid" 2>/dev/null; then
+                    echo "[DEBUG] Removing stale lock from dead process $lock_pid" >&2
+                    rm -f "$CSV_LOCKFILE"
+                    continue  # Try again immediately
+                fi
+            fi
+        fi
+        
+        # Brief sleep with exponential backoff (cap at 100ms)
+        sleep "$sleep_time"
+        sleep_time=$(echo "$sleep_time * 1.5" | bc -l 2>/dev/null | head -c 10)
+        if (( $(echo "$sleep_time > 0.1" | bc -l 2>/dev/null || echo 0) )); then
+            sleep_time=0.1
+        fi
+    done
+    
+    echo "ERROR: Failed to acquire CSV lock within $timeout seconds" >&2
+    echo "ERROR: This indicates a serious problem - CSV operations should be fast" >&2
+    
+    # As a last resort, if lock is very old, break it
+    if [ -f "$CSV_LOCKFILE" ]; then
+        local lock_age=$(($(date +%s) - $(stat -f %m "$CSV_LOCKFILE" 2>/dev/null || stat -c %Y "$CSV_LOCKFILE" 2>/dev/null || echo $(date +%s))))
+        if [ $lock_age -gt 60 ]; then  # Lock older than 1 minute is definitely stale
+            echo "[WARN] Breaking very old lock file (${lock_age}s old)" >&2
+            rm -f "$CSV_LOCKFILE"
+            return 1  # Still return error to trigger retry
+        fi
     fi
-    return 0
+    
+    return 1
+}
+
+# Clean up stale lock files
+cleanup_stale_locks() {
+    if [ ! -f "$CSV_LOCKFILE" ]; then
+        return 0
+    fi
+    
+    # Check file age - any lock older than 10 seconds is definitely stale
+    local lock_age=$(($(date +%s) - $(stat -f %m "$CSV_LOCKFILE" 2>/dev/null || stat -c %Y "$CSV_LOCKFILE" 2>/dev/null || echo $(date +%s))))
+    if [ $lock_age -gt 10 ]; then
+        echo "[DEBUG] Removing stale lock file (${lock_age}s old)" >&2
+        rm -f "$CSV_LOCKFILE"
+        return 0
+    fi
+    
+    # Check if process is still alive (macOS fallback mode only)
+    if ! command -v flock >/dev/null 2>&1; then
+        local lock_pid=$(cat "$CSV_LOCKFILE" 2>/dev/null)
+        if [[ "$lock_pid" =~ ^[0-9]+$ ]] && ! kill -0 "$lock_pid" 2>/dev/null; then
+            echo "[DEBUG] Removing lock from dead process $lock_pid" >&2
+            rm -f "$CSV_LOCKFILE"
+        fi
+    fi
 }
 
 # Release CSV lock

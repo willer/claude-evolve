@@ -263,11 +263,12 @@ get_csv_stats() {
   fi
   
   local total_rows complete_count pending_count
-  total_rows=$(wc -l < "$FULL_CSV_PATH" 2>/dev/null || echo "1")
-  complete_count=$(grep -c ',complete$' "$FULL_CSV_PATH" 2>/dev/null || echo "0")
+  total_rows=$(wc -l < "$FULL_CSV_PATH" | tr -d '[:space:]')
+  complete_count=$(grep -c ',complete' "$FULL_CSV_PATH" || echo "0")
   
   # Count pending: empty status or "pending"
-  pending_count=$(awk -F, 'NR>1 && ($5=="" || $5=="pending") {count++} END {print count+0}' "$FULL_CSV_PATH" 2>/dev/null || echo "0")
+  # Handle potential Windows line endings by stripping carriage returns
+  pending_count=$(awk -F, 'NR>1 {gsub(/\r/, "", $5); if($5=="" || $5=="pending") count++} END {print count+0}' "$FULL_CSV_PATH")
   
   echo "$total_rows $complete_count $pending_count"
 }
@@ -282,7 +283,7 @@ while true; do
   
   # Get current status
   read -r total_rows complete_count pending_count <<< "$(get_csv_stats)"
-  local active_workers=${#worker_pids[@]}
+  active_workers=${#worker_pids[@]}
   
   # Status reporting
   if [[ $total_rows -gt 1 ]]; then
@@ -295,7 +296,6 @@ while true; do
     echo "[DISPATCHER] No pending candidates found."
     
     # Check if auto ideation is enabled
-    echo "[DEBUG] AUTO_IDEATE value: '$AUTO_IDEATE'"
     if [[ "$AUTO_IDEATE" == "true" || "$AUTO_IDEATE" == "1" ]]; then
       echo "[DISPATCHER] Auto ideation is enabled. Generating new ideas..."
       
