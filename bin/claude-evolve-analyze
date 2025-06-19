@@ -538,19 +538,13 @@ set ylabel "Performance Score"
 set grid
 set key outside right
 
-# Dynamic x-axis ticks based on data point count
-stats "$data_file" using 1 nooutput
-total_points = STATS_records - 1  # Subtract header line
-if (total_points > 30) {
-    tick_interval = int(total_points / 10.0 + 0.5)  # Show ~10 ticks for 30+ points
-    set xtics tick_interval
-} else if (total_points > 20) {
-    set xtics 2  # Show every 2nd tick for 20-30 points
-} else {
-    set xtics 1  # Show all ticks for < 20 points
-}
+# AIDEV-NOTE: Simplified approach - let gnuplot auto-scale the axes
+# and just set reasonable defaults. The stats command was failing with the data format.
 
-set autoscale y
+# Set auto-scaling with small margins to prevent "all points out of range"
+set autoscale
+set yrange [*:*]  # Auto-scale y-axis
+set xrange [*:*]  # Auto-scale x-axis
 
 # Define colors for generations
 plot $plot_cmd
@@ -566,6 +560,10 @@ set grid y
 
 # Set custom x-axis labels
 set xtics ($xtics_labels)
+
+# Auto-scale for generation plot too
+set autoscale
+set yrange [*:*]
 
 plot "$gen_avg_file" using 1:3 with boxes linecolor rgb "#4CAF50" notitle
 
