@@ -543,21 +543,17 @@ set output "$output_file"
 set multiplot layout 2,1 margins 0.08,0.82,0.15,0.95 spacing 0.1,0.15
 
 #=================== TOP PLOT: Performance Over Time ===================
-# AIDEV-NOTE: Modified chart to show points only (no lines), smaller dots (0.6), 
-# and automatic x-axis tick thinning for 30+ data points
+# AIDEV-NOTE: Removed x-axis to eliminate tick overlap and formatting issues
 set title "Algorithm Evolution Performance Over Time" font ",14"
-set xlabel "Completion Order (Algorithm #)"
+unset xlabel
 set ylabel "Performance Score"
-set grid
+set grid y  # Only show horizontal grid lines
 set key outside right
 
-# AIDEV-NOTE: Simplified approach - let gnuplot auto-scale the axes
-# and just set reasonable defaults. The stats command was failing with the data format.
-
-# Set auto-scaling with small margins to prevent "all points out of range"
+# AIDEV-NOTE: Remove x-axis entirely to avoid tick problems with large datasets
+unset xtics
 set autoscale
-set yrange [*:*]  # Auto-scale y-axis
-set xrange [*:*]  # Auto-scale x-axis
+set yrange [*:*]  # Auto-scale y-axis only
 
 # Define colors for generations
 plot $plot_cmd
