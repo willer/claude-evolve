@@ -14,22 +14,21 @@ def should_skip_processing(id_val, based_on_id, parent_file, output_file):
     """
     Determine if evolution processing should be skipped.
     
+    Simple rule: If file exists, skip everything. This handles all edge cases cleanly.
+    
     Returns tuple: (skip_copy, skip_claude, reason)
     """
     # Baseline algorithm check
     if id_val in ["000", "0", "gen00-000"]:
         return True, True, "Baseline algorithm - no processing needed"
     
-    # Self-parent detection (parent=child scenario)
-    if parent_file == output_file:
-        return True, True, "Self-parent detected - preserving existing code"
+    # File existence check - if file exists, skip both copy and Claude
+    # This automatically handles self-parent cases and re-runs
+    if os.path.exists(output_file):
+        return True, True, "File already exists - skipping all processing"
     
-    # File existence check
-    file_exists = os.path.exists(output_file)
-    if file_exists and based_on_id == id_val:
-        return True, True, "File exists and self-referential - no changes needed"
-    
-    return file_exists, False, None
+    # File doesn't exist - proceed with copy and Claude
+    return False, False, None
 
 def get_parent_file_path(based_on_id, output_dir, root_dir):
     """Get the parent file path based on based_on_id."""
