@@ -156,45 +156,56 @@ shutdown_workers() {
   exit 0
 }
 
-# Signal handling
+# Signal handling - graceful shutdown with force option
 handle_signal() {
   local signal="$1"
   echo "[DISPATCHER] Received signal: $signal" >&2
   echo "[DISPATCHER] Active workers: ${#worker_pids[@]}" >&2
   
-  # For expensive workers, give option to continue
+  # For expensive workers, give option to force shutdown
   if [[ ${#worker_pids[@]} -gt 0 ]]; then
     echo "[DISPATCHER] Warning: ${#worker_pids[@]} expensive workers are still running!" >&2
-    echo "[DISPATCHER] Press Ctrl+C again within 5 seconds to force shutdown, or wait..." >&2
+    echo "[DISPATCHER] Press Ctrl+C again to force shutdown immediately, or wait for graceful shutdown..." >&2
     
-    # Give 5 seconds to reconsider
-    local count=5
-    while [[ $count -gt 0 ]]; do
+    # Give a few seconds for force shutdown option
+    local count=3
+    while [[ $count -gt 0 && "$force_shutdown_requested" != "true" ]]; do
       sleep 1
       ((count--))
-      # Check if signal received again
-      if received_second_signal; then
-        echo "[DISPATCHER] Second signal received, forcing shutdown..." >&2
-        shutdown_workers
-        return
-      fi
     done
     
-    echo "[DISPATCHER] Continuing with graceful shutdown..." >&2
+    if [[ "$force_shutdown_requested" == "true" ]]; then
+      echo "[DISPATCHER] Force shutdown in progress..." >&2
+      return  # shutdown_workers already called
+    fi
+    
+    echo "[DISPATCHER] Proceeding with graceful shutdown..." >&2
   fi
   
   shutdown_workers
 }
 
-# Track second signal for force shutdown
+# Track signals for force shutdown  
 signal_count=0
-received_second_signal() {
+force_shutdown_requested=false
+
+# Immediate signal handler for force shutdown detection
+signal_handler() {
   ((signal_count++))
-  [[ $signal_count -gt 1 ]]
+  
+  if [[ $signal_count -eq 1 ]]; then
+    # First signal - start graceful shutdown
+    handle_signal "SIGINT"
+  else
+    # Second+ signal - force shutdown immediately
+    echo "[DISPATCHER] Force shutdown requested!" >&2
+    force_shutdown_requested=true
+    shutdown_workers
+  fi
 }
 
 # Set up signal handlers
-trap 'handle_signal SIGINT' INT
+trap 'signal_handler' INT
 trap 'handle_signal SIGTERM' TERM
 
 # Function to start a worker
