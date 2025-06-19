@@ -297,12 +297,39 @@ print(count)
     echo "[DISPATCHER] CSV has $((total_rows-1)) total candidates, $complete_count complete"
   fi
   
-  # If no pending work and no active workers, we're done
+  # If no pending work and no active workers, check for auto-ideation
   if [[ $pending_count -eq 0 && $active_workers -eq 0 ]]; then
-    echo "[DISPATCHER] No pending candidates found. Evolution complete."
-    echo "[DISPATCHER] Run 'claude-evolve ideate' to generate more candidates."
-    echo "[DISPATCHER] Exiting main loop: no work remaining" >&2
-    break
+    echo "[DISPATCHER] No pending candidates found."
+    
+    # Check if auto ideation is enabled
+    echo "[DEBUG] AUTO_IDEATE value: '$AUTO_IDEATE'"
+    if [[ "$AUTO_IDEATE" == "true" || "$AUTO_IDEATE" == "1" ]]; then
+      echo "[DISPATCHER] Auto ideation is enabled. Generating new ideas..."
+      
+      # Check if claude-evolve-ideate exists
+      ideate_script="$SCRIPT_DIR/claude-evolve-ideate"
+      if [[ ! -f "$ideate_script" ]]; then
+        echo "[ERROR] claude-evolve-ideate script not found: $ideate_script" >&2
+        echo "[DISPATCHER] Evolution complete - no way to generate more ideas."
+        break
+      fi
+      
+      # Generate new ideas using the multi-strategy approach
+      echo "[DISPATCHER] Calling claude-evolve-ideate to generate new candidates..."
+      if ! "$ideate_script"; then
+        echo "[ERROR] Failed to generate new ideas" >&2
+        echo "[DISPATCHER] Evolution complete - ideation failed."
+        break
+      fi
+      
+      echo "[DISPATCHER] New ideas generated successfully. Continuing evolution..."
+      continue  # Go back to start of loop to find the new candidates
+    else
+      echo "[DISPATCHER] Auto ideation is disabled. Evolution complete."
+      echo "[DISPATCHER] Run 'claude-evolve ideate' to generate more candidates."
+      echo "[DISPATCHER] Exiting main loop: no work remaining" >&2
+      break
+    fi
   fi
   
   # Start workers if we have pending work and capacity
