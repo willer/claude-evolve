@@ -1,13 +1,12 @@
 {
   "name": "claude-evolve",
-  "version": "1.3.38",
+  "version": "1.3.39",
   "bin": {
     "claude-evolve": "./bin/claude-evolve",
     "claude-evolve-main": "./bin/claude-evolve-main",
     "claude-evolve-setup": "./bin/claude-evolve-setup",
     "claude-evolve-ideate": "./bin/claude-evolve-ideate",
     "claude-evolve-run": "./bin/claude-evolve-run",
-    "claude-evolve-run-parallel": "./bin/claude-evolve-run-parallel",
     "claude-evolve-worker": "./bin/claude-evolve-worker",
     "claude-evolve-analyze": "./bin/claude-evolve-analyze",
     "claude-evolve-config": "./bin/claude-evolve-config"

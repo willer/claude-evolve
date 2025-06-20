@@ -205,7 +205,7 @@ your-project/
 
 ## Evaluator Output Format
 
-Your evaluator must output a performance score to stdout. Three formats are supported:
+Your evaluator must output a performance score to stdout. The system looks for either `performance` or `score` fields. Four formats are supported:
 
 ### 1. Plain Number (Simplest)
 Just output a single floating-point number:
@@ -227,7 +227,8 @@ Just output a single floating-point number:
 You can include additional metrics that will be automatically added as new columns to the CSV:
 ```json
 {
-  "score": 0.95,
+  "performance": 0.95,
+  "fitness": 0.82,
   "sharpe_ratio": 1.23,
   "max_drawdown": -0.15,
   "total_return": 0.42,
@@ -236,12 +237,14 @@ You can include additional metrics that will be automatically added as new colum
 ```
 
 **Important notes:**
+- The system accepts either `performance` or `score` (they are treated the same)
 - Higher scores indicate better performance
-- A score of 0 indicates complete failure
+- A score of 0 indicates complete failure and marks the candidate as "failed"
 - Non-zero exit codes indicate evaluation errors
 - Any additional output (warnings, logs) should go to stderr, not stdout
 - Additional JSON fields will be automatically added as new CSV columns
 - New columns are added after the standard columns (id, basedOnId, description, performance, status)
+- Common additional fields include: fitness, sharpe, sortino, total_return, yearly_return, max_drawdown, volatility, total_trades, win_rate, profit_factor, final_value
 
 ## Environment Variables for Evaluators
 

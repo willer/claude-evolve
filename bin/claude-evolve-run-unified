@@ -260,14 +260,14 @@ get_csv_stats() {
   local csv_path="${1:-$FULL_CSV_PATH}"
   
   if [[ ! -f "$csv_path" ]]; then
-    echo "[DEBUG] CSV not found at: $csv_path" >&2
+    echo "[ERROR] CSV not found at: $csv_path" >&2
     echo "0 0 0"
     return
   fi
   
   local total_rows complete_count pending_count
   total_rows=$(wc -l < "$csv_path" | tr -d '[:space:]')
-  complete_count=$(grep -c ',complete' "$csv_path" 2>/dev/null || echo "0")
+  complete_count=$(grep ',complete' "$csv_path" 2>/dev/null | wc -l | tr -d '[:space:]')
   
   # Count pending: empty status or "pending"
   # Handle potential Windows line endings by stripping carriage returns
@@ -278,8 +278,6 @@ get_csv_stats() {
 
 echo "[DISPATCHER] Starting unified evolution engine"
 echo "[DISPATCHER] Configuration: max_workers=$MAX_WORKERS, timeout=${timeout_seconds:-none}"
-echo "[DEBUG] CSV Path: $FULL_CSV_PATH"
-echo "[DEBUG] CSV exists: $([ -f "$FULL_CSV_PATH" ] && echo "yes" || echo "no")"
 
 # Main dispatch loop
 while true; do
@@ -287,11 +285,8 @@ while true; do
   cleanup_workers
   
   # Get current status
-  local csv_stats
   csv_stats=$(get_csv_stats "$FULL_CSV_PATH")
-  echo "[DEBUG] CSV stats output: '$csv_stats'" >&2
   read -r total_rows complete_count pending_count <<< "$csv_stats"
-  echo "[DEBUG] Parsed values: total_rows=$total_rows, complete_count=$complete_count, pending_count=$pending_count" >&2
   active_workers=${#worker_pids[@]}
   
   # Status reporting
