@@ -267,7 +267,7 @@ get_csv_stats() {
   
   local total_rows complete_count pending_count
   total_rows=$(wc -l < "$csv_path" | tr -d '[:space:]')
-  complete_count=$(grep -c ',complete' "$csv_path" || echo "0")
+  complete_count=$(grep -c ',complete' "$csv_path" 2>/dev/null || echo "0")
   
   # Count pending: empty status or "pending"
   # Handle potential Windows line endings by stripping carriage returns
@@ -287,7 +287,11 @@ while true; do
   cleanup_workers
   
   # Get current status
-  read -r total_rows complete_count pending_count <<< "$(get_csv_stats "$FULL_CSV_PATH")"
+  local csv_stats
+  csv_stats=$(get_csv_stats "$FULL_CSV_PATH")
+  echo "[DEBUG] CSV stats output: '$csv_stats'" >&2
+  read -r total_rows complete_count pending_count <<< "$csv_stats"
+  echo "[DEBUG] Parsed values: total_rows=$total_rows, complete_count=$complete_count, pending_count=$pending_count" >&2
   active_workers=${#worker_pids[@]}
   
   # Status reporting
