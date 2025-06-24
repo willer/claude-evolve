@@ -1,0 +1,297 @@
+#!/bin/bash
+
+set -e
+
+# Load configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/config.sh
+source "$SCRIPT_DIR/../lib/config.sh"
+
+# Use CLAUDE_EVOLVE_CONFIG if set, otherwise default
+if [[ -n ${CLAUDE_EVOLVE_CONFIG:-} ]]; then
+  load_config "$CLAUDE_EVOLVE_CONFIG"
+else
+  load_config
+fi
+
+# Function to show help
+show_help() {
+  cat <<EOF
+claude-evolve cleanup - Clean up unchanged algorithms and their descendants
+
+USAGE:
+  claude-evolve cleanup [OPTIONS]
+
+OPTIONS:
+  --dry-run    Show what would be done without making changes
+  --force      Actually perform the cleanup (required for real changes)
+  --help       Show this help message
+
+DESCRIPTION:
+  This tool finds algorithm files that are identical to their parent and:
+  1. Deletes the unchanged .py files
+  2. Resets those candidates to pending status in CSV
+  3. Finds and cleans up any descendants that inherited from the bad copies
+  
+  Use --dry-run first to see what would be affected.
+
+EXAMPLES:
+  claude-evolve cleanup --dry-run   # Preview changes
+  claude-evolve cleanup --force     # Actually clean up
+EOF
+}
+
+# Parse arguments
+DRY_RUN=true
+FORCE=false
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+  --dry-run)
+    DRY_RUN=true
+    shift
+    ;;
+  --force)
+    FORCE=true
+    DRY_RUN=false
+    shift
+    ;;
+  --help)
+    show_help
+    exit 0
+    ;;
+  *)
+    echo "[ERROR] Unknown option: $1" >&2
+    exit 1
+    ;;
+  esac
+done
+
+if [[ $FORCE == false ]]; then
+  DRY_RUN=true
+fi
+
+# Validate configuration
+if ! validate_config; then
+  echo "[ERROR] Configuration validation failed" >&2
+  exit 1
+fi
+
+# Check if CSV exists
+if [[ ! -f "$FULL_CSV_PATH" ]]; then
+  echo "[ERROR] Evolution CSV not found: $FULL_CSV_PATH" >&2
+  exit 1
+fi
+
+echo "🧹 Claude-Evolve Duplicate Cleanup Tool"
+echo "========================================"
+echo "Evolution directory: $FULL_EVOLUTION_DIR"
+echo "CSV file: $FULL_CSV_PATH"
+echo "Mode: $(if [[ $DRY_RUN == true ]]; then echo "DRY RUN (preview only)"; else echo "FORCE (will make changes)"; fi)"
+echo ""
+
+# Use Python to analyze and clean up duplicates
+"$PYTHON_CMD" -c "
+import csv
+import os
+import sys
+import shutil
+from pathlib import Path
+
+csv_file = '$FULL_CSV_PATH'
+evolution_dir = '$FULL_EVOLUTION_DIR'
+dry_run = '$DRY_RUN' == 'true'
+algorithm_file = '$FULL_ALGORITHM_PATH'
+
+def files_identical(file1, file2):
+    \"\"\"Check if two files have identical content.\"\"\"
+    if not os.path.exists(file1) or not os.path.exists(file2):
+        return False
+    
+    try:
+        with open(file1, 'rb') as f1, open(file2, 'rb') as f2:
+            return f1.read() == f2.read()
+    except Exception:
+        return False
+
+def get_algorithm_file_path(candidate_id, base_algorithm):
+    \"\"\"Get the file path for a candidate's algorithm.\"\"\"
+    # Handle both old and new format IDs
+    if candidate_id.isdigit():
+        filename = f'evolution_id{candidate_id}.py'
+    else:
+        filename = f'evolution_{candidate_id}.py'
+    
+    return os.path.join(evolution_dir, filename)
+
+def get_parent_file_path(based_on_id, base_algorithm):
+    \"\"\"Get the file path for a parent algorithm.\"\"\"
+    if not based_on_id or based_on_id == '0' or based_on_id == '\"\"':
+        return base_algorithm
+    
+    # Handle both old and new format IDs
+    if based_on_id.isdigit():
+        filename = f'evolution_id{based_on_id}.py'
+    else:
+        filename = f'evolution_{based_on_id}.py'
+    
+    return os.path.join(evolution_dir, filename)
+
+try:
+    # Read CSV
+    with open(csv_file, 'r') as f:
+        reader = csv.reader(f)
+        rows = list(reader)
+    
+    if len(rows) <= 1:
+        print('No candidates found in CSV')
+        sys.exit(0)
+    
+    header = rows[0]
+    candidates = {}
+    
+    # Build candidate map
+    for i, row in enumerate(rows[1:], 1):
+        if len(row) >= 3:
+            candidate_id = row[0]
+            based_on_id = row[1] if len(row) > 1 else ''
+            description = row[2] if len(row) > 2 else ''
+            performance = row[3] if len(row) > 3 else ''
+            status = row[4] if len(row) > 4 else ''
+            
+            candidates[candidate_id] = {
+                'row_index': i,
+                'based_on_id': based_on_id,
+                'description': description,
+                'performance': performance,
+                'status': status,
+                'file_path': get_algorithm_file_path(candidate_id, algorithm_file)
+            }
+    
+    print(f'Found {len(candidates)} candidates to analyze')
+    print('')
+    
+    # Find unchanged candidates
+    unchanged_candidates = []
+    
+    for candidate_id, info in candidates.items():
+        if not info['based_on_id'] or info['based_on_id'] == '0' or info['based_on_id'] == '\"\"':
+            # Skip root candidates (no parent)
+            continue
+            
+        parent_file = get_parent_file_path(info['based_on_id'], algorithm_file)
+        candidate_file = info['file_path']
+        
+        if os.path.exists(candidate_file) and files_identical(candidate_file, parent_file):
+            unchanged_candidates.append(candidate_id)
+            print(f'📋 UNCHANGED: {candidate_id} is identical to parent {info[\"based_on_id\"]}')
+            print(f'   File: {os.path.basename(candidate_file)}')
+            print(f'   Description: {info[\"description\"]}')
+            print(f'   Status: {info[\"status\"]}')
+            print('')
+    
+    if not unchanged_candidates:
+        print('✅ No unchanged candidates found - all algorithms appear to be properly mutated!')
+        sys.exit(0)
+    
+    print(f'Found {len(unchanged_candidates)} unchanged candidates')
+    print('')
+    
+    # Find descendants of unchanged candidates
+    def find_descendants(bad_parent_id, all_candidates, found=None):
+        if found is None:
+            found = set()
+        
+        for cand_id, info in all_candidates.items():
+            if info['based_on_id'] == bad_parent_id and cand_id not in found:
+                found.add(cand_id)
+                # Recursively find descendants of this candidate
+                find_descendants(cand_id, all_candidates, found)
+        
+        return found
+    
+    all_affected = set(unchanged_candidates)
+    
+    # Find all descendants
+    for unchanged_id in unchanged_candidates:
+        descendants = find_descendants(unchanged_id, candidates)
+        all_affected.update(descendants)
+        
+        if descendants:
+            print(f'🔗 DESCENDANTS of {unchanged_id}: {sorted(descendants)}')
+    
+    print('')
+    print(f'📊 SUMMARY:')
+    print(f'   • {len(unchanged_candidates)} unchanged candidates')
+    print(f'   • {len(all_affected) - len(unchanged_candidates)} descendants affected')
+    print(f'   • {len(all_affected)} total candidates to clean up')
+    print('')
+    
+    if dry_run:
+        print('🔍 DRY RUN - Showing what would be done:')
+        print('')
+        
+        for candidate_id in sorted(all_affected):
+            info = candidates[candidate_id]
+            action = 'DELETE FILE & RESET' if candidate_id in unchanged_candidates else 'RESET (descendant)'
+            print(f'   {action}: {candidate_id}')
+            print(f'     File: {os.path.basename(info[\"file_path\"])}')
+            print(f'     Description: {info[\"description\"]}')
+            print('')
+        
+        print('To actually perform cleanup, run with --force')
+    else:
+        print('🧹 PERFORMING CLEANUP:')
+        print('')
+        
+        # Delete files and update CSV
+        files_deleted = 0
+        rows_updated = 0
+        
+        for candidate_id in sorted(all_affected):
+            info = candidates[candidate_id]
+            
+            # Delete file if it exists (for unchanged candidates)
+            if candidate_id in unchanged_candidates and os.path.exists(info['file_path']):
+                try:
+                    os.remove(info['file_path'])
+                    files_deleted += 1
+                    print(f'   ✅ DELETED: {os.path.basename(info[\"file_path\"])}')
+                except Exception as e:
+                    print(f'   ❌ FAILED to delete {os.path.basename(info[\"file_path\"])}: {e}')
+            
+            # Reset CSV row (clear performance and status, keep description)
+            row_idx = info['row_index']
+            if len(rows[row_idx]) >= 5:
+                # Clear performance (column 3) and status (column 4), but keep first 3 columns
+                rows[row_idx] = rows[row_idx][:3] + ['', ''] + rows[row_idx][5:]
+                rows_updated += 1
+                print(f'   ✅ RESET CSV: {candidate_id} -> pending')
+        
+        # Write updated CSV
+        try:
+            with open(csv_file + '.tmp', 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerows(rows)
+            
+            # Atomic replace
+            os.rename(csv_file + '.tmp', csv_file)
+            print('')
+            print(f'✅ CLEANUP COMPLETE:')
+            print(f'   • {files_deleted} files deleted')
+            print(f'   • {rows_updated} CSV rows reset to pending')
+            print(f'   • CSV updated successfully')
+            
+        except Exception as e:
+            print(f'❌ FAILED to update CSV: {e}')
+            sys.exit(1)
+
+except Exception as e:
+    print(f'Error: {e}')
+    sys.exit(1)
+"
+
+echo ""
+if [[ $DRY_RUN == true ]]; then
+  echo "💡 TIP: Run with --force to actually perform the cleanup"
+fi

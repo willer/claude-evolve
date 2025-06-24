@@ -1,0 +1,220 @@
+#!/bin/bash
+
+set -e
+
+# Load configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/config.sh
+source "$SCRIPT_DIR/../lib/config.sh"
+
+# Use CLAUDE_EVOLVE_CONFIG if set, otherwise default
+if [[ -n ${CLAUDE_EVOLVE_CONFIG:-} ]]; then
+  load_config "$CLAUDE_EVOLVE_CONFIG"
+else
+  load_config
+fi
+
+# Validate configuration
+if ! validate_config; then
+  echo "[ERROR] Configuration validation failed" >&2
+  exit 1
+fi
+
+# Function to show help
+show_help() {
+  cat <<EOF
+claude-evolve status - Show evolution progress and current leader
+
+USAGE:
+  claude-evolve status [OPTIONS]
+
+OPTIONS:
+  --brief     Show only summary stats (no per-generation breakdown)
+  --winner    Show only the current best performer
+  --help      Show this help message
+
+DESCRIPTION:
+  Displays evolution progress by generation including:
+  - Candidate counts by status (pending, complete, failed, running)
+  - Current best performer across all generations
+  - Generation-by-generation breakdown
+
+EXAMPLES:
+  claude-evolve status          # Full status report
+  claude-evolve status --brief  # Just totals and winner
+  claude-evolve status --winner # Just the best performer
+EOF
+}
+
+# Parse arguments
+SHOW_BRIEF=false
+SHOW_WINNER_ONLY=false
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+  --brief)
+    SHOW_BRIEF=true
+    shift
+    ;;
+  --winner)
+    SHOW_WINNER_ONLY=true
+    shift
+    ;;
+  --help)
+    show_help
+    exit 0
+    ;;
+  *)
+    echo "[ERROR] Unknown option: $1" >&2
+    exit 1
+    ;;
+  esac
+done
+
+# Check if CSV exists
+if [[ ! -f "$FULL_CSV_PATH" ]]; then
+  echo "[ERROR] Evolution CSV not found: $FULL_CSV_PATH" >&2
+  echo "Run 'claude-evolve setup' first or navigate to the correct directory" >&2
+  exit 1
+fi
+
+# Determine what we're evolving based on paths
+EVOLUTION_CONTEXT=""
+if [[ -n "$EVOLUTION_DIR" ]]; then
+  # Get the evolution directory name (e.g., "evolution-atr" -> "ATR")
+  EVOLUTION_NAME=$(basename "$EVOLUTION_DIR")
+  EVOLUTION_CONTEXT="${EVOLUTION_NAME#evolution-}"
+  EVOLUTION_CONTEXT=$(echo "$EVOLUTION_CONTEXT" | tr '[:lower:]' '[:upper:]')
+fi
+
+# If we can't determine from evolution dir, try from algorithm path
+if [[ -z "$EVOLUTION_CONTEXT" && -n "$ALGORITHM_PATH" ]]; then
+  # Get parent directory name or algorithm file name
+  if [[ -f "$FULL_ALGORITHM_PATH" ]]; then
+    ALGO_NAME=$(basename "$FULL_ALGORITHM_PATH" .py)
+    EVOLUTION_CONTEXT="$ALGO_NAME"
+  fi
+fi
+
+# Default if we still can't determine
+if [[ -z "$EVOLUTION_CONTEXT" ]]; then
+  EVOLUTION_CONTEXT="Algorithm"
+fi
+
+# Main status reporting using Python
+"$PYTHON_CMD" -c "
+import csv
+import sys
+
+csv_file = '$FULL_CSV_PATH'
+show_brief = '$SHOW_BRIEF' == 'true'
+show_winner_only = '$SHOW_WINNER_ONLY' == 'true'
+evolution_context = '$EVOLUTION_CONTEXT'
+
+try:
+    with open(csv_file, 'r') as f:
+        reader = csv.reader(f)
+        rows = list(reader)
+    
+    if len(rows) <= 1:
+        print('No evolution candidates found')
+        sys.exit(0)
+    
+    header = rows[0]
+    
+    # Collect all candidates with scores and statuses
+    all_candidates = []
+    stats_by_gen = {}
+    total_stats = {'pending': 0, 'complete': 0, 'failed': 0, 'running': 0}
+    
+    for row in rows[1:]:
+        if len(row) >= 1 and row[0]:  # Must have an ID
+            candidate_id = row[0]
+            
+            # Extract generation (e.g., 'gen03' from 'gen03-001')
+            if '-' in candidate_id:
+                gen = candidate_id.split('-')[0]
+                
+                # Get status and performance
+                status = row[4] if len(row) > 4 and row[4] else 'pending'
+                performance = row[3] if len(row) > 3 and row[3] else ''
+                
+                # Track by generation
+                if gen not in stats_by_gen:
+                    stats_by_gen[gen] = {'pending': 0, 'complete': 0, 'failed': 0, 'running': 0}
+                
+                if status in stats_by_gen[gen]:
+                    stats_by_gen[gen][status] += 1
+                    total_stats[status] += 1
+                else:
+                    stats_by_gen[gen]['pending'] += 1
+                    total_stats['pending'] += 1
+                
+                # Collect for winner analysis (only completed with valid scores)
+                if status == 'complete' and performance:
+                    try:
+                        score = float(performance)
+                        description = row[2] if len(row) > 2 else 'No description'
+                        all_candidates.append((candidate_id, description, score))
+                    except ValueError:
+                        pass
+    
+    # Find the winner
+    winner = None
+    if all_candidates:
+        winner = max(all_candidates, key=lambda x: x[2])
+    
+    # Show winner only
+    if show_winner_only:
+        if winner:
+            print(f'🏆 CURRENT LEADER: {winner[0]} (score: {winner[2]:.4f})')
+            print(f'   {winner[1]}')
+        else:
+            print('No completed candidates found')
+        sys.exit(0)
+    
+    # Show header
+    print(f'🧬 Evolution Status Report - {evolution_context}')
+    print('=' * 50)
+    
+    # Show overall stats
+    total_candidates = sum(total_stats.values())
+    if total_candidates > 0:
+        print(f'📊 OVERALL: {total_candidates} total candidates')
+        print(f'   • {total_stats[\"pending\"]} pending')
+        print(f'   • {total_stats[\"complete\"]} complete') 
+        print(f'   • {total_stats[\"failed\"]} failed')
+        print(f'   • {total_stats[\"running\"]} running')
+        print()
+    
+    # Show current winner
+    if winner:
+        print(f'🏆 CURRENT LEADER: {winner[0]} (score: {winner[2]:.4f})')
+        print(f'   {winner[1]}')
+        print()
+    else:
+        print('🏆 CURRENT LEADER: None (no completed candidates)')
+        print()
+    
+    # Show per-generation breakdown (unless brief mode)
+    if not show_brief and stats_by_gen:
+        print('📈 BY GENERATION:')
+        for gen in sorted(stats_by_gen.keys()):
+            data = stats_by_gen[gen]
+            total = sum(data.values())
+            
+            # Find best performer in this generation
+            gen_candidates = [c for c in all_candidates if c[0].startswith(gen + '-')]
+            gen_best = max(gen_candidates, key=lambda x: x[2]) if gen_candidates else None
+            
+            status_str = f'{data[\"pending\"]}p {data[\"complete\"]}c {data[\"failed\"]}f {data[\"running\"]}r'
+            
+            if gen_best:
+                print(f'   {gen}: {total} total ({status_str}) - best: {gen_best[0]} ({gen_best[2]:.4f})')
+            else:
+                print(f'   {gen}: {total} total ({status_str}) - best: none')
+
+except Exception as e:
+    print(f'Error reading evolution status: {e}')
+    sys.exit(1)
+"

@@ -30,7 +30,7 @@ get_model_for_generation() {
   if (( gen_num % 2 == 1 )); then
     echo "opus"    # Odd generations: use Opus for exploration
   else
-    echo "o3-pro"  # Even generations: use o3-pro for refinement
+    echo "o3"      # Even generations: use o3 for refinement
   fi
 }
 
@@ -46,19 +46,19 @@ call_ai_with_limit_check() {
   echo "[INFO] Generation $generation: Using $preferred_model" >&2
   
   # Try preferred model first
-  if [[ "$preferred_model" == "o3-pro" ]] && command -v codex >/dev/null 2>&1; then
-    echo "[INFO] Using codex o3-pro for ideation" >&2
+  if [[ "$preferred_model" == "o3" ]] && command -v codex >/dev/null 2>&1; then
+    echo "[INFO] Using codex o3 for ideation" >&2
     
-    # Call codex with o3-pro model using -q flag and --full-auto
+    # Call codex with o3 model using -q flag and --full-auto
     local ai_output
-    ai_output=$(codex -m o3-pro --full-auto -q "$prompt" 2>&1)
+    ai_output=$(codex -m o3 --full-auto -q "$prompt" 2>&1)
     local ai_exit_code=$?
     
     if [[ $ai_exit_code -eq 0 ]]; then
       echo "$ai_output"
       return 0
     else
-      echo "[WARN] Codex o3-pro failed, falling back to Claude Opus" >&2
+      echo "[WARN] Codex o3 failed, falling back to Claude Opus" >&2
       preferred_model="opus"
     fi
   fi
@@ -328,10 +328,22 @@ CRITICAL CSV FORMAT RULES:
   * Are impossible given the codebase structure
   * Would break the algorithm interface requirements
 
+⚠️ AVOID POSITION SIZING PARAMETERS - THEY GET CLAMPED:
+Since we trade leveraged ETFs (3x), positions are clamped to 1.0 maximum. These parameters often have NO EFFECT:
+- Kelly floor/cap adjustments (KELLY_FLOOR, kelly multiplier caps)
+- Volatility scale factors that push positions > 1.0
+- Any position sizing assuming leverage > 100%
+
+✅ FOCUS ON TRADE DECISION PARAMETERS:
+- Entry/exit thresholds (IBS_BUY_THRESHOLD, LARISSA_LOW_THRESHOLD, TRS_BULL_BUY_THRESHOLD, etc.)
+- Indicator periods (ATR_PERIOD, RSI_PERIOD, EMA_PERIOD, TDD_TREND_PERIOD, etc.)
+- Strategy weights (WEIGHT_LARISSA, WEIGHT_ATR_TREND, WEIGHT_TDD, etc.)
+- Enable/disable flags and new trading logic
+
 Example descriptions:
-- Use ensemble of 3 random forests with different feature subsets
-- Replace neural network with gradient boosting decision trees
-- Implement Monte Carlo tree search for feature selection
+- Lower IBS_BUY_THRESHOLD from 0.15 to 0.10 to enter deeper oversold conditions
+- Increase TRS_RSI_PERIOD from 2 to 3 for smoother RSI signals
+- Add VIX regime filter that disables mean reversion when VIX > 25
 
 Add exactly $count rows to the CSV file now."
 
@@ -391,10 +403,22 @@ CRITICAL CSV FORMAT RULES:
   * What changes made this algorithm successful vs its parent
   * What parameter ranges make sense given the implementation
 
+⚠️ AVOID POSITION SIZING PARAMETERS - THEY GET CLAMPED:
+Since we trade leveraged ETFs (3x), positions are clamped to 1.0 maximum. These parameters often have NO EFFECT:
+- Kelly floor/cap adjustments (KELLY_FLOOR, kelly multiplier caps)
+- Volatility scale factors that push positions > 1.0
+- Any position sizing assuming leverage > 100%
+
+✅ FOCUS ON TRADE DECISION PARAMETERS:
+- Entry/exit thresholds (IBS_BUY_THRESHOLD, LARISSA_LOW_THRESHOLD, TRS_BULL_BUY_THRESHOLD, etc.)
+- Indicator periods (ATR_PERIOD, RSI_PERIOD, EMA_PERIOD, TDD_TREND_PERIOD, etc.)
+- Strategy weights (WEIGHT_LARISSA, WEIGHT_ATR_TREND, WEIGHT_TDD, etc.)
+- Enable/disable flags and new trading logic
+
 Example descriptions:
-- Increase learning rate from 0.001 to 0.01 for faster convergence
-- Reduce batch size from 32 to 16 to improve gradient estimates
-- Set dropout rate to 0.3 instead of 0.1 to prevent overfitting
+- Lower IBS_BUY_THRESHOLD from 0.15 to 0.12 to enter deeper oversold conditions
+- Increase TRS_RSI_PERIOD from 2 to 3 for smoother RSI signals
+- Raise WEIGHT_TDD from 0.38 to 0.42 to emphasize best performing strategy
 
 Add exactly $count parameter tuning rows to the CSV file now."
 
@@ -454,10 +478,22 @@ CRITICAL CSV FORMAT RULES:
   * What architectural decisions led to this algorithm's success
   * Which components are essential vs which can be replaced
 
+⚠️ AVOID POSITION SIZING PARAMETERS - THEY GET CLAMPED:
+Since we trade leveraged ETFs (3x), positions are clamped to 1.0 maximum. These parameters often have NO EFFECT:
+- Kelly floor/cap adjustments (KELLY_FLOOR, kelly multiplier caps)
+- Volatility scale factors that push positions > 1.0
+- Any position sizing assuming leverage > 100%
+
+✅ FOCUS ON STRUCTURAL CHANGES TO TRADE DECISIONS:
+- Replace indicators with different variants (RSI → Stochastic, SMA → Hull MA)
+- Add new entry/exit conditions or filters
+- Modify strategy combination logic or weighting schemes
+- Change sub-strategy behaviors or add new sub-strategies
+
 Example descriptions:
-- Replace linear layers with convolutional layers for spatial feature learning
-- Use bidirectional LSTM instead of unidirectional for better context
-- Add residual connections between layers to improve gradient flow
+- Replace 2-period RSI with 3-period Stochastic for TRS strategy signals
+- Add Hull moving average crossover filter to ATR trend entries
+- Implement dynamic strategy weights based on recent 30-day performance
 
 Add exactly $count structural modification rows to the CSV file now."
 
@@ -517,10 +553,22 @@ CRITICAL CSV FORMAT RULES:
   * Understand which components are compatible for merging
   * Ensure the combined approach is technically feasible in the codebase
 
+⚠️ AVOID POSITION SIZING PARAMETERS - THEY GET CLAMPED:
+Since we trade leveraged ETFs (3x), positions are clamped to 1.0 maximum. These parameters often have NO EFFECT:
+- Kelly floor/cap adjustments (KELLY_FLOOR, kelly multiplier caps)
+- Volatility scale factors that push positions > 1.0
+- Any position sizing assuming leverage > 100%
+
+✅ FOCUS ON COMBINING TRADE DECISION ELEMENTS:
+- Merge entry/exit logic from different successful algorithms
+- Combine indicator calculations or filtering approaches
+- Integrate strategy weight adjustments or timing mechanisms
+- Blend new trading logic with proven parameter sets
+
 Example descriptions:
-- Combine ensemble voting from algorithm 3 with feature selection from algorithm 5
-- Use the attention mechanism from algorithm 2 with the optimizer from algorithm 4
-- Merge the preprocessing pipeline from algorithm 1 with the architecture from algorithm 6
+- Combine VIX regime filter from algorithm 3 with dynamic weights from algorithm 5
+- Merge Hull MA trend detection from algorithm 2 with RSI thresholds from algorithm 4
+- Integrate momentum scoring from algorithm 1 with volatility filtering from algorithm 6
 
 Add exactly $count hybrid combination rows to the CSV file now."
 
@@ -590,6 +638,18 @@ CRITICAL CSV FORMAT RULES:
 - Maintain exact CSV format: id,basedOnId,description,performance,status
 - Leave performance and status fields completely empty (just commas)
 - Use proper CSV quoting only when descriptions contain commas
+
+⚠️ AVOID POSITION SIZING PARAMETERS - THEY GET CLAMPED:
+Since we trade leveraged ETFs (3x), positions are clamped to 1.0 maximum. These parameters often have NO EFFECT:
+- Kelly floor/cap adjustments (KELLY_FLOOR, kelly multiplier caps)
+- Volatility scale factors that push positions > 1.0
+- Any position sizing assuming leverage > 100%
+
+✅ FOCUS ON TRADE DECISION PARAMETERS:
+- Entry/exit thresholds (IBS_BUY_THRESHOLD, LARISSA_LOW_THRESHOLD, TRS_BULL_BUY_THRESHOLD, etc.)
+- Indicator periods (ATR_PERIOD, RSI_PERIOD, EMA_PERIOD, TDD_TREND_PERIOD, etc.)
+- Strategy weights (WEIGHT_LARISSA, WEIGHT_ATR_TREND, WEIGHT_TDD, etc.)
+- Enable/disable flags and new trading logic
 
 Add exactly $TOTAL_IDEAS algorithm variation rows to the CSV file now."
 

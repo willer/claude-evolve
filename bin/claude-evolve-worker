@@ -4,6 +4,20 @@
 
 set -e
 
+# Track temp file for cleanup
+temp_file=""
+
+# Cleanup function for temp files
+cleanup_temp() {
+  if [[ -n "$temp_file" && -f "$temp_file" ]]; then
+    rm -f "$temp_file"
+    echo "[WORKER-$$] Cleaned up temp file: $temp_file" >&2
+  fi
+}
+
+# Set trap to clean up temp files on exit
+trap cleanup_temp EXIT INT TERM
+
 # Load configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/config.sh
@@ -47,7 +61,7 @@ done
 if [[ -z $candidate_id ]]; then
   candidate_id=$(find_next_pending_with_lock)
   if [[ -z $candidate_id ]]; then
-    echo "[INFO] No pending candidates found"
+    echo "[DEBUG] No pending candidates found" >&2
     exit 0
   fi
 else
@@ -130,27 +144,35 @@ else
   fi
 fi
 
-# Generate output file
+# Generate output file path
 if [[ $id =~ ^[0-9]+$ ]]; then
   output_file="$FULL_OUTPUT_DIR/evolution_id${id}.py"
 else
   output_file="$FULL_OUTPUT_DIR/evolution_${id}.py"
 fi
 
+# Use temp file for mutations to avoid partial/failed edits
+temp_file="${output_file}.tmp$$"
+
 # Check if processing should be skipped using common logic
 eval "$("$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_processor.py" "$id" "$based_on_id" "$FULL_OUTPUT_DIR" "$ROOT_DIR" "$parent_file" "$output_file")"
 
-# Handle copy operation
+# Handle copy operation to temp file
 if [[ "$skip_copy" == "True" ]]; then
   echo "[WORKER-$$] ⚠️  Skipping copy - $reason"
 else
-  cp "$parent_file" "$output_file"
-  echo "[WORKER-$$] Copied parent to: $output_file"
+  cp "$parent_file" "$temp_file"
+  echo "[WORKER-$$] Copied parent to temp file: $temp_file"
 fi
 
 # Handle Claude mutation based on skip flags
 if [[ "$skip_claude" == "True" ]]; then
   echo "[WORKER-$$] ⚠️  Skipping Claude processing - $reason"
+  # If we have a temp file but are skipping Claude, move it to final location
+  if [[ -f "$temp_file" ]]; then
+    mv "$temp_file" "$output_file"
+    echo "[WORKER-$$] Moved temp file to final location (no Claude processing)"
+  fi
 else
   # Check for claude CLI
   claude_cmd="${CLAUDE_CMD:-claude}"
@@ -164,7 +186,7 @@ else
   echo "[WORKER-$$] Using Claude $CLAUDE_MODEL for mutation"
   
   # Create mutation prompt
-  prompt="Edit the file $output_file to implement this specific change: $description
+  prompt="Edit the file $temp_file to implement this specific change: $description
 
 Requirements:
 - Edit the file directly (don't just provide comments or suggestions)
@@ -189,18 +211,57 @@ The file currently contains the parent algorithm. Modify it according to the des
   claude_output=$(echo "$prompt" | "$claude_cmd" --dangerously-skip-permissions --model $CLAUDE_MODEL -p 2>&1 | tee -a "$LOGFILE")
   claude_exit_code=${PIPESTATUS[1]}
   
-  # Check for rate limit
-  if echo "$claude_output" | grep -q "Claude AI usage limit reached"; then
-    echo "[ERROR] Claude API rate limit reached" >&2
+  # Check for rate limit (multiple possible messages)
+  if echo "$claude_output" | grep -q -E "(usage limit|rate limit|limit reached|too many requests)"; then
+    echo "⚠️  Claude API rate limit reached" >&2
+    echo "⚠️  Claude output:" >&2
+    echo "$claude_output" >&2
+    # Clean up the temp file
+    if [[ -f "$temp_file" ]]; then
+      rm "$temp_file"
+      echo "[WORKER-$$] Cleaned up temp file due to rate limit" >&2
+    fi
     # Reset to pending so it can be retried later
     update_csv_row_with_lock "$candidate_id" "status" "pending"
     exit 2  # Special exit code for rate limit
   fi
   
   if [[ $claude_exit_code -ne 0 ]]; then
-    echo "[ERROR] Claude failed to mutate algorithm" >&2
+    echo "⚠️  Claude failed to mutate algorithm (exit code: $claude_exit_code)" >&2
+    echo "⚠️  Claude output:" >&2
+    echo "$claude_output" >&2
+    # Clean up the temp file
+    if [[ -f "$temp_file" ]]; then
+      rm "$temp_file"
+      echo "[WORKER-$$] Cleaned up temp file due to Claude failure" >&2
+    fi
     update_csv_row_with_lock "$candidate_id" "status" "failed"
     exit 1
+  fi
+  
+  # Verify that Claude actually modified the file
+  if [[ -f "$temp_file" && -f "$parent_file" ]]; then
+    if cmp -s "$temp_file" "$parent_file"; then
+      echo "⚠️  Unchanged algorithm detected - Claude didn't modify the file" >&2
+      echo "⚠️  Description was: $description" >&2
+      echo "⚠️  Claude's response:" >&2
+      echo "$claude_output" >&2
+      
+      # Clean up temp file and mark as failed
+      rm "$temp_file"
+      update_csv_row_with_lock "$candidate_id" "status" "failed"
+      exit 1
+    else
+      # Changes were made - move temp file to final location
+      mv "$temp_file" "$output_file"
+      echo "[WORKER-$$] Changes detected - moved to: $output_file"
+    fi
+  else
+    # If we can't compare, assume it's okay and move the file
+    if [[ -f "$temp_file" ]]; then
+      mv "$temp_file" "$output_file"
+      echo "[WORKER-$$] Moved temp file to: $output_file"
+    fi
   fi
 fi
 
@@ -244,7 +305,7 @@ if [[ $eval_exit_code -eq 0 ]]; then
   # First, check if output is just a plain number
   if [[ $eval_output =~ ^[[:space:]]*-?[0-9]+\.?[0-9]*[[:space:]]*$ ]]; then
     score=$(echo "$eval_output" | tr -d ' ')
-    if (( $(echo "$score == 0" | bc -l) )); then
+    if [[ $(echo "$score == 0" | bc -l) == "1" ]]; then
       update_csv_row_with_lock "$candidate_id" "status" "failed"
       update_csv_row_with_lock "$candidate_id" "performance" "$score"
       echo "[WORKER-$$] ✗ Evaluation failed with score 0"
@@ -286,7 +347,7 @@ if [[ $eval_exit_code -eq 0 ]]; then
   # Fallback: Try simple grep for score/performance fields
   if score=$(echo "$eval_output" | grep -o '"score"[[:space:]]*:[[:space:]]*[0-9.]*' | cut -d: -f2 | tr -d ' '); then
     if [[ -n $score ]]; then
-      if (( $(echo "$score == 0" | bc -l) )); then
+      if [[ $(echo "$score == 0" | bc -l) == "1" ]]; then
         update_csv_row_with_lock "$candidate_id" "status" "failed"
         update_csv_row_with_lock "$candidate_id" "performance" "$score"
         echo "[WORKER-$$] ✗ Evaluation failed with score 0"
@@ -303,7 +364,7 @@ if [[ $eval_exit_code -eq 0 ]]; then
   # Try "performance" field
   if score=$(echo "$eval_output" | grep -o '"performance"[[:space:]]*:[[:space:]]*[0-9.]*' | cut -d: -f2 | tr -d ' '); then
     if [[ -n $score ]]; then
-      if (( $(echo "$score == 0" | bc -l) )); then
+      if [[ $(echo "$score == 0" | bc -l) == "1" ]]; then
         update_csv_row_with_lock "$candidate_id" "status" "failed"
         update_csv_row_with_lock "$candidate_id" "performance" "$score"
         echo "[WORKER-$$] ✗ Evaluation failed with score 0"
@@ -319,6 +380,8 @@ if [[ $eval_exit_code -eq 0 ]]; then
   
   echo "[ERROR] No score found in evaluator output" >&2
   echo "[ERROR] Expected: plain number (e.g., 1.23) or JSON with 'score' or 'performance' field" >&2
+  echo "[ERROR] Actual evaluator output was:" >&2
+  echo "$eval_output" >&2
   update_csv_row_with_lock "$candidate_id" "status" "failed"
   exit 1
 else

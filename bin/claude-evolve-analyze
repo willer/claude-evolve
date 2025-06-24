@@ -77,7 +77,30 @@ if [[ ! -f $csv_file ]]; then
   exit 1
 fi
 
-echo "=== Evolution Analysis Summary ==="
+# Determine what we're evolving based on paths
+EVOLUTION_CONTEXT=""
+if [[ -n "$EVOLUTION_DIR" ]]; then
+  # Get the evolution directory name (e.g., "evolution-atr" -> "ATR")
+  EVOLUTION_NAME=$(basename "$EVOLUTION_DIR")
+  EVOLUTION_CONTEXT="${EVOLUTION_NAME#evolution-}"
+  EVOLUTION_CONTEXT=$(echo "$EVOLUTION_CONTEXT" | tr '[:lower:]' '[:upper:]')
+fi
+
+# If we can't determine from evolution dir, try from algorithm path
+if [[ -z "$EVOLUTION_CONTEXT" && -n "$ALGORITHM_FILE" ]]; then
+  # Get algorithm file name
+  if [[ -f "$FULL_ALGORITHM_PATH" ]]; then
+    ALGO_NAME=$(basename "$FULL_ALGORITHM_PATH" .py)
+    EVOLUTION_CONTEXT="$ALGO_NAME"
+  fi
+fi
+
+# Default if we still can't determine
+if [[ -z "$EVOLUTION_CONTEXT" ]]; then
+  EVOLUTION_CONTEXT="Algorithm"
+fi
+
+echo "=== Evolution Analysis Summary - $EVOLUTION_CONTEXT ==="
 echo
 
 # Count totals (pure shell)
@@ -402,6 +425,7 @@ with open('$csv_file', 'r') as f:
     
     max_perf = 0
     max_id = ''
+    max_desc = ''
     max_order = 0
     completed_order = 0
     
@@ -415,12 +439,16 @@ with open('$csv_file', 'r') as f:
                         max_perf = perf_val
                         max_order = completed_order
                         max_id = row[0]
+                        max_desc = row[2] if len(row) > 2 else ''
             except ValueError:
                 pass
 
 print(f'max_perf={max_perf}')
 print(f'max_row={max_order}')
 print(f'max_id=\"{max_id}\"')
+# Escape special characters in description for shell
+desc_escaped = max_desc.replace('\\\\', '\\\\\\\\').replace('\"', '\\\\\"').replace('\$', '\\\\\$').replace('\`', '\\\\\`')
+print(f'max_desc=\"{desc_escaped}\"')
 ")"
 
   # Create generation averages file and track max generation
@@ -544,7 +572,7 @@ set multiplot layout 2,1 margins 0.08,0.82,0.15,0.95 spacing 0.1,0.15
 
 #=================== TOP PLOT: Performance Over Time ===================
 # AIDEV-NOTE: Removed x-axis to eliminate tick overlap and formatting issues
-set title "Algorithm Evolution Performance Over Time" font ",14"
+set title "$EVOLUTION_CONTEXT Algorithm Evolution Performance Over Time" font ",14"
 unset xlabel
 set ylabel "Performance Score"
 set grid y  # Only show horizontal grid lines
@@ -578,10 +606,11 @@ plot "$gen_avg_file" using 1:3 with boxes linecolor rgb "#4CAF50" notitle
 
 unset multiplot
 
-# Add winner label at bottom
-set terminal png size 1200,830
+# Add winner label and description at bottom
+set terminal png size 1200,850
 set output "$output_file"
-set label "Best Overall: $max_id (Score: $max_perf)" at screen 0.5, 0.05 center font ",12"
+set label "Best Overall: $max_id (Score: $max_perf)" at screen 0.5, 0.07 center font ",12"
+set label "$max_desc" at screen 0.5, 0.04 center font ",10" textcolor rgb "#666666"
 replot
 EOF
   else

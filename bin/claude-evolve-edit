@@ -1,0 +1,293 @@
+#!/bin/bash
+
+set -e
+
+# Load configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/config.sh
+source "$SCRIPT_DIR/../lib/config.sh"
+
+# Use CLAUDE_EVOLVE_CONFIG if set, otherwise default
+if [[ -n ${CLAUDE_EVOLVE_CONFIG:-} ]]; then
+  load_config "$CLAUDE_EVOLVE_CONFIG"
+else
+  load_config
+fi
+
+# Function to show help
+show_help() {
+  cat <<EOF
+claude-evolve edit - Manage evolution candidate statuses by generation or status
+
+USAGE:
+  claude-evolve edit <selector> <action>
+
+SELECTORS:
+  gen01, gen02, etc.  Target specific generation
+  all                 Target all generations
+  failed              Target all candidates with failed status
+  complete            Target all candidates with complete status
+  pending             Target all candidates with pending status
+  running             Target all candidates with running status
+
+ACTIONS:
+  failed    Mark candidates as failed (keeps scores)
+  complete  Mark candidates as complete (keeps scores)  
+  pending   Mark candidates as pending (keeps scores)
+  reboot    Reset completely (delete .py files, clear scores, set pending)
+
+EXAMPLES:
+  claude-evolve edit gen03 failed     # Mark all gen03 as failed
+  claude-evolve edit failed pending   # Reset all failed candidates to pending
+  claude-evolve edit complete failed  # Mark all complete as failed for re-run
+  claude-evolve edit all pending      # Mark everything as pending for re-run
+  claude-evolve edit gen02 reboot     # Full reset of gen02 (delete files + clear data)
+
+DESCRIPTION:
+  This command helps manage evolution runs when you need to re-evaluate candidates.
+  Use status selectors (failed, complete, etc.) to bulk-change candidates by status.
+  Use 'reboot' for complete reset including file deletion.
+EOF
+}
+
+# Parse arguments
+if [[ $# -ne 2 ]]; then
+  show_help
+  exit 1
+fi
+
+SELECTOR="$1"
+ACTION="$2"
+
+# Validate configuration
+if ! validate_config; then
+  echo "[ERROR] Configuration validation failed" >&2
+  exit 1
+fi
+
+# Validate selector format
+if [[ "$SELECTOR" != "all" && ! "$SELECTOR" =~ ^gen[0-9]+$ && "$SELECTOR" != "failed" && "$SELECTOR" != "complete" && "$SELECTOR" != "pending" && "$SELECTOR" != "running" ]]; then
+  echo "[ERROR] Selector must be 'all', 'genXX' (e.g., gen01), or status ('failed', 'complete', 'pending', 'running')" >&2
+  exit 1
+fi
+
+# Validate action
+case "$ACTION" in
+  failed|complete|pending|reboot) ;;
+  *)
+    echo "[ERROR] Action must be one of: failed, complete, pending, reboot" >&2
+    exit 1
+    ;;
+esac
+
+# Check if CSV exists
+if [[ ! -f "$FULL_CSV_PATH" ]]; then
+  echo "[ERROR] Evolution CSV not found: $FULL_CSV_PATH" >&2
+  echo "Run 'claude-evolve setup' first or navigate to the correct directory" >&2
+  exit 1
+fi
+
+# Function to update CSV status for specific selector
+update_candidates_status() {
+  local selector="$1"
+  local new_status="$2"
+  local clear_scores="$3"
+  
+  echo "[INFO] Updating candidates matching '$selector' to status: $new_status"
+  
+  # Use Python to safely edit the CSV
+  "$PYTHON_CMD" -c "
+import csv
+import sys
+import os
+
+csv_file = '$FULL_CSV_PATH'
+selector = '$selector'
+new_status = '$new_status'
+clear_scores = '$clear_scores' == 'true'
+
+try:
+    # Read CSV
+    with open(csv_file, 'r') as f:
+        reader = csv.reader(f)
+        rows = list(reader)
+    
+    if not rows:
+        print('[ERROR] CSV is empty')
+        sys.exit(1)
+    
+    header = rows[0]
+    updated_count = 0
+    
+    # Update matching rows
+    for i in range(1, len(rows)):
+        row = rows[i]
+        if len(row) < 1:
+            continue
+        
+        candidate_id = row[0]
+        current_status = row[4] if len(row) > 4 else ''
+        
+        # Check if this row matches selector
+        matches = False
+        if selector == 'all':
+            matches = True
+        elif selector.startswith('gen') and '-' in candidate_id:
+            # Generation selector (e.g., gen01, gen02)
+            matches = candidate_id.startswith(selector + '-')
+        elif selector in ['failed', 'complete', 'pending', 'running']:
+            # Status selector
+            if selector == 'pending':
+                matches = current_status == '' or current_status == 'pending'
+            else:
+                matches = current_status == selector
+        
+        if matches:
+            if clear_scores:
+                # Reboot: clear everything after description (keep id, basedOnId, description)
+                if len(row) >= 3:
+                    rows[i] = [row[0], row[1], row[2], '', '']  # id, basedOnId, description, empty performance, empty status
+                    updated_count += 1
+            else:
+                # Just update status (preserve other fields)
+                # Ensure row has at least 5 fields
+                while len(row) < 5:
+                    row.append('')
+                row[4] = new_status  # Update status field
+                updated_count += 1
+    
+    # Write back to CSV
+    with open(csv_file + '.tmp', 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerows(rows)
+    
+    # Atomic replace
+    os.rename(csv_file + '.tmp', csv_file)
+    
+    print(f'[INFO] Updated {updated_count} candidates')
+    
+except Exception as e:
+    print(f'[ERROR] Failed to update CSV: {e}')
+    sys.exit(1)
+"
+}
+
+# Function to delete evolution files for selector
+delete_evolution_files() {
+  local selector="$1"
+  
+  if [[ ! -d "$FULL_EVOLUTION_DIR" ]]; then
+    echo "[WARN] Evolution directory not found: $FULL_EVOLUTION_DIR"
+    return
+  fi
+  
+  local deleted_count=0
+  
+  if [[ "$selector" == "all" ]]; then
+    echo "[INFO] Deleting all evolution_*.py files..."
+    for file in "$FULL_EVOLUTION_DIR"/evolution_*.py; do
+      if [[ -f "$file" ]]; then
+        rm "$file"
+        ((deleted_count++))
+        echo "[INFO] Deleted: $(basename "$file")"
+      fi
+    done
+  elif [[ "$selector" =~ ^gen[0-9]+$ ]]; then
+    echo "[INFO] Deleting evolution files for $selector..."
+    for file in "$FULL_EVOLUTION_DIR"/evolution_${selector}-*.py; do
+      if [[ -f "$file" ]]; then
+        rm "$file"
+        ((deleted_count++))
+        echo "[INFO] Deleted: $(basename "$file")"
+      fi
+    done
+  else
+    # Status-based selector - need to query CSV for candidate IDs
+    echo "[INFO] Finding files to delete for status '$selector'..."
+    
+    # Use Python to get list of candidate IDs matching the status
+    local candidates_to_delete
+    candidates_to_delete=$("$PYTHON_CMD" -c "
+import csv
+import sys
+
+csv_file = '$FULL_CSV_PATH'
+selector = '$selector'
+
+try:
+    with open(csv_file, 'r') as f:
+        reader = csv.reader(f)
+        next(reader)  # Skip header
+        
+        candidates = []
+        for row in reader:
+            if len(row) < 1:
+                continue
+            
+            candidate_id = row[0]
+            current_status = row[4] if len(row) > 4 else ''
+            
+            # Check if matches status selector
+            matches = False
+            if selector == 'pending':
+                matches = current_status == '' or current_status == 'pending'
+            else:
+                matches = current_status == selector
+            
+            if matches:
+                candidates.append(candidate_id)
+        
+        print(' '.join(candidates))
+        
+except Exception as e:
+    print('', file=sys.stderr)  # Empty output on error
+    sys.exit(1)
+")
+    
+    if [[ -n "$candidates_to_delete" ]]; then
+      for candidate_id in $candidates_to_delete; do
+        # Determine file format
+        if [[ "$candidate_id" =~ ^[0-9]+$ ]]; then
+          file="$FULL_EVOLUTION_DIR/evolution_id${candidate_id}.py"
+        else
+          file="$FULL_EVOLUTION_DIR/evolution_${candidate_id}.py"
+        fi
+        
+        if [[ -f "$file" ]]; then
+          rm "$file"
+          ((deleted_count++))
+          echo "[INFO] Deleted: $(basename "$file")"
+        fi
+      done
+    fi
+  fi
+  
+  echo "[INFO] Deleted $deleted_count evolution files"
+}
+
+# Main execution
+echo "[INFO] Processing '$SELECTOR' with action: $ACTION"
+
+case "$ACTION" in
+  failed)
+    update_candidates_status "$SELECTOR" "failed" "false"
+    ;;
+  complete)
+    update_candidates_status "$SELECTOR" "complete" "false"
+    ;;
+  pending)
+    update_candidates_status "$SELECTOR" "" "false"  # Empty status means pending
+    ;;
+  reboot)
+    echo "[INFO] Performing full reboot of '$SELECTOR'..."
+    delete_evolution_files "$SELECTOR"
+    update_candidates_status "$SELECTOR" "" "true"  # Clear scores and set pending
+    echo "[INFO] Reboot complete: files deleted, scores cleared, status set to pending"
+    ;;
+esac
+
+echo "[INFO] Edit operation complete"
+
+# Call status command to show current state
+echo ""
+"$SCRIPT_DIR/claude-evolve-status" --brief

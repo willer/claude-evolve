@@ -1,1 +1,477 @@
-claude-evolve-run-unified
+#!/bin/bash
+
+set -e
+
+# Load configuration  
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/config.sh
+source "$SCRIPT_DIR/../lib/config.sh"
+
+# Use CLAUDE_EVOLVE_CONFIG if set, otherwise default
+if [[ -n ${CLAUDE_EVOLVE_CONFIG:-} ]]; then
+  load_config "$CLAUDE_EVOLVE_CONFIG"
+else
+  load_config
+fi
+
+# Validate configuration
+if ! validate_config; then
+  echo "[ERROR] Configuration validation failed" >&2
+  exit 1
+fi
+
+# AIDEV-NOTE: Unified execution engine that handles both sequential and parallel modes
+# Sequential mode is just parallel mode with max_workers=1
+
+# Default values
+timeout_seconds=""
+force_parallel=""
+force_sequential=""
+use_caffeinate="false"
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+  case $1 in
+  --timeout)
+    if [[ -z ${2:-} ]] || [[ ! $2 =~ ^[0-9]+$ ]] || [[ $2 -eq 0 ]]; then
+      echo "[ERROR] --timeout requires a positive integer (seconds)" >&2
+      exit 1
+    fi
+    timeout_seconds="$2"
+    shift 2
+    ;;
+  --parallel)
+    force_parallel="true"
+    shift
+    ;;
+  --sequential)
+    force_sequential="true"
+    shift
+    ;;
+  --keep-awake|--caffeinate)
+    use_caffeinate="true"
+    shift
+    ;;
+  --help)
+    cat <<EOF
+claude-evolve run - Execute evolution candidates
+
+USAGE:
+  claude-evolve run [OPTIONS]
+
+OPTIONS:
+  --timeout N       Timeout in seconds for each evaluation
+  --parallel        Force parallel execution mode
+  --sequential      Force sequential execution mode (max_workers=1)
+  --keep-awake      Keep system awake during execution (macOS only)
+  --caffeinate      Alias for --keep-awake
+  --help            Show this help message
+
+DESCRIPTION:
+  Continuously processes evolution candidates by:
+  1. Finding pending candidates in CSV
+  2. Calling Claude to mutate algorithms  
+  3. Updating CSV with performance score and completion status
+  4. Auto-generating new ideas when no pending candidates remain
+
+  Use --timeout to prevent runaway evaluations from blocking progress.
+EOF
+    exit 0
+    ;;
+  *)
+    echo "[ERROR] Unknown option: $1" >&2
+    exit 1
+    ;;
+  esac
+done
+
+# Check if caffeinate should be used
+if [[ "$use_caffeinate" == "true" ]] && command -v caffeinate >/dev/null 2>&1; then
+  echo "[INFO] Using caffeinate to prevent system sleep"
+  # Re-run this script with caffeinate
+  exec caffeinate -dims "$0" "$@"
+fi
+
+# Determine execution mode and worker count
+if [[ "$force_sequential" == "true" ]]; then
+  MAX_WORKERS=1
+  echo "[INFO] Using sequential mode (forced via --sequential, max_workers=1)"
+elif [[ "$force_parallel" == "true" ]]; then
+  echo "[INFO] Using parallel mode (forced via --parallel, max_workers=$MAX_WORKERS)"
+elif [[ "$PARALLEL_ENABLED" == "true" || "$PARALLEL_ENABLED" == "1" ]]; then
+  echo "[INFO] Using parallel mode (enabled in config, max_workers=$MAX_WORKERS)"
+else
+  MAX_WORKERS=1
+  echo "[INFO] Using sequential mode (default, max_workers=1)"
+fi
+
+# Start unified execution engine
+echo "[INFO] Starting evolution run with up to $MAX_WORKERS workers"
+
+# Rest of the logic is the same as claude-evolve-run-parallel but with dynamic MAX_WORKERS
+# and the updated auto-ideation logic we just added
+
+# Worker management
+declare -a worker_pids=()
+
+# Graceful shutdown function
+shutdown_workers() {
+  if [[ ${#worker_pids[@]} -eq 0 ]]; then
+    echo "[DISPATCHER] No workers to shutdown"
+    return 0
+  fi
+  
+  echo "[DISPATCHER] Shutting down workers..."
+  for pid in "${worker_pids[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "[DISPATCHER] Stopping worker $pid"
+      kill -TERM "$pid" 2>/dev/null || true
+    fi
+  done
+  
+  # Wait for workers to exit
+  local timeout=10
+  while [[ ${#worker_pids[@]} -gt 0 && $timeout -gt 0 ]]; do
+    sleep 1
+    ((timeout--))
+    
+    local new_pids=()
+    for pid in "${worker_pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        new_pids+=($pid)
+      fi
+    done
+    worker_pids=("${new_pids[@]}")
+  done
+  
+  # Force kill remaining workers
+  for pid in "${worker_pids[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "[DISPATCHER] Force killing worker $pid"
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+  done
+  
+  echo "[DISPATCHER] Shutdown complete"
+  exit 0
+}
+
+# Signal handling - graceful shutdown with force option
+handle_signal() {
+  local signal="$1"
+  echo "[DISPATCHER] Received signal: $signal" >&2
+  echo "[DISPATCHER] Active workers: ${#worker_pids[@]}" >&2
+  
+  # For expensive workers, give option to force shutdown
+  if [[ ${#worker_pids[@]} -gt 0 ]]; then
+    echo "[DISPATCHER] Warning: ${#worker_pids[@]} expensive workers are still running!" >&2
+    echo "[DISPATCHER] Press Ctrl+C again to force shutdown immediately, or wait for graceful shutdown..." >&2
+    
+    # Give a few seconds for force shutdown option
+    local count=3
+    while [[ $count -gt 0 && "$force_shutdown_requested" != "true" ]]; do
+      sleep 1
+      ((count--))
+    done
+    
+    if [[ "$force_shutdown_requested" == "true" ]]; then
+      echo "[DISPATCHER] Force shutdown in progress..." >&2
+      return  # shutdown_workers already called
+    fi
+    
+    echo "[DISPATCHER] Proceeding with graceful shutdown..." >&2
+  fi
+  
+  shutdown_workers
+}
+
+# Track signals for force shutdown  
+signal_count=0
+force_shutdown_requested=false
+
+# Immediate signal handler for force shutdown detection
+signal_handler() {
+  ((signal_count++))
+  
+  if [[ $signal_count -eq 1 ]]; then
+    # First signal - start graceful shutdown
+    handle_signal "SIGINT"
+  else
+    # Second+ signal - force shutdown immediately
+    echo "[DISPATCHER] Force shutdown requested!" >&2
+    force_shutdown_requested=true
+    shutdown_workers
+  fi
+}
+
+# Set up signal handlers
+trap 'signal_handler' INT
+trap 'handle_signal SIGTERM' TERM
+
+# Function to start a worker
+start_worker() {
+  local worker_script="$SCRIPT_DIR/claude-evolve-worker"
+  if [[ ! -f "$worker_script" ]]; then
+    echo "[ERROR] Worker script not found: $worker_script" >&2
+    exit 1
+  fi
+  
+  local worker_args=()
+  [[ -n $timeout_seconds ]] && worker_args+=(--timeout "$timeout_seconds")
+  
+  echo "[DISPATCHER] Starting worker..."
+  "$worker_script" "${worker_args[@]}" &
+  local worker_pid=$!
+  worker_pids+=($worker_pid)
+  echo "[DISPATCHER] Worker started with PID: $worker_pid"
+}
+
+# Function to clean up finished workers
+cleanup_workers() {
+  local new_pids=()
+  for pid in "${worker_pids[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      new_pids+=($pid)
+    else
+      # Worker finished
+      if wait "$pid" 2>/dev/null; then
+        echo "[DISPATCHER] Worker $pid completed successfully"
+        consecutive_failures=0  # Reset counter on success
+      else
+        local exit_code=$?
+        if [[ $exit_code -eq 2 ]]; then
+          echo "[DISPATCHER] Worker $pid hit rate limit, will retry later"
+          # Rate limits don't count as consecutive failures
+        else
+          echo "[DISPATCHER] Worker $pid failed with exit code $exit_code"
+          ((consecutive_failures++))
+          
+          # Check if we've hit the failure limit
+          if [[ $consecutive_failures -ge $MAX_CONSECUTIVE_FAILURES ]]; then
+            echo "" >&2
+            echo "⚠️  EVOLUTION PAUSED: Multiple consecutive failures detected" >&2
+            echo "⚠️  $consecutive_failures consecutive worker failures - indicates systemic issues" >&2
+            echo "⚠️  Possible causes: Claude API issues, evaluator bugs, configuration problems" >&2
+            echo "⚠️  Check recent worker logs in logs/ directory for specific error details" >&2
+            echo "⚠️  Fix issues before restarting evolution" >&2
+            echo "" >&2
+            
+            # Shutdown all workers and exit
+            shutdown_workers
+            exit 1
+          fi
+          
+          echo "[DISPATCHER] Consecutive failures: $consecutive_failures/$MAX_CONSECUTIVE_FAILURES"
+        fi
+      fi
+    fi
+  done
+  worker_pids=("${new_pids[@]}")
+}
+
+# Function to count pending candidates
+count_pending_candidates() {
+  "$PYTHON_CMD" "$SCRIPT_DIR/../lib/csv_helper.py" find_pending "$FULL_CSV_PATH" >/dev/null 2>&1
+  echo $?  # 0 if found, 1 if not found
+}
+
+# Function to get CSV stats
+get_csv_stats() {
+  local csv_path="${1:-$FULL_CSV_PATH}"
+  
+  if [[ ! -f "$csv_path" ]]; then
+    echo "[ERROR] CSV not found at: $csv_path" >&2
+    echo "0 0 0"
+    return
+  fi
+  
+  local total_rows complete_count pending_count
+  total_rows=$(wc -l < "$csv_path" | tr -d '[:space:]')
+  complete_count=$(grep ',complete' "$csv_path" 2>/dev/null | wc -l | tr -d '[:space:]')
+  
+  # Count pending using same logic as find_next_pending_with_lock
+  # This includes rows with <5 fields AND rows with empty/pending status
+  pending_count=$("$PYTHON_CMD" -c "
+import csv
+import sys
+
+pending_count = 0
+with open('$csv_path', 'r') as f:
+    reader = csv.reader(f)
+    rows = list(reader)
+    
+    for i in range(1, len(rows)):
+        # Same logic as find_next_pending_with_lock
+        if len(rows[i]) < 5:
+            pending_count += 1
+        elif len(rows[i]) >= 5 and (rows[i][4] == 'pending' or rows[i][4] == ''):
+            pending_count += 1
+
+print(pending_count)
+")
+  
+  echo "$total_rows $complete_count $pending_count"
+}
+
+echo "[DISPATCHER] Starting unified evolution engine"
+echo "[DISPATCHER] Configuration: max_workers=$MAX_WORKERS, timeout=${timeout_seconds:-none}"
+
+# Validate CSV and clean up stuck statuses
+if [[ -f "$FULL_CSV_PATH" ]]; then
+  echo "[DISPATCHER] Validating CSV and cleaning up..."
+  if ! "$PYTHON_CMD" -c "
+import csv
+import sys
+
+csv_file = '$FULL_CSV_PATH'
+
+try:
+    # Read CSV - let Python's csv module handle all the complexity
+    with open(csv_file, 'r') as f:
+        reader = csv.reader(f)
+        rows = list(reader)
+    
+    if not rows:
+        print('[ERROR] CSV is empty')
+        sys.exit(1)
+    
+    # Basic sanity checks
+    header = rows[0]
+    num_fields = len(header)
+    
+    if len(rows) == 1:
+        print('[INFO] CSV has no data rows (only header)')
+    
+    # Clean up any stuck 'running' statuses
+    changed = 0
+    for i in range(1, len(rows)):
+        if len(rows[i]) > 4 and rows[i][4] == 'running':
+            rows[i][4] = ''
+            changed += 1
+    
+    if changed > 0:
+        # Write back
+        with open(csv_file + '.tmp', 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerows(rows)
+        import os
+        os.rename(csv_file + '.tmp', csv_file)
+        print(f'[INFO] Reset {changed} stuck running candidates to pending')
+    
+    # Count pending candidates
+    pending = 0
+    for i in range(1, len(rows)):
+        # Row with < 5 fields or empty/pending status in field 5
+        if len(rows[i]) < 5 or (len(rows[i]) >= 5 and rows[i][4] in ['', 'pending']):
+            pending += 1
+    
+    print(f'[INFO] CSV loaded: {len(rows)-1} total candidates, {pending} pending')
+    
+except csv.Error as e:
+    print(f'[ERROR] CSV parsing error: {e}')
+    print('[ERROR] The CSV file appears to be malformed')
+    sys.exit(1)
+except Exception as e:
+    print(f'[ERROR] Failed to read CSV: {e}')
+    sys.exit(1)
+"; then
+    echo "[ERROR] CSV validation failed. Please check the error message above."
+    exit 1
+  fi
+fi
+
+# Automatic cleanup detection - check for unchanged algorithms and warn user
+echo "[DISPATCHER] Checking for duplicate/unchanged algorithms..."
+cleanup_output=$("$SCRIPT_DIR/claude-evolve-cleanup" --dry-run 2>&1)
+
+# Check if cleanup found any issues (look for "UNCHANGED:" in output)
+if echo "$cleanup_output" | grep -q "📋 UNCHANGED:"; then
+  echo "⚠️  WARNING: Issues detected that may need cleanup:"
+  echo "$cleanup_output"
+  echo ""
+  echo "🔧 RECOMMENDATION: Run 'claude-evolve cleanup --force' to fix these issues before continuing"
+  echo "   This will delete unchanged algorithms and reset their descendants to pending status"
+  echo ""
+  echo "⏰ Continuing in 10 seconds (Ctrl+C to abort and run cleanup)..."
+  
+  # Give user time to read and potentially abort
+  for i in {10..1}; do
+    echo -n "  $i..."
+    sleep 1
+  done
+  echo ""
+  echo "🚀 Proceeding with evolution run..."
+  echo ""
+else
+  echo "[DISPATCHER] No cleanup issues detected - proceeding with run"
+fi
+
+# Consecutive failure tracking
+consecutive_failures=0
+MAX_CONSECUTIVE_FAILURES=5
+
+# Main dispatch loop
+while true; do
+  # Clean up finished workers
+  cleanup_workers
+  
+  # Get current status
+  csv_stats=$(get_csv_stats "$FULL_CSV_PATH")
+  read -r total_rows complete_count pending_count <<< "$csv_stats"
+  active_workers=${#worker_pids[@]}
+  
+  # Status reporting
+  if [[ $total_rows -gt 1 ]]; then
+    echo "[DISPATCHER] Status: $pending_count pending, $active_workers active workers"
+    echo "[DISPATCHER] CSV has $((total_rows-1)) total candidates, $complete_count complete"
+  fi
+  
+  # If no pending work and no active workers, check for auto-ideation
+  if [[ $pending_count -eq 0 && $active_workers -eq 0 ]]; then
+    echo "[DISPATCHER] No pending candidates found."
+    
+    # Check if auto ideation is enabled
+    if [[ "$AUTO_IDEATE" == "true" || "$AUTO_IDEATE" == "1" ]]; then
+      echo "[DISPATCHER] Auto ideation is enabled. Generating new ideas..."
+      
+      # Check if claude-evolve-ideate exists
+      ideate_script="$SCRIPT_DIR/claude-evolve-ideate"
+      if [[ ! -f "$ideate_script" ]]; then
+        echo "[ERROR] claude-evolve-ideate script not found: $ideate_script" >&2
+        echo "[DISPATCHER] Evolution complete - no way to generate more ideas."
+        break
+      fi
+      
+      # Generate new ideas using the multi-strategy approach
+      echo "[DISPATCHER] Calling claude-evolve-ideate to generate new candidates..."
+      if ! "$ideate_script"; then
+        echo "[ERROR] Failed to generate new ideas" >&2
+        echo "[DISPATCHER] Evolution complete - ideation failed."
+        break
+      fi
+      
+      echo "[DISPATCHER] New ideas generated successfully. Continuing evolution..."
+      continue  # Go back to start of loop to find the new candidates
+    else
+      echo "[DISPATCHER] Auto ideation is disabled. Evolution complete."
+      echo "[DISPATCHER] Run 'claude-evolve ideate' to generate more candidates."
+      echo "[DISPATCHER] Exiting main loop: no work remaining" >&2
+      break
+    fi
+  fi
+  
+  # Start workers if we have pending work and capacity
+  while [[ $pending_count -gt 0 && $active_workers -lt $MAX_WORKERS ]]; do
+    start_worker
+    active_workers=${#worker_pids[@]}
+    ((pending_count--))  # Optimistically assume this will be picked up
+  done
+  
+  # Brief pause to avoid busy waiting
+  sleep 5
+done
+
+# Clean shutdown
+shutdown_workers
+echo "[DISPATCHER] Evolution run complete"
+echo "[DISPATCHER] Exiting with code 0"

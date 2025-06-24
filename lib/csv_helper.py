@@ -91,7 +91,7 @@ def main():
             performance = data.get('performance') or data.get('score', 0)
             
             # Build fields to update
-            fields = {'performance': performance, 'status': 'complete' if performance > 0 else 'failed'}
+            fields = {'performance': performance, 'status': 'complete' if performance != 0 else 'failed'}
             
             # Add all other fields from the JSON
             for key, value in data.items():

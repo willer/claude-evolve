@@ -1,365 +1,128 @@
 # claude-evolve
 
-Automated algorithm evolution - let AI evolve your algorithms while you sleep.
+Automated algorithm evolution using AI. Start with a base algorithm, let Claude evolve better variants autonomously.
 
-## What is this?
-
-claude-evolve is an automated algorithm evolution system that runs continuous evolution cycles without constant supervision. Start with a base algorithm and let it evolve optimized variants autonomously.
-
-Think of it like **genetic algorithms for code** - it handles the mutations and testing, and runs **indefinitely** until you stop it. The system automatically generates new ideas when it runs out of candidates.
-
-![claude-evolve in action](./screenshot.png)
-
-### How the Evolution System Works
-
-The system operates with specialized phases working together:
-
-- 🧠 **Ideation Phase**: Generates creative algorithm variations using codex o3-pro (if available) or Claude Opus
-- 🔬 **Development Phase**: Implements mutations using Claude Sonnet (with periodic Opus "megathinking")
-- 📊 **Evaluation Phase**: Tests performance against your custom evaluator
-- 📈 **Analysis Phase**: Tracks evolution progress and identifies top performers
-
-The evolution cycle:
-```
-Ideate → Mutate → Evaluate → (Auto-Generate New Ideas) → Repeat Forever
-```
-
-**Truly autonomous evolution**: The system runs indefinitely, automatically generating new generations of ideas when it exhausts current candidates. You can leave it running overnight, over the weekend, or while you work on other things - it just keeps evolving better algorithms until you manually stop it with Ctrl+C.
-
-## Installation
+## Install & Quick Start
 
 ```bash
+# Install
 npm install -g claude-evolve
+
+# Set up project
+claude-evolve setup
+
+# Generate initial ideas
+claude-evolve ideate
+
+# Start evolution (runs forever until Ctrl+C)
+claude-evolve run
 ```
 
-## Quick Start
+## How It Works
 
-```bash
-claude-evolve
-```
+1. **Write your problem** in `evolution/BRIEF.md`
+2. **Create base algorithm** in `evolution/algorithm.py`  
+3. **Define evaluation** in `evolution/evaluator.py`
+4. **Generate ideas** - Claude creates algorithm variations
+5. **Evolve automatically** - System tests variations, keeps best ones, generates new ideas
 
-The system will walk you through the setup process:
-
-1. **Create evolution workspace** - Initialize the directory structure
-2. **Write evolution/BRIEF.md** - Describe your optimization problem
-3. **Customize evolution/evaluator.py** - Define how to measure algorithm performance
-4. **Generate ideas** - Create initial algorithm candidates
-5. **Start evolution** - Begin the automated evolution process
+Evolution runs indefinitely until you stop it. Perfect for overnight optimization.
 
 ## Commands
 
-### Main wrapper command
 ```bash
-claude-evolve        # Interactive mode (recommended for beginners)
-claude-evolve setup  # Initialize evolution workspace
-claude-evolve ideate # Generate new algorithm ideas
-claude-evolve run    # Execute evolution candidates
-claude-evolve analyze # Analyze evolution results
-claude-evolve config # Manage configuration settings
+claude-evolve           # Interactive menu
+claude-evolve setup     # Initialize workspace
+claude-evolve ideate    # Generate new algorithm ideas
+claude-evolve run       # Start evolution loop (runs forever)
+claude-evolve analyze   # View results and progress
+claude-evolve status    # Quick progress overview
+claude-evolve edit      # Manage candidate statuses
 ```
 
-### Individual commands (if you know what you're doing)
+## Working with Multiple Projects
 
-#### claude-evolve-setup
-Initializes your evolution workspace with:
-- Directory structure
-- Template files (BRIEF.md, algorithm.py, evaluator.py, config.yaml)
-- CSV file for tracking evolution progress
-
-#### claude-evolve-ideate
-Generates new algorithm variation ideas using multi-strategy evolutionary approach:
-- **Novel exploration** - Pure creativity for global search
-- **Hill climbing** - Parameter tuning of top performers
-- **Structural mutation** - Algorithmic changes to successful designs  
-- **Crossover hybrid** - Combines successful approaches
-- Uses Claude Opus in megathinking mode for each strategy
-- Configurable strategy distribution (default: 3+5+3+4 = 15 ideas)
-
-#### claude-evolve-run
-Executes evolution candidates in an **infinite loop**:
-- Picks the next untested idea from your CSV
-- Uses Claude to implement the mutation
-- Runs your evaluator to measure performance
-- Records results and updates the evolution log
-- **When no candidates remain**: Automatically generates new ideas and continues
-- **Runs forever until manually stopped** (Ctrl+C)
-
-#### claude-evolve-analyze
-Analyzes evolution progress and generates insights:
-- Performance trends over time
-- Best-performing algorithm variants
-- Suggestions for future evolution directions
-
-#### claude-evolve-config
-Manages configuration settings:
-- View current configuration
-- Edit paths and behavior settings
-- Reset to defaults
-
-## How it Works
-
-1. **Set up evolution workspace** - Define your optimization problem
-2. **Create base algorithm** - Start with `evolution/algorithm.py`
-3. **Define evaluation criteria** - Customize `evolution/evaluator.py`
-4. **Generate initial ideas** - Run `claude-evolve ideate` to create variations
-5. **Start evolution loop** - The system automatically:
-   - Picks the next candidate from your CSV
-   - Implements the mutation
-   - Evaluates performance
-   - Records results
-   - **Generates new ideas when candidates are exhausted**
-   - **Repeats forever until manually stopped**
-
-## Monitoring Progress (Like Genetic Algorithms)
-
-This isn't sci-fi level "sleep through the entire evolution" automation - it's more like controlled genetic algorithms. The system handles most mutations, but you should monitor it and guide the evolution when needed.
-
-**Recommended monitoring approach:**
-- **Check evolution.csv** - Track performance of all variants
-- **Review top performers** - Look at the best algorithms generated so far
-- **Monitor for convergence** - Watch for diminishing returns or local optima
-- **Inject new ideas** - Add manual variations when evolution stagnates
-
-**When you need to guide evolution:**
-- **Add targeted ideas** - Use `claude-evolve ideate` with specific directions
-- **Modify the evaluator** - Update `evolution/evaluator.py` to change selection pressure
-- **Restart from best** - Copy top performer to `algorithm.py` and continue evolving
-- **The system adapts** - New ideas will build on your guidance
-
-**Infinite evolution with manual control:**
-- **Runs forever** - automatically generates new generations of ideas
-- **Hit Ctrl+C anytime** to stop the evolution process
-- **Restart later** with `claude-evolve run` to continue from where you left off
-- **Perfect for long-term optimization** - run overnight, over weekends, or while working on other projects
-
-## Handling Failures and Recovery
-
-Evolution experiments can fail for various reasons. The system tracks these failures and provides recovery options.
-
-**Common failure types:**
-- **Infrastructure failures** - Missing dependencies (e.g., xgboost not installed)
-- **Code generation bugs** - Claude occasionally generates syntactically incorrect code
-- **Evaluation errors** - Evaluator crashes or returns invalid output
-- **Performance score 0** - Algorithm runs but produces no meaningful results (now marked as "failed")
-
-**Failure tracking in evolution.csv:**
-- `failed` - Evaluation error or performance score of 0
-- `timeout` - Evaluation exceeded time limit
-- `interrupted` - User interrupted with Ctrl+C
-- Check the `status` column to identify failed candidates
-
-**Manual recovery strategies:**
-1. **Force retry of failed candidates:**
-   - Edit `evolution.csv` and change status from "failed" to "pending"
-   - Clear the performance value for that row
-   - Run `claude-evolve run` to retry the candidate
-
-2. **Fix infrastructure issues:**
-   - Install missing dependencies: `pip install xgboost numpy scipy`
-   - Update Python environment if needed
-   - Check that evaluator.py has proper error handling
-
-3. **Guide around persistent failures:**
-   - If a specific approach keeps failing, add constraints to BRIEF.md
-   - Use `claude-evolve ideate` with explicit directions to avoid problematic patterns
-   - Consider updating evaluator.py to catch and handle specific error types
-
-**Future auto-recovery (planned):**
-- Automatic retry with different prompts for code generation failures
-- Dependency detection and installation suggestions
-- Smart failure pattern recognition to avoid similar mutations
-
-## Requirements
-
-### Required
-- Node.js >= 14.0.0
-- Python 3.x (for algorithm execution)
-  - Automatically detected on all platforms
-  - Windows: Uses `python` if it's Python 3
-  - macOS/Linux: Prefers `python3`
-  - Can override in config.yaml: `python_cmd: "C:\\Python39\\python.exe"`
-- Bash shell (Git Bash on Windows, native on macOS/Linux)
-- [Claude CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude` command)
-
-### Optional (but recommended)
-- [Codex CLI](https://github.com/aboutgaurav/codex) (`codex` command) - Uses o3-pro model for superior ideation when available
-- Scientific Python libraries (numpy, scipy, etc.) depending on your algorithms
-- Plotting libraries (matplotlib, plotly) for analyzing results
+```bash
+# Use different working directory
+claude-evolve --working-dir=my-project run
+claude-evolve --working-dir=experiments/trading ideate
+```
 
 ## Project Structure
 
-Your evolution workspace will have:
 ```
 your-project/
 ├── evolution/
-│   ├── BRIEF.md           # Problem description and goals
-│   ├── algorithm.py       # Base algorithm to evolve
-│   ├── evaluator.py       # Performance evaluation logic
-│   ├── config.yaml        # Configuration settings
-│   ├── evolution.csv      # Evolution progress tracking
-│   ├── evolution_id1.py   # Generated algorithm variants
-│   ├── evolution_id2.py
-│   └── ...
-└── (your main project files)
+│   ├── BRIEF.md           # Problem description
+│   ├── algorithm.py       # Base algorithm
+│   ├── evaluator.py       # Performance measurement
+│   ├── config.yaml        # Settings
+│   ├── evolution.csv      # Progress tracking
+│   └── evolution_*.py     # Generated variants
 ```
 
-## Evaluator Output Format
+## Evaluator Requirements
 
-Your evaluator must output a performance score to stdout. The system looks for either `performance` or `score` fields. Four formats are supported:
+Your `evaluator.py` must output a performance score to stdout:
 
-### 1. Plain Number (Simplest)
-Just output a single floating-point number:
-```
-1.077506371224117
-```
-
-### 2. JSON with "score" field
-```json
-{"score": 0.95}
-```
-
-### 3. JSON with "performance" field
-```json
-{"performance": 1.234}
-```
-
-### 4. JSON with additional metrics (Advanced)
-You can include additional metrics that will be automatically added as new columns to the CSV:
-```json
-{
-  "performance": 0.95,
-  "fitness": 0.82,
-  "sharpe_ratio": 1.23,
-  "max_drawdown": -0.15,
-  "total_return": 0.42,
-  "win_rate": 0.65
-}
-```
-
-**Important notes:**
-- The system accepts either `performance` or `score` (they are treated the same)
-- Higher scores indicate better performance
-- A score of 0 indicates complete failure and marks the candidate as "failed"
-- Non-zero exit codes indicate evaluation errors
-- Any additional output (warnings, logs) should go to stderr, not stdout
-- Additional JSON fields will be automatically added as new CSV columns
-- New columns are added after the standard columns (id, basedOnId, description, performance, status)
-- Common additional fields include: fitness, sharpe, sortino, total_return, yearly_return, max_drawdown, volatility, total_trades, win_rate, profit_factor, final_value
-
-## Environment Variables for Evaluators
-
-When your evaluator.py runs, it has access to the `EXPERIMENT_ID` environment variable containing the current experiment's ID (e.g., `gen07-001`). This allows evaluators to:
-
-- Save experiment-specific output files
-- Log metrics with experiment identifiers
-- Implement experiment-aware logic
-- Track which algorithm variant is being evaluated
-
-Example usage in evaluator.py:
 ```python
-import os
+# Simple: just print a number
+print(1.234)
 
-# Get the current experiment ID
-experiment_id = os.environ.get('EXPERIMENT_ID', 'unknown')
-
-# Use it for logging or file naming
-output_file = f"results_{experiment_id}.json"
-print(f"Evaluating experiment: {experiment_id}", file=sys.stderr)  # Use stderr for logs!
-
-# Output just the score
-print(score)  # Simple number to stdout
+# Advanced: JSON with metrics
+print('{"performance": 1.234, "accuracy": 0.95}')
 ```
+
+Higher scores = better performance. Score of 0 = failure.
 
 ## Configuration
 
-Edit `evolution/config.yaml` to customize:
+Edit `evolution/config.yaml`:
 
 ```yaml
-# Working directory for evolution files
-evolution_dir: "evolution"
-
-# Algorithm and evaluator file paths
+# Files
 algorithm_file: "algorithm.py"
-evaluator_file: "evaluator.py"
-brief_file: "BRIEF.md"
-
-# CSV file for tracking evolution
+evaluator_file: "evaluator.py" 
 evolution_csv: "evolution.csv"
 
-# Parent algorithm selection strategy
-parent_selection: "best"  # or "random", "latest"
-
-# Multi-strategy ideation configuration
+# Evolution strategy
 ideation_strategies:
-  total_ideas: 15           # Total ideas per generation
-  novel_exploration: 3      # Pure creativity, global search
-  hill_climbing: 5          # Parameter tuning of top performers
-  structural_mutation: 3    # Algorithmic changes to top performers
-  crossover_hybrid: 4       # Combine successful approaches
-  num_elites: 3            # Number of top performers to use as parents
+  total_ideas: 15
+  novel_exploration: 3    # Creative new approaches
+  hill_climbing: 5        # Parameter tuning
+  structural_mutation: 3  # Architecture changes
+  crossover_hybrid: 4     # Combine best features
 
-# Python command to use for evaluation
-python_cmd: "python3"
+# Auto-generate new ideas when queue empty
+auto_ideate: true
+
+# Parallel execution
+parallel:
+  enabled: false
+  max_workers: 4
 ```
 
-### Understanding the Multi-Strategy Approach
+## Requirements
 
-The ideation system uses evolutionary algorithm principles with four complementary strategies:
+- Node.js 14+
+- Python 3.x
+- [Claude CLI](https://docs.anthropic.com/en/docs/claude-code)
+- Bash shell (Git Bash on Windows)
 
-**🎯 Novel Exploration (Global Search)**
-- Generates completely new algorithmic approaches
-- Prevents getting stuck in local optima
-- Explores different paradigms, data structures, mathematical approaches
-- Essential for breakthrough innovations
+## Tips
 
-**⛰️ Hill Climbing (Exploitation)**  
-- Fine-tunes parameters of successful algorithms
-- Adjusts constants, thresholds, iteration counts
-- Quick wins through incremental improvements
-- Builds on proven approaches
+- **Start simple** - Basic algorithm, let evolution add complexity
+- **Monitor progress** - Check `evolution.csv` for performance trends
+- **Guide evolution** - Add manual ideas when stuck in local optima
+- **Let it run** - Evolution works best over long periods
 
-**🔧 Structural Mutation (Medium-Distance Search)**
-- Redesigns implementation while keeping core insights
-- Changes data structures, sub-algorithms, execution patterns
-- Balances innovation with proven concepts
-- Explores architectural variations
+## Common Issues
 
-**🧬 Crossover Hybrid (Recombination)**
-- Combines successful elements from different top performers  
-- Creates novel interactions between proven approaches
-- Leverages diversity in the population
-- Often produces unexpected breakthrough combinations
+**Too many failures?** Check your evaluator handles edge cases and outputs valid scores.
 
-**⚖️ Strategy Balance**
-The default 3+5+3+4 distribution provides:
-- 20% wild exploration (escape local maxima)
-- 33% focused exploitation (quick improvements)  
-- 20% structural innovation (medium jumps)
-- 27% recombination (leverage diversity)
+**Stuck in local optimum?** Increase `novel_exploration` in config.yaml or add manual ideas.
 
-**🎛️ Tuning Your Evolution**
-Adjust ratios based on your needs:
-- **Stuck in local optimum?** Increase `novel_exploration` and `structural_mutation`
-- **Need incremental gains?** Increase `hill_climbing`
-- **Population too similar?** Increase `crossover_hybrid`
-- **Want faster convergence?** Decrease `total_ideas`, increase `hill_climbing`
-
-## Tips for Success
-
-1. **Write a clear BRIEF.md** - Describe your optimization problem, constraints, and goals
-2. **Create a robust evaluator** - Your evaluator.py determines evolution direction
-3. **Start simple** - Begin with a basic algorithm and let evolution add complexity
-4. **Monitor early cycles** - Watch the first few evolutions to ensure proper setup
-5. **Guide when stuck** - Add manual ideas when evolution hits local optima
-6. **Embrace failures** - Not every mutation will be better, that's how evolution works
-
-## Example Use Cases
-
-- **Algorithm optimization** - Improve sorting, searching, or mathematical algorithms
-- **Machine learning** - Evolve model architectures or training procedures
-- **Game AI** - Develop and optimize game-playing strategies
-- **Numerical methods** - Improve solvers, optimizers, or approximation algorithms
-- **Data structures** - Evolve efficient data organization strategies
+**Evaluator crashes?** Make sure dependencies are installed and error handling is robust.
 
 ## License
 

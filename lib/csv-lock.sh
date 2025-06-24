@@ -110,7 +110,13 @@ release_csv_lock() {
 # Usage: read_csv_with_lock <variable_name>
 read_csv_with_lock() {
     local var_name="$1"
-    local csv_file="${EVOLUTION_DIR:-evolution}/evolution.csv"
+    
+    # Ensure we have the full CSV path set
+    if [[ -z "$FULL_CSV_PATH" ]]; then
+        echo "[ERROR] FULL_CSV_PATH not set in read_csv_with_lock" >&2
+        return 1
+    fi
+    local csv_file="$FULL_CSV_PATH"
     
     if ! acquire_csv_lock; then
         return 1
@@ -130,7 +136,12 @@ read_csv_with_lock() {
 # Write CSV with lock
 # Usage: echo "content" | write_csv_with_lock
 write_csv_with_lock() {
-    local csv_file="${EVOLUTION_DIR:-evolution}/evolution.csv"
+    # Ensure we have the full CSV path set
+    if [[ -z "$FULL_CSV_PATH" ]]; then
+        echo "[ERROR] FULL_CSV_PATH not set in write_csv_with_lock" >&2
+        return 1
+    fi
+    local csv_file="$FULL_CSV_PATH"
     local temp_file="${csv_file}.tmp.$$"
     
     if ! acquire_csv_lock; then
@@ -153,7 +164,13 @@ update_csv_row_with_lock() {
     local target_id="$1"
     local field="$2"
     local value="$3"
-    local csv_file="${FULL_CSV_PATH:-${EVOLUTION_DIR:-evolution}/evolution.csv}"
+    
+    # Ensure we have the full CSV path set
+    if [[ -z "$FULL_CSV_PATH" ]]; then
+        echo "[ERROR] FULL_CSV_PATH not set in update_csv_row_with_lock" >&2
+        return 1
+    fi
+    local csv_file="$FULL_CSV_PATH"
     
     if ! acquire_csv_lock; then
         return 1
@@ -202,7 +219,12 @@ with open('${csv_file}.tmp', 'w', newline='') as f:
 # Find next pending candidate with lock
 # Usage: next_pending=$(find_next_pending_with_lock)
 find_next_pending_with_lock() {
-    local csv_file="${FULL_CSV_PATH:-${EVOLUTION_DIR:-evolution}/evolution.csv}"
+    # Ensure we have the full CSV path set
+    if [[ -z "$FULL_CSV_PATH" ]]; then
+        echo "[ERROR] FULL_CSV_PATH not set in find_next_pending_with_lock" >&2
+        return 1
+    fi
+    local csv_file="$FULL_CSV_PATH"
     
     if ! acquire_csv_lock; then
         return 1

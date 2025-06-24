@@ -78,7 +78,7 @@ load_config() {
   
   # Load config if found
   if [[ -f "$config_file" ]]; then
-    echo "[INFO] Loading configuration from: $config_file"
+    echo "[DEBUG] Loading configuration from: $config_file" >&2
     # Simple YAML parsing for key: value pairs and nested structures
     local in_ideation_section=false
     local in_parallel_section=false
@@ -143,7 +143,6 @@ load_config() {
       else
         # Handle top-level keys
         case $key in
-          evolution_dir) EVOLUTION_DIR="$value" ;;
           algorithm_file) ALGORITHM_FILE="$value" ;;
           evaluator_file) EVALUATOR_FILE="$value" ;;
           brief_file) BRIEF_FILE="$value" ;;
@@ -152,6 +151,9 @@ load_config() {
           parent_selection) PARENT_SELECTION="$value" ;;
           python_cmd) PYTHON_CMD="$value" ;;
           auto_ideate) AUTO_IDEATE="$value" ;;
+          evolution_dir) 
+            echo "[WARN] evolution_dir in config is ignored - automatically inferred from config file location" >&2
+            ;;
         esac
       fi
     done < "$config_file"
@@ -163,7 +165,7 @@ load_config() {
     local config_dir=$(dirname "$config_file")
     if [[ "$config_dir" != "." && "$config_dir" != "" ]]; then
       EVOLUTION_DIR="$config_dir"
-      echo "[INFO] Using evolution directory from config path: $EVOLUTION_DIR"
+      echo "[DEBUG] Using evolution directory from config path: $EVOLUTION_DIR" >&2
     fi
   fi
   
