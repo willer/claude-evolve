@@ -14,7 +14,8 @@ def should_skip_processing(id_val, based_on_id, parent_file, output_file):
     """
     Determine if evolution processing should be skipped.
     
-    Simple rule: If file exists, skip everything. This handles all edge cases cleanly.
+    Simple rule: If file exists, skip everything UNLESS this is a retry candidate.
+    For retry candidates, we want Claude to process the existing file to fix bugs.
     
     Returns tuple: (skip_copy, skip_claude, reason)
     """
@@ -23,9 +24,15 @@ def should_skip_processing(id_val, based_on_id, parent_file, output_file):
         return True, True, "Baseline algorithm - no processing needed"
     
     # File existence check - if file exists, skip both copy and Claude
-    # This automatically handles self-parent cases and re-runs
+    # EXCEPT for retry candidates which need Claude to fix the existing file
     if os.path.exists(output_file):
-        return True, True, "File already exists - skipping all processing"
+        # Check if this might be a retry candidate by looking for retry status in environment
+        # The worker sets RETRY_CANDIDATE=true for retry processing
+        retry_env = os.environ.get('RETRY_CANDIDATE')
+        if retry_env == 'true':
+            return True, False, "Retry candidate - skip copy but run Claude for bug fixing"
+        else:
+            return True, True, "File already exists - skipping all processing"
     
     # File doesn't exist - proceed with copy and Claude
     return False, False, None

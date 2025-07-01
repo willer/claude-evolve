@@ -25,23 +25,27 @@ USAGE:
 SELECTORS:
   gen01, gen02, etc.  Target specific generation
   all                 Target all generations
-  failed              Target all candidates with failed status
+  failed              Target all candidates with failed status (includes retries)
   complete            Target all candidates with complete status
   pending             Target all candidates with pending status
   running             Target all candidates with running status
 
 ACTIONS:
-  failed    Mark candidates as failed (keeps scores)
-  complete  Mark candidates as complete (keeps scores)  
-  pending   Mark candidates as pending (keeps scores)
-  reboot    Reset completely (delete .py files, clear scores, set pending)
+  failed           Mark candidates as failed (keeps scores)
+  complete         Mark candidates as complete (keeps scores)  
+  pending          Mark candidates as pending (keeps scores)
+  failed-retry1    Mark candidates for retry attempt 1 (bug fixing)
+  failed-retry2    Mark candidates for retry attempt 2 (bug fixing)
+  failed-retry3    Mark candidates for retry attempt 3 (bug fixing)
+  reboot           Reset completely (delete .py files, clear scores, set pending)
 
 EXAMPLES:
-  claude-evolve edit gen03 failed     # Mark all gen03 as failed
-  claude-evolve edit failed pending   # Reset all failed candidates to pending
-  claude-evolve edit complete failed  # Mark all complete as failed for re-run
-  claude-evolve edit all pending      # Mark everything as pending for re-run
-  claude-evolve edit gen02 reboot     # Full reset of gen02 (delete files + clear data)
+  claude-evolve edit gen03 failed        # Mark all gen03 as failed
+  claude-evolve edit failed pending      # Reset all failed candidates to pending
+  claude-evolve edit failed failed-retry1 # Convert failed to retry status (bug fixing)
+  claude-evolve edit complete failed     # Mark all complete as failed for re-run
+  claude-evolve edit all pending         # Mark everything as pending for re-run
+  claude-evolve edit gen02 reboot        # Full reset of gen02 (delete files + clear data)
 
 DESCRIPTION:
   This command helps manage evolution runs when you need to re-evaluate candidates.
@@ -73,9 +77,9 @@ fi
 
 # Validate action
 case "$ACTION" in
-  failed|complete|pending|reboot) ;;
+  failed|complete|pending|failed-retry1|failed-retry2|failed-retry3|reboot) ;;
   *)
-    echo "[ERROR] Action must be one of: failed, complete, pending, reboot" >&2
+    echo "[ERROR] Action must be one of: failed, complete, pending, failed-retry1, failed-retry2, failed-retry3, reboot" >&2
     exit 1
     ;;
 esac
@@ -100,11 +104,13 @@ update_candidates_status() {
 import csv
 import sys
 import os
+import re
 
 csv_file = '$FULL_CSV_PATH'
 selector = '$selector'
 new_status = '$new_status'
 clear_scores = '$clear_scores' == 'true'
+
 
 try:
     # Read CSV
@@ -139,6 +145,8 @@ try:
             # Status selector
             if selector == 'pending':
                 matches = current_status == '' or current_status == 'pending'
+            elif selector == 'failed':
+                matches = current_status.startswith('failed')
             else:
                 matches = current_status == selector
         
@@ -210,9 +218,11 @@ delete_evolution_files() {
     candidates_to_delete=$("$PYTHON_CMD" -c "
 import csv
 import sys
+import re
 
 csv_file = '$FULL_CSV_PATH'
 selector = '$selector'
+
 
 try:
     with open(csv_file, 'r') as f:
@@ -231,6 +241,8 @@ try:
             matches = False
             if selector == 'pending':
                 matches = current_status == '' or current_status == 'pending'
+            elif selector == 'failed':
+                matches = current_status.startswith('failed')
             else:
                 matches = current_status == selector
             
@@ -277,6 +289,15 @@ case "$ACTION" in
     ;;
   pending)
     update_candidates_status "$SELECTOR" "" "false"  # Empty status means pending
+    ;;
+  failed-retry1)
+    update_candidates_status "$SELECTOR" "failed-retry1" "false"
+    ;;
+  failed-retry2)
+    update_candidates_status "$SELECTOR" "failed-retry2" "false"
+    ;;
+  failed-retry3)
+    update_candidates_status "$SELECTOR" "failed-retry3" "false"
     ;;
   reboot)
     echo "[INFO] Performing full reboot of '$SELECTOR'..."

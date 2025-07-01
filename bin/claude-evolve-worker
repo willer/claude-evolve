@@ -18,6 +18,59 @@ cleanup_temp() {
 # Set trap to clean up temp files on exit
 trap cleanup_temp EXIT INT TERM
 
+# Function to handle failures with retry logic
+handle_failure() {
+  local candidate_id="$1"
+  local current_status="$2"
+  local performance="${3:-0}"
+  
+  # If this is already a retry, increment the retry count
+  if [[ $current_status =~ ^failed-retry([0-9]+)$ ]]; then
+    local retry_num=${BASH_REMATCH[1]}
+    local new_retry_num=$((retry_num + 1))
+    
+    if [[ $new_retry_num -le $MAX_RETRIES ]]; then
+      local new_status="failed-retry${new_retry_num}"
+      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" update "$candidate_id" "$new_status"
+      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" perf "$candidate_id" "$performance"
+      echo "[WORKER-$$] ✗ Retry $retry_num failed, marked as $new_status"
+      exit 1
+    else
+      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" update "$candidate_id" "failed"
+      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" perf "$candidate_id" "$performance"
+      echo "[WORKER-$$] ✗ Max retries ($MAX_RETRIES) exceeded, marking as permanently failed"
+      exit 1
+    fi
+  elif [[ $current_status == "failed" ]]; then
+    # Initial failure, convert to retry1 if retries are enabled
+    if [[ $MAX_RETRIES -gt 0 ]]; then
+      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" update "$candidate_id" "failed-retry1"
+      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" perf "$candidate_id" "$performance"
+      echo "[WORKER-$$] ✗ Initial failure, marked as failed-retry1 for retry"
+      exit 1
+    else
+      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" update "$candidate_id" "failed"
+      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" perf "$candidate_id" "$performance"
+      echo "[WORKER-$$] ✗ Failed (retries disabled)"
+      # Use exit code 1 - systemic issue since retries are disabled
+      exit 1
+    fi
+  else
+    # Not a failure scenario, convert to retry1 if retries enabled
+    if [[ $MAX_RETRIES -gt 0 ]]; then
+      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" update "$candidate_id" "failed-retry1"
+      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" perf "$candidate_id" "$performance"
+      echo "[WORKER-$$] ✗ Evaluation failed, marked as failed-retry1 for retry"
+      exit 1
+    else
+      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" update "$candidate_id" "failed"
+      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" perf "$candidate_id" "$performance"
+      echo "[WORKER-$$] ✗ Evaluation failed (retries disabled)"
+      exit 1
+    fi
+  fi
+}
+
 # Load configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/config.sh
@@ -57,16 +110,27 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# If no ID provided, find next pending
+# If no ID provided, find next pending using UNIFIED LOGIC
 if [[ -z $candidate_id ]]; then
-  candidate_id=$(find_next_pending_with_lock)
-  if [[ -z $candidate_id ]]; then
+  candidate_result=$("$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" next)
+  if [[ -z $candidate_result ]]; then
     echo "[DEBUG] No pending candidates found" >&2
     exit 0
   fi
+  
+  # Parse candidate_id|original_status format
+  if [[ $candidate_result == *"|"* ]]; then
+    candidate_id="${candidate_result%|*}"  # Everything before |
+    original_candidate_status="${candidate_result#*|}"  # Everything after |
+  else
+    # Fallback for old format (shouldn't happen)
+    candidate_id="$candidate_result"
+    original_candidate_status=""
+  fi
 else
-  # Mark specified candidate as running
-  update_csv_row_with_lock "$candidate_id" "status" "running"
+  # Mark specified candidate as running using UNIFIED LOGIC
+  "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" update "$candidate_id" "running"
+  original_candidate_status=""  # Unknown for manually specified candidates
 fi
 
 echo "[WORKER-$$] Processing candidate ID: $candidate_id"
@@ -124,6 +188,23 @@ fi
 echo "[WORKER-$$] Description: $description"
 echo "[WORKER-$$] Based on ID: $based_on_id"
 
+# AIDEV-NOTE: Retry logic - detect if this is a retry attempt
+is_retry=false
+retry_count=0
+# Use original_candidate_status for retry detection (if available), otherwise fall back to CSV status
+retry_status="$original_candidate_status"
+if [[ -z "$retry_status" ]]; then
+  retry_status="$status"
+fi
+
+if [[ $retry_status =~ ^failed-retry([0-9]+)$ ]]; then
+  is_retry=true
+  retry_count=${BASH_REMATCH[1]}
+  echo "[WORKER-$$] 🔄 Processing retry attempt #$retry_count"
+elif [[ $retry_status == "failed" ]]; then
+  echo "[WORKER-$$] ⚠️ Initial failure detected - this should be converted to failed-retry1 to enable retries"
+fi
+
 # AIDEV-NOTE: Using common evolution processor logic for consistent handling
 # Determine parent algorithm
 if [[ -z $based_on_id || $based_on_id == "0" || $based_on_id == '""' ]]; then
@@ -139,7 +220,7 @@ else
   
   if [[ ! -f $parent_file ]]; then
     echo "[ERROR] Parent algorithm not found: $parent_file" >&2
-    update_csv_row_with_lock "$candidate_id" "status" "failed"
+    handle_failure "$candidate_id" "$retry_status" "0"
     exit 1
   fi
 fi
@@ -155,11 +236,28 @@ fi
 temp_file="${output_file}.tmp$$"
 
 # Check if processing should be skipped using common logic
+# Set environment variable for retry detection
+if [[ $is_retry == "true" ]]; then
+  export RETRY_CANDIDATE=true
+else
+  export RETRY_CANDIDATE=false
+fi
+
 eval "$("$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_processor.py" "$id" "$based_on_id" "$FULL_OUTPUT_DIR" "$ROOT_DIR" "$parent_file" "$output_file")"
 
 # Handle copy operation to temp file
 if [[ "$skip_copy" == "True" ]]; then
   echo "[WORKER-$$] ⚠️  Skipping copy - $reason"
+elif [[ $is_retry == "true" ]]; then
+  # For retries, edit the existing failed algorithm in-place
+  if [[ -f "$output_file" ]]; then
+    cp "$output_file" "$temp_file"
+    echo "[WORKER-$$] 🔄 Copied existing algorithm for retry: $temp_file"
+  else
+    # Fallback to parent if existing file doesn't exist
+    cp "$parent_file" "$temp_file"
+    echo "[WORKER-$$] ⚠️ Existing algorithm not found, using parent: $temp_file"
+  fi
 else
   cp "$parent_file" "$temp_file"
   echo "[WORKER-$$] Copied parent to temp file: $temp_file"
@@ -178,15 +276,28 @@ else
   claude_cmd="${CLAUDE_CMD:-claude}"
   if ! command -v "$claude_cmd" >/dev/null 2>&1; then
     echo "[ERROR] Claude CLI not found" >&2
-    update_csv_row_with_lock "$candidate_id" "status" "failed"
+    handle_failure "$candidate_id" "$retry_status" "0"
     exit 1
   fi
   
   CLAUDE_MODEL="sonnet"
   echo "[WORKER-$$] Using Claude $CLAUDE_MODEL for mutation"
   
-  # Create mutation prompt
-  prompt="Edit the file $temp_file to implement this specific change: $description
+  # Create mutation prompt (different for retries vs initial attempts)
+  if [[ $is_retry == "true" ]]; then
+    prompt="Fix the bugs in the file $temp_file. This algorithm was attempting to implement: $description
+
+The algorithm failed during evaluation. Please:
+- Analyze the code for potential bugs (syntax errors, logical issues, missing imports, etc.)
+- Fix any problems you find
+- Ensure the code runs without errors
+- Make sure it still implements the intended change: $description
+- Add appropriate error handling and validation
+- If possible, suggest a simple way to test this fix
+
+This is retry attempt #$retry_count. Focus on making the code robust and correct."
+  else
+    prompt="Edit the file $temp_file to implement this specific change: $description
 
 Requirements:
 - Edit the file directly (don't just provide comments or suggestions)
@@ -196,6 +307,7 @@ Requirements:
 - Add proper error handling if needed
 
 The file currently contains the parent algorithm. Modify it according to the description above."
+  fi
   
   # Log prompt
   {
@@ -222,7 +334,7 @@ The file currently contains the parent algorithm. Modify it according to the des
       echo "[WORKER-$$] Cleaned up temp file due to rate limit" >&2
     fi
     # Reset to pending so it can be retried later
-    update_csv_row_with_lock "$candidate_id" "status" "pending"
+    "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" update "$candidate_id" "pending"
     exit 2  # Special exit code for rate limit
   fi
   
@@ -235,7 +347,7 @@ The file currently contains the parent algorithm. Modify it according to the des
       rm "$temp_file"
       echo "[WORKER-$$] Cleaned up temp file due to Claude failure" >&2
     fi
-    update_csv_row_with_lock "$candidate_id" "status" "failed"
+    handle_failure "$candidate_id" "$retry_status" "0"
     exit 1
   fi
   
@@ -249,7 +361,7 @@ The file currently contains the parent algorithm. Modify it according to the des
       
       # Clean up temp file and mark as failed
       rm "$temp_file"
-      update_csv_row_with_lock "$candidate_id" "status" "failed"
+      handle_failure "$candidate_id" "$retry_status" "0"
       exit 1
     else
       # Changes were made - move temp file to final location
@@ -279,7 +391,7 @@ if [[ -n $timeout_seconds ]]; then
     eval_exit_code=$?
     if [[ $eval_exit_code -eq 124 ]]; then
       echo "[ERROR] Evaluation timed out" >&2
-      update_csv_row_with_lock "$candidate_id" "status" "timeout"
+      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" update "$candidate_id" "timeout"
       exit 1
     fi
   fi
@@ -306,13 +418,11 @@ if [[ $eval_exit_code -eq 0 ]]; then
   if [[ $eval_output =~ ^[[:space:]]*-?[0-9]+\.?[0-9]*[[:space:]]*$ ]]; then
     score=$(echo "$eval_output" | tr -d ' ')
     if [[ $(echo "$score == 0" | bc -l) == "1" ]]; then
-      update_csv_row_with_lock "$candidate_id" "status" "failed"
-      update_csv_row_with_lock "$candidate_id" "performance" "$score"
-      echo "[WORKER-$$] ✗ Evaluation failed with score 0"
+      handle_failure "$candidate_id" "$retry_status" "$score"
       exit 1
     else
-      update_csv_row_with_lock "$candidate_id" "performance" "$score"
-      update_csv_row_with_lock "$candidate_id" "status" "complete"
+      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" perf "$candidate_id" "$score"
+      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" update "$candidate_id" "complete"
       echo "[WORKER-$$] ✓ Evaluation complete, score: $score"
       exit 0
     fi
@@ -348,13 +458,11 @@ if [[ $eval_exit_code -eq 0 ]]; then
   if score=$(echo "$eval_output" | grep -o '"score"[[:space:]]*:[[:space:]]*[0-9.]*' | cut -d: -f2 | tr -d ' '); then
     if [[ -n $score ]]; then
       if [[ $(echo "$score == 0" | bc -l) == "1" ]]; then
-        update_csv_row_with_lock "$candidate_id" "status" "failed"
-        update_csv_row_with_lock "$candidate_id" "performance" "$score"
-        echo "[WORKER-$$] ✗ Evaluation failed with score 0"
+        handle_failure "$candidate_id" "$retry_status" "$score"
         exit 1
       else
-        update_csv_row_with_lock "$candidate_id" "performance" "$score"
-        update_csv_row_with_lock "$candidate_id" "status" "complete"
+        "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" perf "$candidate_id" "$score"
+        "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" update "$candidate_id" "complete"
         echo "[WORKER-$$] ✓ Evaluation complete, score: $score"
         exit 0
       fi
@@ -365,13 +473,11 @@ if [[ $eval_exit_code -eq 0 ]]; then
   if score=$(echo "$eval_output" | grep -o '"performance"[[:space:]]*:[[:space:]]*[0-9.]*' | cut -d: -f2 | tr -d ' '); then
     if [[ -n $score ]]; then
       if [[ $(echo "$score == 0" | bc -l) == "1" ]]; then
-        update_csv_row_with_lock "$candidate_id" "status" "failed"
-        update_csv_row_with_lock "$candidate_id" "performance" "$score"
-        echo "[WORKER-$$] ✗ Evaluation failed with score 0"
+        handle_failure "$candidate_id" "$retry_status" "$score"
         exit 1
       else
-        update_csv_row_with_lock "$candidate_id" "performance" "$score"
-        update_csv_row_with_lock "$candidate_id" "status" "complete"
+        "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" perf "$candidate_id" "$score"
+        "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" update "$candidate_id" "complete"
         echo "[WORKER-$$] ✓ Evaluation complete, score: $score"
         exit 0
       fi
@@ -382,10 +488,10 @@ if [[ $eval_exit_code -eq 0 ]]; then
   echo "[ERROR] Expected: plain number (e.g., 1.23) or JSON with 'score' or 'performance' field" >&2
   echo "[ERROR] Actual evaluator output was:" >&2
   echo "$eval_output" >&2
-  update_csv_row_with_lock "$candidate_id" "status" "failed"
+  handle_failure "$candidate_id" "$retry_status" "0"
   exit 1
 else
   echo "[ERROR] Evaluator failed with exit code $eval_exit_code" >&2
-  update_csv_row_with_lock "$candidate_id" "status" "failed"
+  handle_failure "$candidate_id" "$retry_status" "0"
   exit 1
 fi

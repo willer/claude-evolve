@@ -8,6 +8,7 @@ import csv
 import json
 import sys
 import os
+import re
 from typing import Dict, List, Any
 
 
@@ -48,6 +49,40 @@ def ensure_columns(headers: list[str], rows: list[list[str]], new_fields: dict) 
             row.append('')
     
     return headers, rows
+
+
+def parse_retry_status(status: str) -> tuple[str, int]:
+    """Parse retry status and return (base_status, retry_count).
+    
+    Examples:
+        'failed' -> ('failed', 0)
+        'failed-retry1' -> ('failed', 1)
+        'failed-retry3' -> ('failed', 3)
+        'complete' -> ('complete', 0)
+    """
+    if not status:
+        return ('', 0)
+    
+    match = re.match(r'^(.*)-retry(\d+)$', status)
+    if match:
+        base_status = match.group(1)
+        retry_count = int(match.group(2))
+        return (base_status, retry_count)
+    else:
+        return (status, 0)
+
+
+def is_retry_candidate(status: str) -> bool:
+    """Check if a status represents a retry candidate."""
+    base_status, _ = parse_retry_status(status)
+    return base_status == 'failed' and status.startswith('failed-retry')
+
+
+def is_pending_retry(status: str) -> bool:
+    """Check if status is pending (empty, 'pending', or retry status)."""
+    if not status or status == 'pending':
+        return True
+    return is_retry_candidate(status)
 
 
 def update_row_with_fields(headers: list[str], rows: list[list[str]], target_id: str, fields: dict):
@@ -162,9 +197,12 @@ def main():
         try:
             headers, rows = read_csv(csv_file)
             
-            # Find first row with empty status or status == "pending"
+            # Find first row with empty status, "pending", or retry status
             for i, row in enumerate(rows, start=2):  # Start at 2 (1-indexed, skip header)
-                if len(row) < 5 or row[4] == '' or row[4] == 'pending':
+                if len(row) < 5:
+                    print(i)
+                    sys.exit(0)
+                elif len(row) >= 5 and is_pending_retry(row[4]):
                     print(i)
                     sys.exit(0)
             

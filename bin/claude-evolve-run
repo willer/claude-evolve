@@ -236,7 +236,6 @@ cleanup_workers() {
       # Worker finished
       if wait "$pid" 2>/dev/null; then
         echo "[DISPATCHER] Worker $pid completed successfully"
-        consecutive_failures=0  # Reset counter on success
       else
         local exit_code=$?
         if [[ $exit_code -eq 2 ]]; then
@@ -244,24 +243,7 @@ cleanup_workers() {
           # Rate limits don't count as consecutive failures
         else
           echo "[DISPATCHER] Worker $pid failed with exit code $exit_code"
-          ((consecutive_failures++))
-          
-          # Check if we've hit the failure limit
-          if [[ $consecutive_failures -ge $MAX_CONSECUTIVE_FAILURES ]]; then
-            echo "" >&2
-            echo "⚠️  EVOLUTION PAUSED: Multiple consecutive failures detected" >&2
-            echo "⚠️  $consecutive_failures consecutive worker failures - indicates systemic issues" >&2
-            echo "⚠️  Possible causes: Claude API issues, evaluator bugs, configuration problems" >&2
-            echo "⚠️  Check recent worker logs in logs/ directory for specific error details" >&2
-            echo "⚠️  Fix issues before restarting evolution" >&2
-            echo "" >&2
-            
-            # Shutdown all workers and exit
-            shutdown_workers
-            exit 1
-          fi
-          
-          echo "[DISPATCHER] Consecutive failures: $consecutive_failures/$MAX_CONSECUTIVE_FAILURES"
+          # With retry mechanism, failures are normal - just keep processing
         fi
       fi
     fi
@@ -269,10 +251,9 @@ cleanup_workers() {
   worker_pids=("${new_pids[@]}")
 }
 
-# Function to count pending candidates
+# Function to count pending candidates - UNIFIED LOGIC
 count_pending_candidates() {
-  "$PYTHON_CMD" "$SCRIPT_DIR/../lib/csv_helper.py" find_pending "$FULL_CSV_PATH" >/dev/null 2>&1
-  echo $?  # 0 if found, 1 if not found
+  "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" count
 }
 
 # Function to get CSV stats
@@ -289,26 +270,8 @@ get_csv_stats() {
   total_rows=$(wc -l < "$csv_path" | tr -d '[:space:]')
   complete_count=$(grep ',complete' "$csv_path" 2>/dev/null | wc -l | tr -d '[:space:]')
   
-  # Count pending using same logic as find_next_pending_with_lock
-  # This includes rows with <5 fields AND rows with empty/pending status
-  pending_count=$("$PYTHON_CMD" -c "
-import csv
-import sys
-
-pending_count = 0
-with open('$csv_path', 'r') as f:
-    reader = csv.reader(f)
-    rows = list(reader)
-    
-    for i in range(1, len(rows)):
-        # Same logic as find_next_pending_with_lock
-        if len(rows[i]) < 5:
-            pending_count += 1
-        elif len(rows[i]) >= 5 and (rows[i][4] == 'pending' or rows[i][4] == ''):
-            pending_count += 1
-
-print(pending_count)
-")
+  # Count pending using UNIFIED CSV logic
+  pending_count=$("$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$csv_path" count)
   
   echo "$total_rows $complete_count $pending_count"
 }
@@ -358,12 +321,13 @@ try:
         os.rename(csv_file + '.tmp', csv_file)
         print(f'[INFO] Reset {changed} stuck running candidates to pending')
     
-    # Count pending candidates
-    pending = 0
-    for i in range(1, len(rows)):
-        # Row with < 5 fields or empty/pending status in field 5
-        if len(rows[i]) < 5 or (len(rows[i]) >= 5 and rows[i][4] in ['', 'pending']):
-            pending += 1
+    # Count pending candidates using UNIFIED logic
+    import sys
+    sys.path.append('$SCRIPT_DIR/../lib')
+    from evolution_csv import EvolutionCSV
+    
+    with EvolutionCSV(csv_file) as csv_ops:
+        pending = csv_ops.count_pending_candidates()
     
     print(f'[INFO] CSV loaded: {len(rows)-1} total candidates, {pending} pending')
     
@@ -406,9 +370,8 @@ else
   echo "[DISPATCHER] No cleanup issues detected - proceeding with run"
 fi
 
-# Consecutive failure tracking
-consecutive_failures=0
-MAX_CONSECUTIVE_FAILURES=5
+# With retry mechanism, we don't need consecutive failure tracking
+# Failures are handled gracefully through the retry system
 
 # Main dispatch loop
 while true; do

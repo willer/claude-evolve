@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""
+Clean up malformed CSV files by removing excessive trailing empty fields.
+Fixes issues where rows have too many trailing commas.
+"""
+
+import csv
+import sys
+import os
+import argparse
+from typing import List
+
+def clean_csv_row(row: List[str], expected_min_cols: int = 5) -> List[str]:
+    """Remove trailing empty fields from a CSV row, keeping minimum required columns."""
+    # Remove trailing empty strings
+    while len(row) > expected_min_cols and row[-1] == '':
+        row.pop()
+    
+    # Ensure we have at least the minimum required columns
+    while len(row) < expected_min_cols:
+        row.append('')
+    
+    return row
+
+def clean_csv_file(filepath: str, backup: bool = True, dry_run: bool = False) -> int:
+    """Clean a CSV file by removing excessive trailing empty fields."""
+    
+    if not os.path.exists(filepath):
+        print(f"❌ File not found: {filepath}")
+        return 1
+    
+    # Read the original CSV
+    with open(filepath, 'r') as f:
+        reader = csv.reader(f)
+        headers = next(reader, [])
+        rows = list(reader)
+    
+    if not headers:
+        print(f"❌ Empty CSV file: {filepath}")
+        return 1
+    
+    print(f"📊 Original CSV: {len(rows)} rows, max {max(len(row) for row in rows) if rows else 0} columns")
+    
+    # Clean each row
+    cleaned_rows = []
+    changes_made = 0
+    
+    for i, row in enumerate(rows):
+        original_len = len(row)
+        cleaned_row = clean_csv_row(row.copy())
+        cleaned_rows.append(cleaned_row)
+        
+        if len(cleaned_row) != original_len:
+            changes_made += 1
+            if dry_run:
+                print(f"  🔧 Row {i+2}: {original_len} → {len(cleaned_row)} columns")
+    
+    if changes_made == 0:
+        print("✅ No changes needed - CSV is already clean")
+        return 0
+    
+    print(f"🔧 Cleaned {changes_made} rows")
+    
+    if dry_run:
+        print("🔍 Dry run mode - no changes written")
+        return 0
+    
+    # Create backup if requested
+    if backup:
+        backup_file = f"{filepath}.backup.{os.getpid()}"
+        os.rename(filepath, backup_file)
+        print(f"💾 Backup created: {backup_file}")
+    
+    # Write cleaned CSV
+    with open(filepath, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(headers)
+        writer.writerows(cleaned_rows)
+    
+    new_max_cols = max(len(row) for row in cleaned_rows) if cleaned_rows else 0
+    print(f"✅ Cleaned CSV: {len(cleaned_rows)} rows, max {new_max_cols} columns")
+    
+    return 0
+
+def main():
+    parser = argparse.ArgumentParser(description="Clean up malformed CSV files")
+    parser.add_argument("csv_file", help="Path to CSV file to clean")
+    parser.add_argument("--no-backup", action="store_true", help="Don't create backup file")
+    parser.add_argument("--dry-run", action="store_true", help="Show what would be changed without making changes")
+    
+    args = parser.parse_args()
+    
+    try:
+        return clean_csv_file(args.csv_file, backup=not args.no_backup, dry_run=args.dry_run)
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(main())

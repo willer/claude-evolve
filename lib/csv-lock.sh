@@ -230,29 +230,42 @@ find_next_pending_with_lock() {
         return 1
     fi
     
-    # Find oldest pending candidate and update to running using Python
+    # Find oldest pending candidate (including retries) and update to running using Python
     local candidate=$("$PYTHON_CMD" -c "
 import csv
 import sys
+import re
+
+def is_pending_retry(status):
+    '''Check if status is pending (empty, pending, or retry status).'''
+    if not status or status == 'pending':
+        return True
+    return status.startswith('failed-retry')
 
 # Read CSV
 with open('$csv_file', 'r') as f:
     reader = csv.reader(f)
     rows = list(reader)
 
-# Find first pending candidate
+# Find first pending candidate (including retries)
 candidate_id = None
+original_status = None
 for i in range(1, len(rows)):
+    # Skip empty rows
+    if not rows[i] or len(rows[i]) == 0:
+        continue
     # If row has fewer than 5 fields, it's pending
     if len(rows[i]) < 5:
         candidate_id = rows[i][0]
+        original_status = ''  # Empty status means pending
         # Ensure row has 5 fields before setting status
         while len(rows[i]) < 5:
             rows[i].append('')
         rows[i][4] = 'running'  # Update status
         break
-    elif len(rows[i]) >= 5 and (rows[i][4] == 'pending' or rows[i][4] == ''):
+    elif len(rows[i]) >= 5 and is_pending_retry(rows[i][4]):
         candidate_id = rows[i][0]
+        original_status = rows[i][4]  # Save original status before overwriting
         rows[i][4] = 'running'  # Update status
         break
 
@@ -261,7 +274,7 @@ if candidate_id:
     with open('${csv_file}.tmp', 'w', newline='') as f:
         writer = csv.writer(f)
         writer.writerows(rows)
-    print(candidate_id)
+    print(f'{candidate_id}|{original_status}')  # Return both ID and original status
 ")
     
     if [ -n "$candidate" ]; then

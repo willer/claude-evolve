@@ -26,11 +26,43 @@ get_model_for_generation() {
     gen_num=1  # Default for malformed input
   fi
   
-  # Alternate between models by generation
-  if (( gen_num % 2 == 1 )); then
-    echo "opus"    # Odd generations: use Opus for exploration
+  # Check which AI tools are available
+  local has_o3=false
+  local has_gemini=false
+  
+  if command -v codex >/dev/null 2>&1; then
+    has_o3=true
+  fi
+  
+  if command -v gemini >/dev/null 2>&1; then
+    has_gemini=true
+  fi
+  
+  # Determine rotation based on what's available
+  if [[ "$has_o3" == "true" && "$has_gemini" == "true" ]]; then
+    # All three available: opus -> o3 -> gemini rotation
+    case $((gen_num % 3)) in
+      1) echo "opus" ;;     # 1, 4, 7, 10...
+      2) echo "o3" ;;       # 2, 5, 8, 11...
+      0) echo "gemini" ;;   # 3, 6, 9, 12...
+    esac
+  elif [[ "$has_o3" == "true" ]]; then
+    # Only opus and o3: alternate between them
+    if (( gen_num % 2 == 1 )); then
+      echo "opus"    # Odd generations
+    else
+      echo "o3"      # Even generations
+    fi
+  elif [[ "$has_gemini" == "true" ]]; then
+    # Only opus and gemini: alternate between them
+    if (( gen_num % 2 == 1 )); then
+      echo "opus"    # Odd generations
+    else
+      echo "gemini" # Even generations
+    fi
   else
-    echo "o3"      # Even generations: use o3 for refinement
+    # Only opus available
+    echo "opus"
   fi
 }
 
@@ -59,6 +91,21 @@ call_ai_with_limit_check() {
       return 0
     else
       echo "[WARN] Codex o3 failed, falling back to Claude Opus" >&2
+      preferred_model="opus"
+    fi
+  elif [[ "$preferred_model" == "gemini" ]] && command -v gemini >/dev/null 2>&1; then
+    echo "[INFO] Using gemini 2.5 pro for ideation" >&2
+    
+    # Call gemini with -y and -p flags
+    local ai_output
+    ai_output=$(gemini -y -p "$prompt" 2>&1)
+    local ai_exit_code=$?
+    
+    if [[ $ai_exit_code -eq 0 ]]; then
+      echo "$ai_output"
+      return 0
+    else
+      echo "[WARN] Gemini failed, falling back to Claude Opus" >&2
       preferred_model="opus"
     fi
   fi
@@ -328,22 +375,25 @@ CRITICAL CSV FORMAT RULES:
   * Are impossible given the codebase structure
   * Would break the algorithm interface requirements
 
-⚠️ AVOID POSITION SIZING PARAMETERS - THEY GET CLAMPED:
-Since we trade leveraged ETFs (3x), positions are clamped to 1.0 maximum. These parameters often have NO EFFECT:
-- Kelly floor/cap adjustments (KELLY_FLOOR, kelly multiplier caps)
-- Volatility scale factors that push positions > 1.0
-- Any position sizing assuming leverage > 100%
+⚠️ AVOID ONLY: Kelly floor/cap adjustments that assume leverage > 1.0 (these get clamped and have no effect)
 
-✅ FOCUS ON TRADE DECISION PARAMETERS:
-- Entry/exit thresholds (IBS_BUY_THRESHOLD, LARISSA_LOW_THRESHOLD, TRS_BULL_BUY_THRESHOLD, etc.)
-- Indicator periods (ATR_PERIOD, RSI_PERIOD, EMA_PERIOD, TDD_TREND_PERIOD, etc.)
-- Strategy weights (WEIGHT_LARISSA, WEIGHT_ATR_TREND, WEIGHT_TDD, etc.)
-- Enable/disable flags and new trading logic
+✅ EXPLORE ANY CREATIVE IDEAS INCLUDING:
+- **Machine Learning**: Neural networks, decision trees, ensemble methods (use train() method properly)
+- **New Indicators**: Custom combinations, alternative calculations, multi-timeframe signals
+- **Market Regime Detection**: VIX patterns, correlation shifts, volume analysis, cross-asset signals
+- **Risk Management**: Dynamic stops, correlation-based position sizing, drawdown protection
+- **Timing**: Time-of-day effects, calendar patterns, volatility timing
+- **Alternative Strategies**: New sub-strategies, momentum scoring, mean reversion variants
+- **Cross-Asset Signals**: Bond yields, sector rotation, crypto correlations
+- **Multi-Timeframe**: Combining 30m/1h/daily signals for confirmation
+- **Advanced Exits**: Profit targets, time-based exits, volatility-based exits
+
+Think outside the box! The codebase supports sophisticated approaches - be creative and ambitious.
 
 Example descriptions:
-- Lower IBS_BUY_THRESHOLD from 0.15 to 0.10 to enter deeper oversold conditions
-- Increase TRS_RSI_PERIOD from 2 to 3 for smoother RSI signals
-- Add VIX regime filter that disables mean reversion when VIX > 25
+- Train LSTM network on 30-day OHLCV sequences to predict next-day direction probability
+- Add cross-correlation filter that reduces positions when TQQQ correlation with QQQ breaks down
+- Implement intraday momentum using 30-minute data to adjust daily position sizes
 
 Add exactly $count rows to the CSV file now."
 
@@ -403,17 +453,17 @@ CRITICAL CSV FORMAT RULES:
   * What changes made this algorithm successful vs its parent
   * What parameter ranges make sense given the implementation
 
-⚠️ AVOID POSITION SIZING PARAMETERS - THEY GET CLAMPED:
-Since we trade leveraged ETFs (3x), positions are clamped to 1.0 maximum. These parameters often have NO EFFECT:
-- Kelly floor/cap adjustments (KELLY_FLOOR, kelly multiplier caps)
-- Volatility scale factors that push positions > 1.0
-- Any position sizing assuming leverage > 100%
+⚠️ AVOID ONLY: Kelly floor/cap adjustments that assume leverage > 1.0 (these get clamped and have no effect)
 
-✅ FOCUS ON TRADE DECISION PARAMETERS:
-- Entry/exit thresholds (IBS_BUY_THRESHOLD, LARISSA_LOW_THRESHOLD, TRS_BULL_BUY_THRESHOLD, etc.)
-- Indicator periods (ATR_PERIOD, RSI_PERIOD, EMA_PERIOD, TDD_TREND_PERIOD, etc.)
-- Strategy weights (WEIGHT_LARISSA, WEIGHT_ATR_TREND, WEIGHT_TDD, etc.)
-- Enable/disable flags and new trading logic
+✅ EXPLORE PARAMETER TUNING INCLUDING:
+- **Entry/Exit Thresholds**: IBS_BUY_THRESHOLD, LARISSA_LOW_THRESHOLD, RSI levels, etc.
+- **Indicator Periods**: ATR_PERIOD, RSI_PERIOD, moving average lengths, etc.
+- **Strategy Weights**: Emphasize best performers or rebalance for diversification
+- **Risk Parameters**: Stop levels, timeout periods, correlation thresholds
+- **Regime Parameters**: Volatility thresholds, trend detection sensitivity
+- **ML Hyperparameters**: Learning rates, network sizes, ensemble weights (if using ML)
+
+Be creative with parameter combinations and ranges - the system is sophisticated!
 
 Example descriptions:
 - Lower IBS_BUY_THRESHOLD from 0.15 to 0.12 to enter deeper oversold conditions
@@ -478,22 +528,23 @@ CRITICAL CSV FORMAT RULES:
   * What architectural decisions led to this algorithm's success
   * Which components are essential vs which can be replaced
 
-⚠️ AVOID POSITION SIZING PARAMETERS - THEY GET CLAMPED:
-Since we trade leveraged ETFs (3x), positions are clamped to 1.0 maximum. These parameters often have NO EFFECT:
-- Kelly floor/cap adjustments (KELLY_FLOOR, kelly multiplier caps)
-- Volatility scale factors that push positions > 1.0
-- Any position sizing assuming leverage > 100%
+⚠️ AVOID ONLY: Kelly floor/cap adjustments that assume leverage > 1.0 (these get clamped and have no effect)
 
-✅ FOCUS ON STRUCTURAL CHANGES TO TRADE DECISIONS:
-- Replace indicators with different variants (RSI → Stochastic, SMA → Hull MA)
-- Add new entry/exit conditions or filters
-- Modify strategy combination logic or weighting schemes
-- Change sub-strategy behaviors or add new sub-strategies
+✅ EXPLORE STRUCTURAL INNOVATIONS INCLUDING:
+- **Algorithm Architecture**: Replace sub-strategies, change combination logic, add new layers
+- **Indicator Swaps**: RSI → Stochastic, SMA → Hull MA, Bollinger → Keltner, etc.
+- **Machine Learning Integration**: Add neural networks, decision trees, reinforcement learning
+- **Market Regime Systems**: Multi-regime detection, regime-specific strategies
+- **Risk Management Overhauls**: Portfolio heat, correlation-based sizing, adaptive stops
+- **Multi-Asset Integration**: Cross-asset signals, sector rotation, bond/equity relationships
+- **Time-Based Innovations**: Intraday patterns, calendar effects, volatility timing
+
+The codebase is flexible - think architecturally about major improvements!
 
 Example descriptions:
-- Replace 2-period RSI with 3-period Stochastic for TRS strategy signals
-- Add Hull moving average crossover filter to ATR trend entries
-- Implement dynamic strategy weights based on recent 30-day performance
+- Replace 2-period RSI with LSTM-predicted momentum scores for TRS strategy
+- Add ensemble voting system where sub-strategies vote on market regime
+- Implement hierarchical risk budgeting with correlation-adjusted position sizing
 
 Add exactly $count structural modification rows to the CSV file now."
 
@@ -553,22 +604,23 @@ CRITICAL CSV FORMAT RULES:
   * Understand which components are compatible for merging
   * Ensure the combined approach is technically feasible in the codebase
 
-⚠️ AVOID POSITION SIZING PARAMETERS - THEY GET CLAMPED:
-Since we trade leveraged ETFs (3x), positions are clamped to 1.0 maximum. These parameters often have NO EFFECT:
-- Kelly floor/cap adjustments (KELLY_FLOOR, kelly multiplier caps)
-- Volatility scale factors that push positions > 1.0
-- Any position sizing assuming leverage > 100%
+⚠️ AVOID ONLY: Kelly floor/cap adjustments that assume leverage > 1.0 (these get clamped and have no effect)
 
-✅ FOCUS ON COMBINING TRADE DECISION ELEMENTS:
-- Merge entry/exit logic from different successful algorithms
-- Combine indicator calculations or filtering approaches
-- Integrate strategy weight adjustments or timing mechanisms
-- Blend new trading logic with proven parameter sets
+✅ EXPLORE CREATIVE COMBINATIONS INCLUDING:
+- **Strategy Fusion**: Merge successful sub-strategies, combine entry/exit logic
+- **Indicator Blending**: Mix different technical analysis approaches from successful algorithms
+- **Machine Learning Hybrids**: Combine ML predictions with rule-based systems
+- **Multi-Regime Integration**: Blend different regime detection methods
+- **Risk System Combinations**: Merge multiple risk management approaches
+- **Cross-Asset Blends**: Combine internal signals with external market data
+- **Multi-Timeframe Fusion**: Blend signals from different time horizons
+
+Think creatively about what worked in different algorithms and how to combine them!
 
 Example descriptions:
-- Combine VIX regime filter from algorithm 3 with dynamic weights from algorithm 5
-- Merge Hull MA trend detection from algorithm 2 with RSI thresholds from algorithm 4
-- Integrate momentum scoring from algorithm 1 with volatility filtering from algorithm 6
+- Combine VIX regime filter from algorithm 3 with LSTM predictions from algorithm 5
+- Merge volatility regime detection with machine learning momentum scoring
+- Integrate multi-timeframe signals with correlation-based position adjustments
 
 Add exactly $count hybrid combination rows to the CSV file now."
 
@@ -639,17 +691,19 @@ CRITICAL CSV FORMAT RULES:
 - Leave performance and status fields completely empty (just commas)
 - Use proper CSV quoting only when descriptions contain commas
 
-⚠️ AVOID POSITION SIZING PARAMETERS - THEY GET CLAMPED:
-Since we trade leveraged ETFs (3x), positions are clamped to 1.0 maximum. These parameters often have NO EFFECT:
-- Kelly floor/cap adjustments (KELLY_FLOOR, kelly multiplier caps)
-- Volatility scale factors that push positions > 1.0
-- Any position sizing assuming leverage > 100%
+⚠️ AVOID ONLY: Kelly floor/cap adjustments that assume leverage > 1.0 (these get clamped and have no effect)
 
-✅ FOCUS ON TRADE DECISION PARAMETERS:
-- Entry/exit thresholds (IBS_BUY_THRESHOLD, LARISSA_LOW_THRESHOLD, TRS_BULL_BUY_THRESHOLD, etc.)
-- Indicator periods (ATR_PERIOD, RSI_PERIOD, EMA_PERIOD, TDD_TREND_PERIOD, etc.)
-- Strategy weights (WEIGHT_LARISSA, WEIGHT_ATR_TREND, WEIGHT_TDD, etc.)
-- Enable/disable flags and new trading logic
+✅ EXPLORE ALL CREATIVE POSSIBILITIES INCLUDING:
+- **Machine Learning**: Neural networks, ensemble methods, reinforcement learning (use train() method)
+- **Advanced Indicators**: Custom combinations, multi-timeframe signals, cross-asset indicators
+- **Market Regime Detection**: VIX patterns, correlation analysis, volatility clustering
+- **Risk Management**: Dynamic stops, portfolio heat, correlation-based position sizing
+- **Alternative Strategies**: New sub-strategies, momentum variants, mean reversion innovations
+- **Multi-Asset Signals**: Sector rotation, bond yields, commodity signals
+- **Time-Based Patterns**: Intraday effects, calendar anomalies, volatility timing
+- **Parameter Optimization**: Entry thresholds, indicator periods, strategy weights
+
+Think outside the box - the system is sophisticated and can handle advanced approaches!
 
 Add exactly $TOTAL_IDEAS algorithm variation rows to the CSV file now."
 

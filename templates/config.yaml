@@ -42,6 +42,10 @@ python_cmd: "python3"
 # When true, automatically generate new ideas when no pending candidates remain
 auto_ideate: true
 
+# Retry configuration
+# Maximum number of retries for failed candidates before marking as permanently failed
+max_retries: 3
+
 # Parallel execution configuration
 parallel:
   # Enable parallel execution of evolution candidates

@@ -45,6 +45,9 @@ DEFAULT_LOCK_TIMEOUT=10
 # Default auto ideation value
 DEFAULT_AUTO_IDEATE=true
 
+# Default retry value
+DEFAULT_MAX_RETRIES=3
+
 # Load configuration from config file
 load_config() {
   # Accept config file path as parameter
@@ -75,6 +78,9 @@ load_config() {
   
   # Set auto ideation default
   AUTO_IDEATE="$DEFAULT_AUTO_IDEATE"
+  
+  # Set retry default
+  MAX_RETRIES="$DEFAULT_MAX_RETRIES"
   
   # Load config if found
   if [[ -f "$config_file" ]]; then
@@ -151,6 +157,7 @@ load_config() {
           parent_selection) PARENT_SELECTION="$value" ;;
           python_cmd) PYTHON_CMD="$value" ;;
           auto_ideate) AUTO_IDEATE="$value" ;;
+          max_retries) MAX_RETRIES="$value" ;;
           evolution_dir) 
             echo "[WARN] evolution_dir in config is ignored - automatically inferred from config file location" >&2
             ;;
@@ -245,4 +252,5 @@ show_config() {
   echo "  Max workers: $MAX_WORKERS"
   echo "  Lock timeout: $LOCK_TIMEOUT"
   echo "  Auto ideate: $AUTO_IDEATE"
+  echo "  Max retries: $MAX_RETRIES"
 }
