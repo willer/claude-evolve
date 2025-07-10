@@ -279,9 +279,45 @@ get_csv_stats() {
 echo "[DISPATCHER] Starting unified evolution engine"
 echo "[DISPATCHER] Configuration: max_workers=$MAX_WORKERS, timeout=${timeout_seconds:-none}"
 
-# Validate CSV and clean up stuck statuses
+# Validate CSV and clean up stuck statuses and duplicates
 if [[ -f "$FULL_CSV_PATH" ]]; then
   echo "[DISPATCHER] Validating CSV and cleaning up..."
+  
+  # First check for and clean up duplicates
+  echo "[DISPATCHER] Checking for duplicate entries..."
+  duplicate_check_output=$("$PYTHON_CMD" "$SCRIPT_DIR/claude-evolve-cleanup-duplicates" "$FULL_CSV_PATH" 2>&1)
+  if echo "$duplicate_check_output" | grep -q "Found.*duplicate"; then
+    echo "[DISPATCHER] WARNING: Duplicate entries detected in CSV!"
+    echo "$duplicate_check_output"
+    echo "[DISPATCHER] Automatically cleaning up duplicates..."
+    if "$PYTHON_CMD" "$SCRIPT_DIR/claude-evolve-cleanup-duplicates" "$FULL_CSV_PATH" --fix; then
+      echo "[DISPATCHER] Duplicates cleaned up successfully"
+    else
+      echo "[ERROR] Failed to clean up duplicates" >&2
+      exit 1
+    fi
+  else
+    echo "[DISPATCHER] No duplicates found"
+  fi
+  
+  # Check for and clean up invalid entries
+  echo "[DISPATCHER] Checking for invalid entries..."
+  invalid_check_output=$("$PYTHON_CMD" "$SCRIPT_DIR/claude-evolve-clean-invalid" "$FULL_CSV_PATH" --dry-run 2>&1)
+  if echo "$invalid_check_output" | grep -q "Found.*invalid"; then
+    echo "[DISPATCHER] WARNING: Invalid entries detected in CSV!"
+    echo "$invalid_check_output"
+    echo "[DISPATCHER] Automatically cleaning up invalid entries..."
+    if "$PYTHON_CMD" "$SCRIPT_DIR/claude-evolve-clean-invalid" "$FULL_CSV_PATH"; then
+      echo "[DISPATCHER] Invalid entries cleaned up successfully"
+    else
+      echo "[ERROR] Failed to clean up invalid entries" >&2
+      exit 1
+    fi
+  else
+    echo "[DISPATCHER] No invalid entries found"
+  fi
+  
+  # Then validate and clean stuck statuses
   if ! "$PYTHON_CMD" -c "
 import csv
 import sys
@@ -369,6 +405,37 @@ if echo "$cleanup_output" | grep -q "📋 UNCHANGED:"; then
 else
   echo "[DISPATCHER] No cleanup issues detected - proceeding with run"
 fi
+
+# Ensure baseline algorithm performance is recorded
+ensure_baseline_entry() {
+  # Check if baseline already exists
+  if "$PYTHON_CMD" -c "
+import csv
+with open('$FULL_CSV_PATH', 'r') as f:
+    reader = csv.reader(f)
+    next(reader, None)  # Skip header
+    for row in reader:
+        if len(row) >= 2:
+            candidate_id = row[0]
+            parent_id = row[1] if len(row) > 1 else ''
+            # Check for baseline entry (empty parent and baseline-like ID)
+            if not parent_id and ('baseline' in candidate_id.lower() or candidate_id.startswith('000') or candidate_id == '0'):
+                print('found')
+                exit(0)
+exit(1)
+"; then
+    echo "[DISPATCHER] Baseline performance already recorded"
+  else
+    echo "[DISPATCHER] No baseline found, adding baseline-000 for evaluation..."
+    
+    # Add baseline entry as pending
+    echo "baseline-000,,Original algorithm.py performance,,pending" >> "$FULL_CSV_PATH"
+    echo "[DISPATCHER] Added baseline-000 to evaluation queue"
+  fi
+}
+
+# Check for baseline before starting main loop
+ensure_baseline_entry
 
 # With retry mechanism, we don't need consecutive failure tracking
 # Failures are handled gracefully through the retry system

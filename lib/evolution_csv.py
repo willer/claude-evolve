@@ -34,7 +34,9 @@ class EvolutionCSV:
         
     def _acquire_lock(self):
         """Acquire exclusive lock on CSV file."""
-        lock_path = f"{self.csv_path}.lock"
+        # Use same lock path as bash implementation for consistency
+        csv_dir = os.path.dirname(self.csv_path)
+        lock_path = os.path.join(csv_dir, ".evolution.csv.lock")
         end_time = time.time() + self.lock_timeout
         
         while time.time() < end_time:
@@ -58,7 +60,10 @@ class EvolutionCSV:
             try:
                 fcntl.flock(self.lock_file.fileno(), fcntl.LOCK_UN)
                 self.lock_file.close()
-                os.unlink(f"{self.csv_path}.lock")
+                # Use same lock path as bash implementation
+                csv_dir = os.path.dirname(self.csv_path)
+                lock_path = os.path.join(csv_dir, ".evolution.csv.lock")
+                os.unlink(lock_path)
             except (IOError, OSError):
                 pass
             finally:

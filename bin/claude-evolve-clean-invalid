@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""
+Cleanup script to remove invalid entries from evolution CSV files.
+This removes entries with IDs that contain shell constructs or other invalid content.
+"""
+
+import csv
+import sys
+import os
+import re
+import argparse
+
+
+def is_invalid_id(candidate_id):
+    """Check if a candidate ID contains invalid content."""
+    if not candidate_id:
+        return True
+    
+    # Check for shell constructs
+    invalid_patterns = [
+        r'EOF.*<.*null',
+        r'<<.*EOF',
+        r'<.*dev.*null',
+        r'^\s*#',  # Comments
+        r'^\s*$',  # Empty
+        r'[<>|&;`$]',  # Shell special characters
+        r'^\s*\[',  # Bash test constructs
+    ]
+    
+    for pattern in invalid_patterns:
+        if re.search(pattern, candidate_id, re.IGNORECASE):
+            return True
+    
+    # Check for excessively long IDs (likely errors)
+    if len(candidate_id) > 50:
+        return True
+    
+    return False
+
+
+def clean_csv(csv_file, dry_run=False):
+    """Remove invalid entries from CSV file."""
+    if not os.path.exists(csv_file):
+        print(f"Error: CSV file {csv_file} not found")
+        return False
+    
+    invalid_entries = []
+    valid_rows = []
+    
+    with open(csv_file, 'r') as f:
+        reader = csv.reader(f)
+        header = next(reader)
+        valid_rows.append(header)
+        
+        for row_num, row in enumerate(reader, start=2):
+            if not row or len(row) == 0:
+                continue
+                
+            candidate_id = row[0].strip() if row[0] else ''
+            
+            if is_invalid_id(candidate_id):
+                invalid_entries.append({
+                    'row_num': row_num,
+                    'id': candidate_id,
+                    'row': row
+                })
+            else:
+                valid_rows.append(row)
+    
+    if not invalid_entries:
+        print("No invalid entries found.")
+        return True
+    
+    print(f"Found {len(invalid_entries)} invalid entries:")
+    for entry in invalid_entries:
+        print(f"  Row {entry['row_num']}: ID='{entry['id']}'")
+        if len(entry['row']) > 4:
+            print(f"    Status: {entry['row'][4]}")
+    
+    if dry_run:
+        print("\nDry run - no changes made.")
+        return True
+    
+    # Write cleaned CSV
+    backup_file = csv_file + '.backup'
+    print(f"\nBacking up to: {backup_file}")
+    os.rename(csv_file, backup_file)
+    
+    try:
+        with open(csv_file, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerows(valid_rows)
+        
+        print(f"Cleaned CSV written to: {csv_file}")
+        print(f"Removed {len(invalid_entries)} invalid entries")
+        return True
+        
+    except Exception as e:
+        print(f"Error writing cleaned CSV: {e}")
+        print("Restoring backup...")
+        os.rename(backup_file, csv_file)
+        return False
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Remove invalid entries from evolution CSV')
+    parser.add_argument('csv_file', help='Path to evolution CSV file')
+    parser.add_argument('--dry-run', action='store_true', help='Show what would be removed without making changes')
+    
+    args = parser.parse_args()
+    
+    success = clean_csv(args.csv_file, args.dry_run)
+    sys.exit(0 if success else 1)
+
+
+if __name__ == '__main__':
+    main()

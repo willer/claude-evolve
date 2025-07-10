@@ -36,6 +36,7 @@ DEFAULT_HILL_CLIMBING=5
 DEFAULT_STRUCTURAL_MUTATION=3
 DEFAULT_CROSSOVER_HYBRID=4
 DEFAULT_NUM_ELITES=3
+DEFAULT_NUM_REVOLUTION=2  # Number of top novel candidates to include
 
 # Default parallel execution values
 DEFAULT_PARALLEL_ENABLED=false
@@ -70,6 +71,7 @@ load_config() {
   STRUCTURAL_MUTATION="$DEFAULT_STRUCTURAL_MUTATION"
   CROSSOVER_HYBRID="$DEFAULT_CROSSOVER_HYBRID"
   NUM_ELITES="$DEFAULT_NUM_ELITES"
+  NUM_REVOLUTION="$DEFAULT_NUM_REVOLUTION"
   
   # Set parallel execution defaults
   PARALLEL_ENABLED="$DEFAULT_PARALLEL_ENABLED"
@@ -138,6 +140,7 @@ load_config() {
           structural_mutation) STRUCTURAL_MUTATION="$value" ;;
           crossover_hybrid) CROSSOVER_HYBRID="$value" ;;
           num_elites) NUM_ELITES="$value" ;;
+          num_revolution) NUM_REVOLUTION="$value" ;;
         esac
       elif [[ $in_parallel_section == true ]]; then
         # Handle indented keys in parallel section

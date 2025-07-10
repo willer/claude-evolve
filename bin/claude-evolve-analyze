@@ -194,14 +194,9 @@ else
 fi
 
 echo
-echo "=== Top Performer ==="
-if [[ -n $top_id ]]; then
-  echo "ID: $top_id"
-  echo "Performance: $top_score"
-  echo "Description: $top_desc"
-else
-  echo "No completed candidates yet"
-fi
+
+# Call status command to show winners and revolutionary improvers
+"$SCRIPT_DIR/claude-evolve-status" --brief
 
 # Generation analysis
 echo
@@ -321,10 +316,12 @@ if command -v gnuplot >/dev/null 2>&1 && [[ $valid_performance_count -gt 0 ]]; t
   # Create data files for gnuplot
   data_file="/tmp/evolution_data_$$.dat"
   winner_file="/tmp/evolution_winner_$$.dat"
+  novel_file="/tmp/evolution_novel_$$.dat"
   gen_avg_file="/tmp/evolution_gen_avg_$$.dat"
   
   echo "# Row ID Performance Generation" >"$data_file"
   echo "# Generation MedianPerformance Color" >"$gen_avg_file"
+  echo "# Row ID Performance Generation" >"$novel_file"
 
   # Get color by generation number (rotates through 7 colors)
   get_gen_color() {
@@ -350,14 +347,15 @@ if command -v gnuplot >/dev/null 2>&1 && [[ $valid_performance_count -gt 0 ]]; t
   max_row=0
   max_id=""
   
-  # Use Python to generate chart data
+  # Use Python to generate chart data and identify revolutionary improvers
   "$PYTHON_CMD" -c "
 import csv
 import re
 
 with open('$csv_file', 'r') as f:
     reader = csv.reader(f)
-    next(reader)  # Skip header
+    rows = list(reader)
+    header = rows[0]
     
     completed_order = 0  # Track order of completion
     
@@ -367,15 +365,19 @@ with open('$csv_file', 'r') as f:
     with open('$gen_data_temp', 'w') as gen_f:
         pass  # Clear file
     
+    with open('$novel_file', 'w') as novel_f:
+        novel_f.write('# Order ID Performance Generation\\n')
+    
     max_perf = 0
     max_id = ''
     max_order = 0
     
-    for row in reader:
+    
+    for row in rows[1:]:
         if len(row) < 5:
             continue
             
-        id, _, desc, perf, status = row[:5]
+        id, parent_id, desc, perf, status = row[0], row[1] if len(row) > 1 else '', row[2] if len(row) > 2 else '', row[3], row[4]
         
         # Extract generation from ID
         gen = 'gen01'  # default
@@ -395,6 +397,11 @@ with open('$csv_file', 'r') as f:
                     # Write to data file
                     with open('$data_file', 'a') as f:
                         f.write(f'{completed_order} \"{id}\" {perf} {gen_num}\\n')
+                    
+                    # Write to novel file if this is a novel candidate
+                    if not parent_id:
+                        with open('$novel_file', 'a') as f:
+                            f.write(f'{completed_order} \"{id}\" {perf} {gen_num}\\n')
                     
                     # Write to gen temp file
                     with open('$gen_data_temp', 'a') as f:
@@ -532,6 +539,15 @@ print(f'max_desc=\"{desc_escaped}\"')
       fi
     done
     
+    # Add novel candidates
+    if [[ -s "$novel_file" ]] && [[ $(wc -l < "$novel_file") -gt 1 ]]; then
+      if [[ $gen_plots_added -gt 0 ]]; then
+        plot_cmd="$plot_cmd, \\"$'\n'
+      fi
+      plot_cmd="${plot_cmd}     \"$novel_file\" using 1:3 with points pointtype 8 pointsize $winner_dot_size linecolor rgb \"#ff1493\" title \"Novel Candidates\""
+      ((gen_plots_added++))
+    fi
+    
     # Add winner point
     if [[ -n $max_id && -s "$winner_file" ]]; then
       if [[ $gen_plots_added -gt 0 ]]; then
@@ -618,7 +634,7 @@ EOF
     exit 0
   fi
 
-  rm -f "$data_file" "$winner_file" "$gen_avg_file" "$gen_data_temp"
+  rm -f "$data_file" "$winner_file" "$novel_file" "$gen_avg_file" "$gen_data_temp"
   echo "Chart saved to: $output_file"
 
   # Always try to open chart (not just when --open is used)

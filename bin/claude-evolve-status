@@ -111,6 +111,7 @@ csv_file = '$FULL_CSV_PATH'
 show_brief = '$SHOW_BRIEF' == 'true'
 show_winner_only = '$SHOW_WINNER_ONLY' == 'true'
 evolution_context = '$EVOLUTION_CONTEXT'
+num_novel_to_show = int('${NUM_REVOLUTION:-2}')
 
 def normalize_status(status):
     '''Convert retry statuses to base status for counting.'''
@@ -183,6 +184,7 @@ try:
     if all_candidates:
         winner = max(all_candidates, key=lambda x: x[2])
     
+    
     # Show winner only
     if show_winner_only:
         if winner:
@@ -216,6 +218,27 @@ try:
         print()
     else:
         print('🏆 CURRENT LEADER: None (no completed candidates)')
+        print()
+    
+    # Show top novel candidates
+    novel_candidates = []
+    for row in rows[1:]:
+        if len(row) >= 5 and row[3] and row[4] == 'complete' and not row[1]:
+            try:
+                candidate_id = row[0]
+                description = row[2] if len(row) > 2 else ''
+                score = float(row[3])
+                novel_candidates.append((candidate_id, description, score))
+            except ValueError:
+                pass
+    
+    if novel_candidates:
+        novel_candidates.sort(key=lambda x: x[2], reverse=True)
+        print(f'🌟 TOP NOVEL CANDIDATES:')
+        # Use the num_novel_to_show variable set at the top
+        for i, (candidate_id, description, score) in enumerate(novel_candidates[:num_novel_to_show]):
+            print(f'   {i+1}. {candidate_id} (score: {score:.4f})')
+            print(f'      {description}')
         print()
     
     # Show per-generation breakdown (unless brief mode)

@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""
+Cleanup script to remove duplicate entries from evolution CSV files.
+This fixes the issue where improper CSV parsing caused duplicate IDs.
+"""
+
+import csv
+import sys
+import os
+import argparse
+from collections import defaultdict
+
+
+def find_duplicates(csv_file):
+    """Find duplicate IDs and return information about them."""
+    if not os.path.exists(csv_file):
+        print(f"Error: CSV file {csv_file} not found")
+        return {}
+    
+    id_entries = defaultdict(list)
+    
+    with open(csv_file, 'r') as f:
+        reader = csv.reader(f)
+        header = next(reader)
+        
+        for row_num, row in enumerate(reader, start=2):
+            if row and len(row) > 0:
+                candidate_id = row[0].strip()
+                if candidate_id:
+                    id_entries[candidate_id].append({
+                        'row_num': row_num,
+                        'row': row,
+                        'basedOnId': row[1].strip() if len(row) > 1 else '',
+                        'description': row[2].strip() if len(row) > 2 else '',
+                        'performance': row[3].strip() if len(row) > 3 else '',
+                        'status': row[4].strip() if len(row) > 4 else ''
+                    })
+    
+    # Find duplicates
+    duplicates = {id_val: entries for id_val, entries in id_entries.items() if len(entries) > 1}
+    
+    return duplicates, header
+
+
+def choose_best_entry(entries):
+    """Choose the best entry to keep from duplicates."""
+    # Priority order:
+    # 1. Completed entries with performance score
+    # 2. Entries with empty basedOnId (original entries)
+    # 3. Most complete entry
+    
+    completed_entries = [e for e in entries if e['status'] == 'complete' and e['performance']]
+    
+    if completed_entries:
+        # Keep the one with the highest performance
+        return max(completed_entries, key=lambda x: float(x['performance']) if x['performance'] else 0)
+    
+    # If no completed entries, prefer ones with empty basedOnId (original entries)
+    original_entries = [e for e in entries if not e['basedOnId']]
+    if original_entries:
+        return original_entries[0]
+    
+    # Otherwise, keep the most complete entry
+    return max(entries, key=lambda x: len([f for f in x['row'] if f.strip()]))
+
+
+def cleanup_csv(csv_file, dry_run=True):
+    """Clean up duplicate entries in CSV file."""
+    duplicates, header = find_duplicates(csv_file)
+    
+    if not duplicates:
+        print(f"No duplicates found in {csv_file}")
+        return
+    
+    print(f"Found {len(duplicates)} duplicate IDs in {csv_file}:")
+    
+    # Read all rows
+    with open(csv_file, 'r') as f:
+        reader = csv.reader(f)
+        all_rows = list(reader)
+    
+    rows_to_remove = set()
+    
+    for candidate_id, entries in duplicates.items():
+        print(f"\n  {candidate_id}: {len(entries)} entries")
+        
+        best_entry = choose_best_entry(entries)
+        
+        for entry in entries:
+            if entry == best_entry:
+                print(f"    Row {entry['row_num']}: KEEP - {entry['status']} {entry['performance']}")
+            else:
+                print(f"    Row {entry['row_num']}: REMOVE - {entry['status']} {entry['performance']}")
+                rows_to_remove.add(entry['row_num'] - 1)  # Convert to 0-based index
+    
+    if dry_run:
+        print(f"\nDry run mode: Would remove {len(rows_to_remove)} duplicate rows")
+        print("Run with --fix to actually remove duplicates")
+        return
+    
+    # Remove duplicate rows
+    cleaned_rows = []
+    for i, row in enumerate(all_rows):
+        if i not in rows_to_remove:
+            cleaned_rows.append(row)
+    
+    # Write cleaned CSV
+    backup_file = f"{csv_file}.backup.{os.getpid()}"
+    os.rename(csv_file, backup_file)
+    print(f"\nCreated backup: {backup_file}")
+    
+    with open(csv_file, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerows(cleaned_rows)
+    
+    print(f"Removed {len(rows_to_remove)} duplicate rows from {csv_file}")
+    print(f"Cleaned CSV has {len(cleaned_rows)} rows (including header)")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Clean up duplicate entries in evolution CSV files')
+    parser.add_argument('csv_file', help='Path to CSV file to clean')
+    parser.add_argument('--fix', action='store_true', help='Actually fix the file (default is dry run)')
+    
+    args = parser.parse_args()
+    
+    cleanup_csv(args.csv_file, dry_run=not args.fix)
+
+
+if __name__ == '__main__':
+    main()

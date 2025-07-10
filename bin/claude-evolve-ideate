@@ -87,10 +87,43 @@ call_ai_with_limit_check() {
     local ai_exit_code=$?
     
     if [[ $ai_exit_code -eq 0 ]]; then
-      echo "$ai_output"
-      return 0
+      # Clean o3 output - it may be JSON with the response in a field
+      local cleaned_output
+      # Try to extract content from JSON response if present
+      if echo "$ai_output" | grep -q '"content"'; then
+        # Attempt to extract content field from JSON
+        cleaned_output=$(echo "$ai_output" | python3 -c "
+import sys
+import json
+try:
+    data = json.load(sys.stdin)
+    if 'content' in data:
+        print(data['content'])
+    elif 'response' in data:
+        print(data['response'])
+    elif 'text' in data:
+        print(data['text'])
+    else:
+        # If no known field, print the whole thing
+        print(json.dumps(data))
+except:
+    # If not valid JSON, print as-is
+    print(sys.stdin.read())
+" 2>/dev/null || echo "$ai_output")
+      else
+        cleaned_output="$ai_output"
+      fi
+      
+      # Validate the output is not empty and doesn't contain error messages
+      if [[ -n "$cleaned_output" ]] && ! echo "$cleaned_output" | grep -q "error\|failed\|exception"; then
+        echo "$cleaned_output"
+        return 0
+      else
+        echo "[WARN] Codex o3 returned invalid output, falling back to Claude Opus" >&2
+        preferred_model="opus"
+      fi
     else
-      echo "[WARN] Codex o3 failed, falling back to Claude Opus" >&2
+      echo "[WARN] Codex o3 failed with exit code $ai_exit_code, falling back to Claude Opus" >&2
       preferred_model="opus"
     fi
   elif [[ "$preferred_model" == "gemini" ]] && command -v gemini >/dev/null 2>&1; then
@@ -102,10 +135,19 @@ call_ai_with_limit_check() {
     local ai_exit_code=$?
     
     if [[ $ai_exit_code -eq 0 ]]; then
-      echo "$ai_output"
-      return 0
+      # Check for authentication messages or other non-response content
+      if echo "$ai_output" | grep -q "Attempting to authenticate\|Authenticating\|Loading\|Initializing"; then
+        echo "[WARN] Gemini is still authenticating, falling back to Claude Opus" >&2
+        preferred_model="opus"
+      elif [[ -z "$ai_output" ]] || [[ $(echo "$ai_output" | wc -l) -lt 2 ]]; then
+        echo "[WARN] Gemini returned insufficient output, falling back to Claude Opus" >&2
+        preferred_model="opus"
+      else
+        echo "$ai_output"
+        return 0
+      fi
     else
-      echo "[WARN] Gemini failed, falling back to Claude Opus" >&2
+      echo "[WARN] Gemini failed with exit code $ai_exit_code, falling back to Claude Opus" >&2
       preferred_model="opus"
     fi
   fi
@@ -137,6 +179,13 @@ call_ai_with_limit_check() {
     echo -e "\033[33m[INFO] No ideas were generated. Run ideate again when the limit resets.\033[0m" >&2
     
     exit 1
+  fi
+  
+  # Validate output doesn't contain shell constructs that could corrupt CSV
+  if echo "$claude_output" | grep -E "EOF.*<.*null|<<.*EOF|<.*dev.*null" >/dev/null 2>&1; then
+    echo "[ERROR] AI output contains invalid shell constructs" >&2
+    echo "[DEBUG] Problematic output: $claude_output" | head -5 >&2
+    return 1
   fi
   
   # Output Claude's response
@@ -223,20 +272,115 @@ get_next_generation() {
     return
   fi
   
-  # Find highest generation number
-  local max_gen=0
-  while IFS=, read -r id rest; do
-    # Extract generation number from IDs like "gen01-001"
-    if [[ $id =~ ^gen([0-9]+)- ]]; then
-      local gen_num=$((10#${BASH_REMATCH[1]}))
-      if (( gen_num > max_gen )); then
-        max_gen=$gen_num
-      fi
-    fi
-  done < <(tail -n +2 "$FULL_CSV_PATH")
+  # Use Python for proper CSV parsing
+  local max_gen
+  max_gen=$("$PYTHON_CMD" -c "
+import csv
+max_gen = 0
+with open('$FULL_CSV_PATH', 'r') as f:
+    reader = csv.reader(f)
+    next(reader, None)  # Skip header
+    for row in reader:
+        if row and len(row) > 0:
+            id_field = row[0].strip()
+            if id_field.startswith('gen') and '-' in id_field:
+                try:
+                    gen_part = id_field.split('-')[0]  # e.g., 'gen01'
+                    gen_num = int(gen_part[3:])  # Extract number after 'gen'
+                    max_gen = max(max_gen, gen_num)
+                except (ValueError, IndexError):
+                    pass
+print(max_gen)
+")
   
   # Increment and format with leading zero
   printf "%02d" $((max_gen + 1))
+}
+
+# Get next available ID number for current generation
+get_next_id_number() {
+  "$PYTHON_CMD" -c "
+import csv
+import re
+max_id = 0
+pattern = re.compile(r'^gen$CURRENT_GENERATION-(\d+)$')
+with open('$FULL_CSV_PATH', 'r') as f:
+    reader = csv.reader(f)
+    next(reader, None)  # Skip header
+    for row in reader:
+        if row and len(row) > 0:
+            match = pattern.match(row[0].strip())
+            if match:
+                max_id = max(max_id, int(match.group(1)))
+print(max_id + 1)
+"
+}
+
+# Process AI output and add ideas to CSV
+process_ai_ideas() {
+  local ai_output="$1"
+  local count="$2"
+  local idea_type="$3"  # novel, hill-climbing, structural, crossover
+  local top_performers="${4:-}"  # Optional, for non-novel ideas
+  
+  local next_id_num=$(get_next_id_number)
+  local ideas_added=0
+  
+  while IFS= read -r line && [[ $ideas_added -lt $count ]]; do
+    # Skip empty lines
+    [[ -z "$line" || "$line" =~ ^[[:space:]]*$ ]] && continue
+    
+    # Skip lines that look like headers or metadata
+    [[ "$line" =~ ^#|^\[|^==|^-- ]] && continue
+    
+    # Clean the line
+    line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    line=$(echo "$line" | sed 's/^[0-9]\+\.\?[[:space:]]*//')  # Remove numbering
+    line=$(echo "$line" | sed 's/^-[[:space:]]*//')  # Remove bullet points
+    
+    # Extract parent ID and description based on type
+    local parent_id=""
+    local description="$line"
+    
+    if [[ "$idea_type" != "novel" ]]; then
+      # For non-novel ideas, extract parent ID from "From X:" format
+      if [[ "$line" =~ ^From[[:space:]]+([^:]+):[[:space:]]*(.+)$ ]]; then
+        parent_id="${BASH_REMATCH[1]}"
+        description="${BASH_REMATCH[2]}"
+      else
+        # If no parent specified, use the first from top_performers
+        parent_id=$(echo "$top_performers" | head -1 | cut -d',' -f1)
+      fi
+    fi
+    
+    # Skip if description is too short or contains problematic content
+    [[ ${#description} -lt 20 ]] && continue
+    if echo "$description" | grep -qE 'EOF|/dev/null|<<<|>>>'; then
+      continue
+    fi
+    
+    # Generate ID for this idea
+    local idea_id=$(printf "gen%s-%03d" "$CURRENT_GENERATION" $((next_id_num + ideas_added)))
+    
+    # Escape quotes in description for CSV
+    description="${description//\"/\"\"}"
+    
+    # Append to CSV
+    echo "$idea_id,$parent_id,\"$description\",,pending" >> "$FULL_CSV_PATH"
+    
+    ((ideas_added++))
+    if [[ -n "$parent_id" ]]; then
+      echo "[INFO] Added $idea_type idea $idea_id (parent: $parent_id): ${description:0:50}..."
+    else
+      echo "[INFO] Added $idea_type idea $idea_id: ${description:0:70}..."
+    fi
+  done <<< "$ai_output"
+  
+  if [[ $ideas_added -lt $count ]]; then
+    echo "[WARN] Only generated $ideas_added out of $count requested $idea_type ideas" >&2
+  fi
+  
+  return 0
 }
 
 # Get next available ID for current generation
@@ -247,24 +391,32 @@ get_next_id() {
     return
   fi
   
-  # Find highest ID within this generation
-  local max_id=0
-  while IFS=, read -r id rest; do
-    # Match IDs for this specific generation
-    if [[ $id =~ ^gen${generation}-([0-9]+)$ ]]; then
-      local id_num=$((10#${BASH_REMATCH[1]}))
-      if (( id_num > max_id )); then
-        max_id=$id_num
-      fi
-    fi
-  done < <(tail -n +2 "$FULL_CSV_PATH")
+  # Use Python for proper CSV parsing
+  local max_id
+  max_id=$("$PYTHON_CMD" -c "
+import csv
+import re
+max_id = 0
+pattern = re.compile(r'^gen${generation}-(\d+)$')
+with open('$FULL_CSV_PATH', 'r') as f:
+    reader = csv.reader(f)
+    next(reader, None)  # Skip header
+    for row in reader:
+        if row and len(row) > 0:
+            id_field = row[0].strip()
+            match = pattern.match(id_field)
+            if match:
+                id_num = int(match.group(1))
+                max_id = max(max_id, id_num)
+print(max_id)
+")
   
   # Format next ID with generation and 3-digit number
   printf "gen%s-%03d" "$generation" $((max_id + 1))
 }
 
 
-# Get top performers for parent selection
+# Get top performers for parent selection (absolute + top novel candidates)
 get_top_performers() {
   local num_requested="$1"
   if [[ ! -f "$FULL_CSV_PATH" ]]; then
@@ -272,7 +424,7 @@ get_top_performers() {
     return
   fi
   
-  # Use Python to properly parse CSV with quoted fields
+  # Use Python to properly parse CSV and find top performers + top novel candidates
   "$PYTHON_CMD" -c "
 import csv
 import sys
@@ -282,22 +434,55 @@ with open('$FULL_CSV_PATH', 'r') as f:
     next(reader)  # Skip header
     
     completed = []
+    novel = []
+    
+    # Collect all completed candidates
     for row in reader:
         if len(row) >= 5 and row[3] and row[4] == 'complete':
             try:
+                candidate_id = row[0]
+                parent_id = row[1] if len(row) > 1 else ''
+                description = row[2] if len(row) > 2 else ''
                 score = float(row[3])
-                completed.append((row[0], row[2], score))
+                
+                completed.append((candidate_id, description, score))
+                
+                # Track novel candidates separately
+                if not parent_id:
+                    novel.append((candidate_id, description, score))
+                    
             except ValueError:
                 pass
     
-    # Sort by score descending
+    # Sort absolute leaders by score (descending)
     completed.sort(key=lambda x: x[2], reverse=True)
     
-    # Output top N
-    for i, (id, desc, score) in enumerate(completed[:$num_requested]):
-        print(f'{id},{desc},{score}')
+    # Sort novel candidates by score (descending)
+    novel.sort(key=lambda x: x[2], reverse=True)
+    
+    # Collect top performers
+    selected_ids = set()
+    results = []
+    
+    # Add top absolute performers
+    for i, (candidate_id, description, score) in enumerate(completed[:$num_requested]):
+        results.append(f'{candidate_id},{description},{score}')
+        selected_ids.add(candidate_id)
+    
+    # Add top novel candidates (if not already selected)
+    novel_count = 0
+    for candidate_id, description, score in novel:
+        if candidate_id not in selected_ids and novel_count < $NUM_REVOLUTION:
+            results.append(f'{candidate_id},{description},{score}')
+            selected_ids.add(candidate_id)
+            novel_count += 1
+    
+    # Output all selected candidates
+    for result in results:
+        print(result)
 "
 }
+
 
 
 # Generate ideas using AI with multi-strategy approach
@@ -307,7 +492,9 @@ ideate_ai_strategies() {
     exit 1
   fi
 
-  # Get top performers
+  # Baseline should already be evaluated by run command
+
+  # Get top performers (now includes top novel candidates)
   local top_performers
   top_performers=$(get_top_performers "$NUM_ELITES")
   
@@ -331,305 +518,201 @@ ideate_ai_strategies() {
   [[ $CROSSOVER_HYBRID -gt 0 ]] && generate_crossover_direct "$CROSSOVER_HYBRID" "$top_performers"
 }
 
-# Generate novel exploration ideas by having Claude edit CSV directly
+# Generate novel exploration ideas using structured output
 generate_novel_ideas_direct() {
   local count="$1"
   
-  local prompt="Edit the file $FULL_CSV_PATH to add exactly $count new rows for novel algorithmic approaches.
+  # Get next available ID for this generation
+  local next_id_num
+  next_id_num=$("$PYTHON_CMD" -c "
+import csv
+import re
+max_id = 0
+pattern = re.compile(r'^gen$CURRENT_GENERATION-(\d+)$')
+with open('$FULL_CSV_PATH', 'r') as f:
+    reader = csv.reader(f)
+    next(reader, None)  # Skip header
+    for row in reader:
+        if row and len(row) > 0:
+            match = pattern.match(row[0].strip())
+            if match:
+                max_id = max(max_id, int(match.group(1)))
+print(max_id + 1)
+")
+  
+  local prompt="Generate exactly $count novel algorithmic ideas for trading algorithm evolution.
 
-Current CSV content:
-$(cat "$FULL_CSV_PATH")
+Current evolution context:
+- Generation: $CURRENT_GENERATION
+- Algorithm: $FULL_ALGORITHM_PATH
+- Brief: $(head -20 "$FULL_BRIEF_PATH")
 
-Algorithm files you MUST examine for context:
-- Base algorithm: $FULL_ALGORITHM_PATH  
-- Evolved algorithms: $FULL_OUTPUT_DIR/evolution_*.py (examine ALL to see what's been tried)
+You MUST output EXACTLY $count lines, where each line is a single sentence describing a specific algorithmic change.
+NO PREAMBLE, NO EXPLANATION, NO NUMBERING - just $count lines of algorithm descriptions.
 
-IMPORTANT: Before generating ideas, you should:
-1. Read the base algorithm to understand the codebase structure and possibilities
-2. Read ALL existing evolution_*.py files to see what modifications have been attempted
-3. Analyze the CSV to see which approaches worked (high scores) and which failed
-4. Avoid repeating failed approaches unless trying them with significant modifications
+Requirements:
+- Each line should be one clear sentence describing a novel algorithmic approach
+- Focus on creative, ambitious ideas that haven't been tried yet
+- Consider machine learning, new indicators, regime detection, risk management, etc.
 
-Project Brief:
-$(cat "$FULL_BRIEF_PATH")
+Example output format:
+Train LSTM network on 30-day OHLCV sequences to predict next-day direction probability
+Add cross-correlation filter that reduces positions when correlation with market breaks down
+Implement intraday momentum using 30-minute data to adjust daily position sizes
 
-Requirements for new CSV rows:
-- IDs must use format: gen$CURRENT_GENERATION-XXX (e.g., gen$CURRENT_GENERATION-001, gen$CURRENT_GENERATION-002)
-- Continue numbering from the highest existing ID in generation $CURRENT_GENERATION
-- basedOnId should be empty (these are novel approaches) 
-- Each description should be one clear sentence describing a specific algorithmic change
-- Descriptions should explore completely different approaches than existing ones
-- All new rows should have empty performance and status fields
-
-CRITICAL CSV FORMAT RULES:
-- DO NOT modify the CSV header row
-- DO NOT change the column order
-- DO NOT add extra columns or fields
-- DO NOT modify existing rows - only append new ones
-- DO NOT add extra blank lines or formatting
-- Maintain exact CSV format: id,basedOnId,description,performance,status
-- Leave performance and status fields completely empty (just commas)
-- Use proper CSV quoting only when descriptions contain commas
-- CRITICAL: You must read existing evolution files to avoid suggesting changes that:
-  * Have already been tried and failed
-  * Are impossible given the codebase structure
-  * Would break the algorithm interface requirements
-
-⚠️ AVOID ONLY: Kelly floor/cap adjustments that assume leverage > 1.0 (these get clamped and have no effect)
-
-✅ EXPLORE ANY CREATIVE IDEAS INCLUDING:
-- **Machine Learning**: Neural networks, decision trees, ensemble methods (use train() method properly)
-- **New Indicators**: Custom combinations, alternative calculations, multi-timeframe signals
-- **Market Regime Detection**: VIX patterns, correlation shifts, volume analysis, cross-asset signals
-- **Risk Management**: Dynamic stops, correlation-based position sizing, drawdown protection
-- **Timing**: Time-of-day effects, calendar patterns, volatility timing
-- **Alternative Strategies**: New sub-strategies, momentum scoring, mean reversion variants
-- **Cross-Asset Signals**: Bond yields, sector rotation, crypto correlations
-- **Multi-Timeframe**: Combining 30m/1h/daily signals for confirmation
-- **Advanced Exits**: Profit targets, time-based exits, volatility-based exits
-
-Think outside the box! The codebase supports sophisticated approaches - be creative and ambitious.
-
-Example descriptions:
-- Train LSTM network on 30-day OHLCV sequences to predict next-day direction probability
-- Add cross-correlation filter that reduces positions when TQQQ correlation with QQQ breaks down
-- Implement intraday momentum using 30-minute data to adjust daily position sizes
-
-Add exactly $count rows to the CSV file now."
+Output exactly $count lines now:"
 
   echo "[INFO] Generating $count novel exploration ideas..."
-  if ! call_ai_with_limit_check "$prompt" "$CURRENT_GENERATION"; then
+  
+  # Get AI response
+  local ai_output
+  if ! ai_output=$(call_ai_with_limit_check "$prompt" "$CURRENT_GENERATION" 2>&1); then
     echo "[WARN] AI failed to generate novel ideas" >&2
     return 1
   fi
-  echo "[INFO] Novel exploration ideas generated"
+  
+  # Process the output using helper function
+  process_ai_ideas "$ai_output" "$count" "novel"
+  
+  echo "[INFO] Novel exploration ideas generated successfully"
 }
 
-# Generate hill climbing ideas by having Claude edit CSV directly
+# Generate hill climbing ideas by getting descriptions from AI
 generate_hill_climbing_direct() {
   local count="$1"
   local top_performers="$2"
   
-  local prompt="Edit the file $FULL_CSV_PATH to add exactly $count new rows for parameter tuning based on successful algorithms.
+  # Get next available ID for this generation
+  local next_id_num
+  next_id_num=$("$PYTHON_CMD" -c "
+import csv
+import re
+max_id = 0
+pattern = re.compile(r'^gen$CURRENT_GENERATION-(\d+)$')
+with open('$FULL_CSV_PATH', 'r') as f:
+    reader = csv.reader(f)
+    next(reader, None)  # Skip header
+    for row in reader:
+        if row and len(row) > 0:
+            match = pattern.match(row[0].strip())
+            if match:
+                max_id = max(max_id, int(match.group(1)))
+print(max_id + 1)
+")
+  
+  local prompt="Generate exactly $count parameter tuning ideas for successful trading algorithms.
 
-Current CSV content:
-$(cat "$FULL_CSV_PATH")
-
-Algorithm files you MUST examine for context:
-- Base algorithm: $FULL_ALGORITHM_PATH  
-- Evolved algorithms: $FULL_OUTPUT_DIR/evolution_*.py (examine ALL to see what's been tried)
-
-IMPORTANT: Before generating ideas, you should:
-1. Read the base algorithm to understand the codebase structure and possibilities
-2. Read ALL existing evolution_*.py files to see what modifications have been attempted
-3. Analyze the CSV to see which approaches worked (high scores) and which failed
-4. Avoid repeating failed approaches unless trying them with significant modifications
-
-Successful algorithms to build on:
+Successful algorithms to tune (pick one as parent):
 $top_performers
 
-Project Brief:
-$(cat "$FULL_BRIEF_PATH")
+You MUST output EXACTLY $count lines, where each line describes a parameter tuning idea.
+NO PREAMBLE, NO EXPLANATION, NO NUMBERING - just $count lines of parameter tuning descriptions.
 
-Requirements for new CSV rows:
-- IDs must use format: gen$CURRENT_GENERATION-XXX (e.g., gen$CURRENT_GENERATION-001, gen$CURRENT_GENERATION-002)
-- Continue numbering from the highest existing ID in generation $CURRENT_GENERATION
-- basedOnId should reference ONE of the successful algorithm IDs above (pick the best one)
-- Each description should be one clear sentence about parameter tuning
-- Focus on adjusting hyperparameters, thresholds, sizes, learning rates
-- All new rows should have empty performance and status fields
+Each line should:
+- Be one clear sentence about adjusting specific parameters
+- Reference the parent algorithm ID at the beginning like \"From gen02-003:\"
+- Focus on hyperparameters, thresholds, periods, weights, etc.
 
-CRITICAL CSV FORMAT RULES:
-- DO NOT modify the CSV header row
-- DO NOT change the column order
-- DO NOT add extra columns or fields
-- DO NOT modify existing rows - only append new ones
-- DO NOT add extra blank lines or formatting
-- Maintain exact CSV format: id,basedOnId,description,performance,status
-- Leave performance and status fields completely empty (just commas)
-- Use proper CSV quoting only when descriptions contain commas
-- CRITICAL: You must read the parent algorithm file to understand:
-  * What parameters are actually tunable in the code
-  * What changes made this algorithm successful vs its parent
-  * What parameter ranges make sense given the implementation
+Example output format:
+From gen02-003: Lower IBS_BUY_THRESHOLD from 0.15 to 0.12 to enter deeper oversold conditions
+From gen02-003: Increase TRS_RSI_PERIOD from 2 to 3 for smoother RSI signals
+From gen02-003: Raise WEIGHT_TDD from 0.38 to 0.42 to emphasize best performing strategy
 
-⚠️ AVOID ONLY: Kelly floor/cap adjustments that assume leverage > 1.0 (these get clamped and have no effect)
-
-✅ EXPLORE PARAMETER TUNING INCLUDING:
-- **Entry/Exit Thresholds**: IBS_BUY_THRESHOLD, LARISSA_LOW_THRESHOLD, RSI levels, etc.
-- **Indicator Periods**: ATR_PERIOD, RSI_PERIOD, moving average lengths, etc.
-- **Strategy Weights**: Emphasize best performers or rebalance for diversification
-- **Risk Parameters**: Stop levels, timeout periods, correlation thresholds
-- **Regime Parameters**: Volatility thresholds, trend detection sensitivity
-- **ML Hyperparameters**: Learning rates, network sizes, ensemble weights (if using ML)
-
-Be creative with parameter combinations and ranges - the system is sophisticated!
-
-Example descriptions:
-- Lower IBS_BUY_THRESHOLD from 0.15 to 0.12 to enter deeper oversold conditions
-- Increase TRS_RSI_PERIOD from 2 to 3 for smoother RSI signals
-- Raise WEIGHT_TDD from 0.38 to 0.42 to emphasize best performing strategy
-
-Add exactly $count parameter tuning rows to the CSV file now."
+Output exactly $count lines now:"
 
   echo "[INFO] Generating $count hill climbing ideas..."
-  if ! call_ai_with_limit_check "$prompt" "$CURRENT_GENERATION"; then
+  
+  # Get AI response
+  local ai_output
+  if ! ai_output=$(call_ai_with_limit_check "$prompt" "$CURRENT_GENERATION" 2>&1); then
     echo "[WARN] AI failed to generate hill climbing ideas" >&2
     return 1
   fi
-  echo "[INFO] Hill climbing ideas generated"
+  
+  # Process the output using helper function
+  process_ai_ideas "$ai_output" "$count" "hill-climbing" "$top_performers"
+  
+  echo "[INFO] Hill climbing ideas generated successfully"
 }
 
-# Generate structural mutation ideas by having Claude edit CSV directly
+# Generate structural mutation ideas by getting descriptions from AI
 generate_structural_mutation_direct() {
   local count="$1"
   local top_performers="$2"
   
-  local prompt="Edit the file $FULL_CSV_PATH to add exactly $count new rows for structural modifications based on successful algorithms.
+  local prompt="Generate exactly $count structural modification ideas for successful trading algorithms.
 
-Current CSV content:
-$(cat "$FULL_CSV_PATH")
-
-Algorithm files you MUST examine for context:
-- Base algorithm: $FULL_ALGORITHM_PATH  
-- Evolved algorithms: $FULL_OUTPUT_DIR/evolution_*.py (examine ALL to see what's been tried)
-
-IMPORTANT: Before generating ideas, you should:
-1. Read the base algorithm to understand the codebase structure and possibilities
-2. Read ALL existing evolution_*.py files to see what modifications have been attempted
-3. Analyze the CSV to see which approaches worked (high scores) and which failed
-4. Avoid repeating failed approaches unless trying them with significant modifications
-
-Successful algorithms to build on:
+Successful algorithms to modify structurally:
 $top_performers
 
-Project Brief:
-$(cat "$FULL_BRIEF_PATH")
+You MUST output EXACTLY $count lines, where each line describes a structural modification idea.
+NO PREAMBLE, NO EXPLANATION, NO NUMBERING - just $count lines of structural change descriptions.
 
-Requirements for new CSV rows:
-- IDs must use format: gen$CURRENT_GENERATION-XXX (e.g., gen$CURRENT_GENERATION-001, gen$CURRENT_GENERATION-002)
-- Continue numbering from the highest existing ID in generation $CURRENT_GENERATION
-- basedOnId should reference ONE of the successful algorithm IDs above (pick the best one)
-- Each description should be one clear sentence about architectural changes
-- Keep core insights but change implementation approach
-- All new rows should have empty performance and status fields
+Each line should:
+- Be one clear sentence about architectural/structural changes
+- Reference the parent algorithm ID at the beginning like \"From gen02-003:\"
+- Focus on replacing components, changing architecture, adding new systems
 
-CRITICAL CSV FORMAT RULES:
-- DO NOT modify the CSV header row
-- DO NOT change the column order
-- DO NOT add extra columns or fields
-- DO NOT modify existing rows - only append new ones
-- DO NOT add extra blank lines or formatting
-- Maintain exact CSV format: id,basedOnId,description,performance,status
-- Leave performance and status fields completely empty (just commas)
-- Use proper CSV quoting only when descriptions contain commas
-- CRITICAL: You must read the parent algorithm file to understand:
-  * What structural elements can be modified within the codebase constraints
-  * What architectural decisions led to this algorithm's success
-  * Which components are essential vs which can be replaced
+Example output format:
+From gen02-003: Replace 2-period RSI with LSTM-predicted momentum scores for TRS strategy
+From gen02-003: Add ensemble voting system where sub-strategies vote on market regime
+From gen02-003: Implement hierarchical risk budgeting with correlation-adjusted position sizing
 
-⚠️ AVOID ONLY: Kelly floor/cap adjustments that assume leverage > 1.0 (these get clamped and have no effect)
-
-✅ EXPLORE STRUCTURAL INNOVATIONS INCLUDING:
-- **Algorithm Architecture**: Replace sub-strategies, change combination logic, add new layers
-- **Indicator Swaps**: RSI → Stochastic, SMA → Hull MA, Bollinger → Keltner, etc.
-- **Machine Learning Integration**: Add neural networks, decision trees, reinforcement learning
-- **Market Regime Systems**: Multi-regime detection, regime-specific strategies
-- **Risk Management Overhauls**: Portfolio heat, correlation-based sizing, adaptive stops
-- **Multi-Asset Integration**: Cross-asset signals, sector rotation, bond/equity relationships
-- **Time-Based Innovations**: Intraday patterns, calendar effects, volatility timing
-
-The codebase is flexible - think architecturally about major improvements!
-
-Example descriptions:
-- Replace 2-period RSI with LSTM-predicted momentum scores for TRS strategy
-- Add ensemble voting system where sub-strategies vote on market regime
-- Implement hierarchical risk budgeting with correlation-adjusted position sizing
-
-Add exactly $count structural modification rows to the CSV file now."
+Output exactly $count lines now:"
 
   echo "[INFO] Generating $count structural mutation ideas..."
-  if ! call_ai_with_limit_check "$prompt" "$CURRENT_GENERATION"; then
+  
+  # Get AI response
+  local ai_output
+  if ! ai_output=$(call_ai_with_limit_check "$prompt" "$CURRENT_GENERATION" 2>&1); then
     echo "[WARN] AI failed to generate structural mutation ideas" >&2
     return 1
   fi
-  echo "[INFO] Structural mutation ideas generated"
+  
+  # Process the output using helper function
+  process_ai_ideas "$ai_output" "$count" "structural" "$top_performers"
+  
+  echo "[INFO] Structural mutation ideas generated successfully"
 }
 
-# Generate crossover hybrid ideas by having Claude edit CSV directly
+# Generate crossover hybrid ideas by getting descriptions from AI
 generate_crossover_direct() {
   local count="$1"
   local top_performers="$2"
   
-  local prompt="Edit the file $FULL_CSV_PATH to add exactly $count new rows for hybrid combinations of successful algorithms.
+  local prompt="Generate exactly $count hybrid combination ideas from successful trading algorithms.
 
-Current CSV content:
-$(cat "$FULL_CSV_PATH")
-
-Algorithm files you MUST examine for context:
-- Base algorithm: $FULL_ALGORITHM_PATH  
-- Evolved algorithms: $FULL_OUTPUT_DIR/evolution_*.py (examine ALL to see what's been tried)
-
-IMPORTANT: Before generating ideas, you should:
-1. Read the base algorithm to understand the codebase structure and possibilities
-2. Read ALL existing evolution_*.py files to see what modifications have been attempted
-3. Analyze the CSV to see which approaches worked (high scores) and which failed
-4. Avoid repeating failed approaches unless trying them with significant modifications
-
-Top performers to combine:
+Top performers to combine (reference at least 2 in each idea):
 $top_performers
 
-Project Brief:
-$(cat "$FULL_BRIEF_PATH")
+You MUST output EXACTLY $count lines, where each line describes a hybrid combination idea.
+NO PREAMBLE, NO EXPLANATION, NO NUMBERING - just $count lines of hybrid combination descriptions.
 
-Requirements for new CSV rows:
-- IDs must use format: gen$CURRENT_GENERATION-XXX (e.g., gen$CURRENT_GENERATION-001, gen$CURRENT_GENERATION-002)
-- Continue numbering from the highest existing ID in generation $CURRENT_GENERATION
-- basedOnId should reference ONE of the successful algorithm IDs above (pick the best one as base)
-- Each description should be one clear sentence combining elements from different algorithms
-- Be specific about what elements to merge
-- All new rows should have empty performance and status fields
+Each line should:
+- Be one clear sentence combining elements from 2+ successful algorithms
+- Reference the base parent algorithm ID at the beginning like \"From gen02-003:\"
+- Explicitly mention which elements to combine from which algorithms
 
-CRITICAL CSV FORMAT RULES:
-- DO NOT modify the CSV header row
-- DO NOT change the column order
-- DO NOT add extra columns or fields
-- DO NOT modify existing rows - only append new ones
-- DO NOT add extra blank lines or formatting
-- Maintain exact CSV format: id,basedOnId,description,performance,status
-- Leave performance and status fields completely empty (just commas)
-- Use proper CSV quoting only when descriptions contain commas
-- CRITICAL: You must read the relevant algorithm files to:
-  * Identify the specific improvements that made each algorithm successful
-  * Understand which components are compatible for merging
-  * Ensure the combined approach is technically feasible in the codebase
+Example output format:
+From gen02-003: Combine VIX regime filter from gen02-003 with LSTM predictions from gen01-005
+From gen02-003: Merge volatility regime detection from gen02-003 with ML momentum from gen01-007
+From gen02-003: Integrate multi-timeframe signals from gen02-003 with correlation sizing from gen01-009
 
-⚠️ AVOID ONLY: Kelly floor/cap adjustments that assume leverage > 1.0 (these get clamped and have no effect)
-
-✅ EXPLORE CREATIVE COMBINATIONS INCLUDING:
-- **Strategy Fusion**: Merge successful sub-strategies, combine entry/exit logic
-- **Indicator Blending**: Mix different technical analysis approaches from successful algorithms
-- **Machine Learning Hybrids**: Combine ML predictions with rule-based systems
-- **Multi-Regime Integration**: Blend different regime detection methods
-- **Risk System Combinations**: Merge multiple risk management approaches
-- **Cross-Asset Blends**: Combine internal signals with external market data
-- **Multi-Timeframe Fusion**: Blend signals from different time horizons
-
-Think creatively about what worked in different algorithms and how to combine them!
-
-Example descriptions:
-- Combine VIX regime filter from algorithm 3 with LSTM predictions from algorithm 5
-- Merge volatility regime detection with machine learning momentum scoring
-- Integrate multi-timeframe signals with correlation-based position adjustments
-
-Add exactly $count hybrid combination rows to the CSV file now."
+Output exactly $count lines now:"
 
   echo "[INFO] Generating $count crossover hybrid ideas..."
-  if ! call_ai_with_limit_check "$prompt" "$CURRENT_GENERATION"; then
+  
+  # Get AI response
+  local ai_output
+  if ! ai_output=$(call_ai_with_limit_check "$prompt" "$CURRENT_GENERATION" 2>&1); then
     echo "[WARN] AI failed to generate crossover ideas" >&2
     return 1
   fi
-  echo "[INFO] Crossover hybrid ideas generated"
+  
+  # Process the output using helper function
+  process_ai_ideas "$ai_output" "$count" "crossover" "$top_performers"
+  
+  echo "[INFO] Crossover hybrid ideas generated successfully"
 }
 
 # Legacy AI generation mode (for backward compatibility)
@@ -639,28 +722,24 @@ ideate_ai_legacy() {
     exit 1
   fi
 
-  # Get top performers (pure shell)
+  # Get top performers for context
   local top_performers=""
   if [[ -f "$FULL_CSV_PATH" ]]; then
     # Simple top performers extraction (lines with non-empty performance)
     top_performers=$(awk -F, 'NR > 1 && $4 != "" { print $1 ": " $3 " (score: " $4 ")" }' "$FULL_CSV_PATH" | head -5)
   fi
 
-  # Build prompt
-  local prompt="Edit the file $FULL_CSV_PATH to add exactly $TOTAL_IDEAS new algorithm variation rows.
+  # Build prompt for description-only output
+  local prompt="Generate exactly $TOTAL_IDEAS novel algorithmic ideas for trading algorithm evolution.
 
-Current CSV content:
-$(cat "$FULL_CSV_PATH")
-
-Algorithm files you MUST examine for context:
+Algorithm files for context:
 - Base algorithm: $FULL_ALGORITHM_PATH  
-- Evolved algorithms: $FULL_OUTPUT_DIR/evolution_*.py (examine ALL to see what's been tried)
+- Evolved algorithms: $FULL_OUTPUT_DIR/evolution_*.py
 
 IMPORTANT: Before generating ideas, you should:
 1. Read the base algorithm to understand the codebase structure and possibilities
 2. Read ALL existing evolution_*.py files to see what modifications have been attempted
-3. Analyze the CSV to see which approaches worked (high scores) and which failed
-4. Avoid repeating failed approaches unless trying them with significant modifications
+3. Consider which approaches might work well
 
 Project Brief:
 $(cat "$FULL_BRIEF_PATH")"
@@ -674,44 +753,41 @@ $top_performers"
 
   prompt+="
 
-Requirements for new CSV rows:
-- IDs must use format: gen$CURRENT_GENERATION-XXX (e.g., gen$CURRENT_GENERATION-001, gen$CURRENT_GENERATION-002)
-- Continue numbering from the highest existing ID in generation $CURRENT_GENERATION
-- basedOnId should be empty or reference existing algorithm ID
-- Each description should be one clear sentence describing an algorithmic approach
-- All new rows should have empty performance and status fields
+You MUST output EXACTLY $TOTAL_IDEAS lines, where each line is a single sentence describing a specific algorithmic change.
+NO PREAMBLE, NO EXPLANATION, NO NUMBERING - just $TOTAL_IDEAS lines of algorithm descriptions.
 
-CRITICAL CSV FORMAT RULES:
-- DO NOT modify the CSV header row
-- DO NOT change the column order
-- DO NOT add extra columns or fields
-- DO NOT modify existing rows - only append new ones
-- DO NOT add extra blank lines or formatting
-- Maintain exact CSV format: id,basedOnId,description,performance,status
-- Leave performance and status fields completely empty (just commas)
-- Use proper CSV quoting only when descriptions contain commas
+Requirements:
+- Each line should be one clear sentence describing an algorithmic approach
+- Mix both parameter tuning and structural changes
+- If building on existing algorithms, start with 'From ALGORITHM_ID:'
 
 ⚠️ AVOID ONLY: Kelly floor/cap adjustments that assume leverage > 1.0 (these get clamped and have no effect)
 
 ✅ EXPLORE ALL CREATIVE POSSIBILITIES INCLUDING:
-- **Machine Learning**: Neural networks, ensemble methods, reinforcement learning (use train() method)
-- **Advanced Indicators**: Custom combinations, multi-timeframe signals, cross-asset indicators
-- **Market Regime Detection**: VIX patterns, correlation analysis, volatility clustering
-- **Risk Management**: Dynamic stops, portfolio heat, correlation-based position sizing
-- **Alternative Strategies**: New sub-strategies, momentum variants, mean reversion innovations
-- **Multi-Asset Signals**: Sector rotation, bond yields, commodity signals
-- **Time-Based Patterns**: Intraday effects, calendar anomalies, volatility timing
-- **Parameter Optimization**: Entry thresholds, indicator periods, strategy weights
+- Machine Learning: Neural networks, ensemble methods, reinforcement learning (use train() method)
+- Advanced Indicators: Custom combinations, multi-timeframe signals, cross-asset indicators
+- Market Regime Detection: VIX patterns, correlation analysis, volatility clustering
+- Risk Management: Dynamic stops, portfolio heat, correlation-based position sizing
+- Alternative Strategies: New sub-strategies, momentum variants, mean reversion innovations
+- Multi-Asset Signals: Sector rotation, bond yields, commodity signals
+- Time-Based Patterns: Intraday effects, calendar anomalies, volatility timing
+- Parameter Optimization: Entry thresholds, indicator periods, strategy weights
 
-Think outside the box - the system is sophisticated and can handle advanced approaches!
-
-Add exactly $TOTAL_IDEAS algorithm variation rows to the CSV file now."
+Output exactly $TOTAL_IDEAS lines now:"
 
   echo "[INFO] Generating $TOTAL_IDEAS ideas (legacy mode)..."
-  if ! call_ai_with_limit_check "$prompt" "$CURRENT_GENERATION"; then
+  
+  # Get AI response
+  local ai_output
+  if ! ai_output=$(call_ai_with_limit_check "$prompt" "$CURRENT_GENERATION" 2>&1); then
     echo "[WARN] AI failed to generate ideas" >&2
     return 1
   fi
+  
+  # Process the output using helper function
+  # For legacy mode, we treat all as "novel" since we're not specifying a strategy
+  process_ai_ideas "$ai_output" "$TOTAL_IDEAS" "novel"
+  
   echo "[INFO] Legacy ideas generated"
 }
 
