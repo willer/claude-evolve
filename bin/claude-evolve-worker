@@ -1,497 +1,176 @@
 #!/bin/bash
-# Worker process for parallel evolution execution
-# Processes a single evolution candidate and exits
-
 set -e
 
-# Track temp file for cleanup
-temp_file=""
-
-# Cleanup function for temp files
-cleanup_temp() {
-  if [[ -n "$temp_file" && -f "$temp_file" ]]; then
-    rm -f "$temp_file"
-    echo "[WORKER-$$] Cleaned up temp file: $temp_file" >&2
-  fi
-}
-
-# Set trap to clean up temp files on exit
-trap cleanup_temp EXIT INT TERM
-
-# Function to handle failures with retry logic
-handle_failure() {
-  local candidate_id="$1"
-  local current_status="$2"
-  local performance="${3:-0}"
-  
-  # If this is already a retry, increment the retry count
-  if [[ $current_status =~ ^failed-retry([0-9]+)$ ]]; then
-    local retry_num=${BASH_REMATCH[1]}
-    local new_retry_num=$((retry_num + 1))
-    
-    if [[ $new_retry_num -le $MAX_RETRIES ]]; then
-      local new_status="failed-retry${new_retry_num}"
-      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" update "$candidate_id" "$new_status"
-      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" perf "$candidate_id" "$performance"
-      echo "[WORKER-$$] ✗ Retry $retry_num failed, marked as $new_status"
-      exit 1
-    else
-      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" update "$candidate_id" "failed"
-      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" perf "$candidate_id" "$performance"
-      echo "[WORKER-$$] ✗ Max retries ($MAX_RETRIES) exceeded, marking as permanently failed"
-      exit 1
-    fi
-  elif [[ $current_status == "failed" ]]; then
-    # Initial failure, convert to retry1 if retries are enabled
-    if [[ $MAX_RETRIES -gt 0 ]]; then
-      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" update "$candidate_id" "failed-retry1"
-      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" perf "$candidate_id" "$performance"
-      echo "[WORKER-$$] ✗ Initial failure, marked as failed-retry1 for retry"
-      exit 1
-    else
-      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" update "$candidate_id" "failed"
-      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" perf "$candidate_id" "$performance"
-      echo "[WORKER-$$] ✗ Failed (retries disabled)"
-      # Use exit code 1 - systemic issue since retries are disabled
-      exit 1
-    fi
-  else
-    # Not a failure scenario, convert to retry1 if retries enabled
-    if [[ $MAX_RETRIES -gt 0 ]]; then
-      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" update "$candidate_id" "failed-retry1"
-      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" perf "$candidate_id" "$performance"
-      echo "[WORKER-$$] ✗ Evaluation failed, marked as failed-retry1 for retry"
-      exit 1
-    else
-      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" update "$candidate_id" "failed"
-      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" perf "$candidate_id" "$performance"
-      echo "[WORKER-$$] ✗ Evaluation failed (retries disabled)"
-      exit 1
-    fi
-  fi
-}
-
-# Load configuration
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=../lib/config.sh
+# Source configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 source "$SCRIPT_DIR/../lib/config.sh"
-# shellcheck source=../lib/csv-lock.sh
 source "$SCRIPT_DIR/../lib/csv-lock.sh"
-
-# Use CLAUDE_EVOLVE_CONFIG if set, otherwise default
-if [[ -n ${CLAUDE_EVOLVE_CONFIG:-} ]]; then
-  load_config "$CLAUDE_EVOLVE_CONFIG"
-else
-  load_config
-fi
 
 # Parse arguments
 timeout_seconds=""
-candidate_id=""
-
 while [[ $# -gt 0 ]]; do
-  case $1 in
-  --timeout)
-    if [[ -z ${2:-} ]] || [[ ! $2 =~ ^[0-9]+$ ]] || [[ $2 -eq 0 ]]; then
-      echo "[ERROR] --timeout requires a positive integer (seconds)" >&2
+  case "$1" in
+    --timeout)
+      timeout_seconds="$2"
+      shift 2
+      ;;
+    *)
+      echo "[ERROR] Unknown argument: $1" >&2
       exit 1
-    fi
-    timeout_seconds="$2"
-    shift 2
-    ;;
-  --id)
-    candidate_id="$2"
-    shift 2
-    ;;
-  *)
-    echo "[ERROR] Unknown option: $1" >&2
-    exit 1
-    ;;
+      ;;
   esac
 done
 
-# If no ID provided, find next pending using UNIFIED LOGIC
-if [[ -z $candidate_id ]]; then
-  candidate_result=$("$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" next)
-  if [[ -z $candidate_result ]]; then
-    echo "[DEBUG] No pending candidates found" >&2
-    exit 0
-  fi
-  
-  # Parse candidate_id|original_status format
-  if [[ $candidate_result == *"|"* ]]; then
-    candidate_id="${candidate_result%|*}"  # Everything before |
-    original_candidate_status="${candidate_result#*|}"  # Everything after |
-  else
-    # Fallback for old format (shouldn't happen)
-    candidate_id="$candidate_result"
-    original_candidate_status=""
-  fi
-else
-  # Mark specified candidate as running using UNIFIED LOGIC
-  "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" update "$candidate_id" "running"
-  original_candidate_status=""  # Unknown for manually specified candidates
-fi
-
-echo "[WORKER-$$] Processing candidate ID: $candidate_id"
-
-# Validate workspace
-if [[ ! -d "$FULL_EVOLUTION_DIR" ]]; then
-  echo "[ERROR] Evolution directory not found: $FULL_EVOLUTION_DIR" >&2
+# Validate paths
+if [[ ! -f "$FULL_CSV_PATH" ]]; then
+  echo "[WORKER-$$] CSV file not found: $FULL_CSV_PATH" >&2
   exit 1
 fi
 
-# Create log file for this run
-mkdir -p logs
-LOGFILE="logs/worker-${candidate_id}-$(date +%Y%m%d_%H%M%S).txt"
-
-# Find candidate in CSV
-row_data=""
-if ! read_csv_with_lock csv_content; then
-  echo "[ERROR] Failed to read CSV" >&2
-  exit 1
-fi
-
-# Extract candidate data using Python
-eval "$("$PYTHON_CMD" -c "
-import csv
-import sys
-import io
-
-csv_content = '''$csv_content'''
-reader = csv.reader(io.StringIO(csv_content))
-next(reader)  # Skip header
-
-found = False
-for row in reader:
-    if len(row) >= 5 and row[0] == '$candidate_id':
-        # Escape special characters for shell
-        desc = row[2].replace('\\\\', '\\\\\\\\').replace('\"', '\\\\\"').replace('\$', '\\\\\$').replace('\`', '\\\\\`')
-        print(f'id=\"{row[0]}\"')
-        print(f'based_on_id=\"{row[1]}\"')
-        print(f'description=\"{desc}\"')
-        print(f'performance=\"{row[3]}\"')
-        print(f'status=\"{row[4]}\"')
-        print('found=true')
-        found = True
-        break
-
-if not found:
-    print('found=false')
-")"
-
-if [[ $found == false ]]; then
-  echo "[ERROR] Candidate ID not found: $candidate_id" >&2
-  exit 1
-fi
-
-echo "[WORKER-$$] Description: $description"
-echo "[WORKER-$$] Based on ID: $based_on_id"
-
-# AIDEV-NOTE: Retry logic - detect if this is a retry attempt
-is_retry=false
-retry_count=0
-# Use original_candidate_status for retry detection (if available), otherwise fall back to CSV status
-retry_status="$original_candidate_status"
-if [[ -z "$retry_status" ]]; then
-  retry_status="$status"
-fi
-
-if [[ $retry_status =~ ^failed-retry([0-9]+)$ ]]; then
-  is_retry=true
-  retry_count=${BASH_REMATCH[1]}
-  echo "[WORKER-$$] 🔄 Processing retry attempt #$retry_count"
-elif [[ $retry_status == "failed" ]]; then
-  echo "[WORKER-$$] ⚠️ Initial failure detected - this should be converted to failed-retry1 to enable retries"
-fi
-
-# AIDEV-NOTE: Using common evolution processor logic for consistent handling
-# Determine parent algorithm
-if [[ -z $based_on_id || $based_on_id == "0" || $based_on_id == '""' ]]; then
-  parent_file="$FULL_ALGORITHM_PATH"
-  echo "[WORKER-$$] Using base algorithm"
-else
-  # Handle both old and new format IDs
-  if [[ $based_on_id =~ ^[0-9]+$ ]]; then
-    parent_file="$FULL_OUTPUT_DIR/evolution_id${based_on_id}.py"
+# Process a single candidate
+process_candidate() {
+  local candidate_id="$1"
+  local parent_id="$2"
+  local description="$3"
+  
+  echo "[WORKER-$$] Processing candidate ID: $candidate_id"
+  echo "[WORKER-$$] Description: $description"
+  echo "[WORKER-$$] Based on ID: $parent_id"
+  
+  # Determine source algorithm
+  local source_file
+  if [[ -z "$parent_id" ]]; then
+    echo "[WORKER-$$] Using base algorithm"
+    source_file="$FULL_ALGORITHM_PATH"
   else
-    parent_file="$FULL_OUTPUT_DIR/evolution_${based_on_id}.py"
-  fi
-  
-  if [[ ! -f $parent_file ]]; then
-    echo "[ERROR] Parent algorithm not found: $parent_file" >&2
-    handle_failure "$candidate_id" "$retry_status" "0"
-    exit 1
-  fi
-fi
-
-# Generate output file path
-if [[ $id =~ ^[0-9]+$ ]]; then
-  output_file="$FULL_OUTPUT_DIR/evolution_id${id}.py"
-else
-  output_file="$FULL_OUTPUT_DIR/evolution_${id}.py"
-fi
-
-# Use temp file for mutations to avoid partial/failed edits
-temp_file="${output_file}.tmp$$"
-
-# Check if processing should be skipped using common logic
-# Set environment variable for retry detection
-if [[ $is_retry == "true" ]]; then
-  export RETRY_CANDIDATE=true
-else
-  export RETRY_CANDIDATE=false
-fi
-
-eval "$("$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_processor.py" "$id" "$based_on_id" "$FULL_OUTPUT_DIR" "$ROOT_DIR" "$parent_file" "$output_file")"
-
-# Handle copy operation to temp file
-if [[ "$skip_copy" == "True" ]]; then
-  echo "[WORKER-$$] ⚠️  Skipping copy - $reason"
-elif [[ $is_retry == "true" ]]; then
-  # For retries, edit the existing failed algorithm in-place
-  if [[ -f "$output_file" ]]; then
-    cp "$output_file" "$temp_file"
-    echo "[WORKER-$$] 🔄 Copied existing algorithm for retry: $temp_file"
-  else
-    # Fallback to parent if existing file doesn't exist
-    cp "$parent_file" "$temp_file"
-    echo "[WORKER-$$] ⚠️ Existing algorithm not found, using parent: $temp_file"
-  fi
-else
-  cp "$parent_file" "$temp_file"
-  echo "[WORKER-$$] Copied parent to temp file: $temp_file"
-fi
-
-# Handle Claude mutation based on skip flags
-if [[ "$skip_claude" == "True" ]]; then
-  echo "[WORKER-$$] ⚠️  Skipping Claude processing - $reason"
-  # If we have a temp file but are skipping Claude, move it to final location
-  if [[ -f "$temp_file" ]]; then
-    mv "$temp_file" "$output_file"
-    echo "[WORKER-$$] Moved temp file to final location (no Claude processing)"
-  fi
-else
-  # Check for claude CLI
-  claude_cmd="${CLAUDE_CMD:-claude}"
-  if ! command -v "$claude_cmd" >/dev/null 2>&1; then
-    echo "[ERROR] Claude CLI not found" >&2
-    handle_failure "$candidate_id" "$retry_status" "0"
-    exit 1
-  fi
-  
-  CLAUDE_MODEL="sonnet"
-  echo "[WORKER-$$] Using Claude $CLAUDE_MODEL for mutation"
-  
-  # Create mutation prompt (different for retries vs initial attempts)
-  if [[ $is_retry == "true" ]]; then
-    prompt="Fix the bugs in the file $temp_file. This algorithm was attempting to implement: $description
-
-The algorithm failed during evaluation. Please:
-- Analyze the code for potential bugs (syntax errors, logical issues, missing imports, etc.)
-- Fix any problems you find
-- Ensure the code runs without errors
-- Make sure it still implements the intended change: $description
-- Add appropriate error handling and validation
-- If possible, suggest a simple way to test this fix
-
-This is retry attempt #$retry_count. Focus on making the code robust and correct."
-  else
-    prompt="Edit the file $temp_file to implement this specific change: $description
-
-Requirements:
-- Edit the file directly (don't just provide comments or suggestions)
-- Maintain the same function signatures and interfaces
-- Make the specific change described above
-- Ensure the code runs without syntax errors
-- Add proper error handling if needed
-
-The file currently contains the parent algorithm. Modify it according to the description above."
-  fi
-  
-  # Log prompt
-  {
-    echo "=== WORKER $$ - MUTATION PROMPT ==="
-    echo "ID: $id"
-    echo "Timestamp: $(date)"
-    echo "$prompt"
-    echo
-  } >> "$LOGFILE"
-  
-  # Call Claude
-  echo "[WORKER-$$] Calling Claude to apply mutation..."
-  claude_output=$(echo "$prompt" | "$claude_cmd" --dangerously-skip-permissions --model $CLAUDE_MODEL -p 2>&1 | tee -a "$LOGFILE")
-  claude_exit_code=${PIPESTATUS[1]}
-  
-  # Check for rate limit (multiple possible messages)
-  if echo "$claude_output" | grep -q -E "(usage limit|rate limit|limit reached|too many requests)"; then
-    echo "⚠️  Claude API rate limit reached" >&2
-    echo "⚠️  Claude output:" >&2
-    echo "$claude_output" >&2
-    # Clean up the temp file
-    if [[ -f "$temp_file" ]]; then
-      rm "$temp_file"
-      echo "[WORKER-$$] Cleaned up temp file due to rate limit" >&2
+    echo "[WORKER-$$] Using parent algorithm: $parent_id"
+    source_file="$FULL_OUTPUT_DIR/evolution_${parent_id}.py"
+    if [[ ! -f "$source_file" ]]; then
+      echo "[WORKER-$$] ERROR: Parent algorithm not found: $source_file" >&2
+      return 1
     fi
-    # Reset to pending so it can be retried later
-    "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" update "$candidate_id" "pending"
-    exit 2  # Special exit code for rate limit
   fi
   
-  if [[ $claude_exit_code -ne 0 ]]; then
-    echo "⚠️  Claude failed to mutate algorithm (exit code: $claude_exit_code)" >&2
-    echo "⚠️  Claude output:" >&2
-    echo "$claude_output" >&2
-    # Clean up the temp file
-    if [[ -f "$temp_file" ]]; then
-      rm "$temp_file"
-      echo "[WORKER-$$] Cleaned up temp file due to Claude failure" >&2
+  # Target file for evolution
+  local target_file="$FULL_OUTPUT_DIR/evolution_${candidate_id}.py"
+  
+  # Check if processing should be skipped
+  if [[ -f "$target_file" ]]; then
+    echo "[WORKER-$$] �  Skipping copy - File already exists - skipping all processing"
+    echo "[WORKER-$$] �  Skipping Claude processing - File already exists - skipping all processing"
+    
+    # Check if already evaluated
+    local current_status
+    current_status=$("$PYTHON_CMD" -c "
+from lib.evolution_csv import EvolutionCSV
+csv = EvolutionCSV('$FULL_CSV_PATH')
+status = csv.get_candidate_status('$candidate_id')
+print(status if status else 'unknown')
+")
+    
+    if [[ "$current_status" == "complete" ]]; then
+      echo "[WORKER-$$] Already evaluated - skipping"
+      return 0
     fi
-    handle_failure "$candidate_id" "$retry_status" "0"
-    exit 1
+    
+    # Run evaluation only
+    echo "[WORKER-$$] Running evaluation..."
+  else
+    # Copy source to target
+    echo "[WORKER-$$] Copying $source_file to $target_file"
+    cp "$source_file" "$target_file"
+    
+    # Apply evolution using Claude
+    echo "[WORKER-$$] Applying evolution with Claude..."
+    local evolution_prompt="Modify the algorithm in $target_file based on this description: $description
+    
+The modification should be substantial and follow the description exactly. Make sure the algorithm still follows all interface requirements and can run properly.
+
+Important: Make meaningful changes that match the description. Don't just add comments or make trivial adjustments."
+    
+    if ! echo "$evolution_prompt" | claude --dangerously-skip-permissions -p 2>&1; then
+      echo "[WORKER-$$] ERROR: Claude evolution failed" >&2
+      rm -f "$target_file"  # Clean up on failure
+      return 1
+    fi
+    
+    echo "[WORKER-$$] Evolution applied successfully"
   fi
   
-  # Verify that Claude actually modified the file
-  if [[ -f "$temp_file" && -f "$parent_file" ]]; then
-    if cmp -s "$temp_file" "$parent_file"; then
-      echo "⚠️  Unchanged algorithm detected - Claude didn't modify the file" >&2
-      echo "⚠️  Description was: $description" >&2
-      echo "⚠️  Claude's response:" >&2
-      echo "$claude_output" >&2
+  # Run evaluation
+  echo "[WORKER-$$] Evaluating algorithm..."
+  local eval_output
+  local eval_start=$(date +%s)
+  
+  # Prepare evaluation command
+  local eval_cmd=("$PYTHON_CMD" "$FULL_EVALUATOR_PATH" "$candidate_id")
+  [[ -n "$timeout_seconds" ]] && eval_cmd=(timeout "$timeout_seconds" "${eval_cmd[@]}")
+  
+  # Run evaluation and capture output
+  if eval_output=$("${eval_cmd[@]}" 2>&1); then
+    local eval_end=$(date +%s)
+    local eval_duration=$((eval_end - eval_start))
+    
+    # Extract performance score
+    local score=$(echo "$eval_output" | grep -E "^SCORE:" | cut -d: -f2 | tr -d ' ')
+    
+    if [[ -n "$score" ]]; then
+      echo "[WORKER-$$] Evaluation complete: score=$score (${eval_duration}s)"
       
-      # Clean up temp file and mark as failed
-      rm "$temp_file"
-      handle_failure "$candidate_id" "$retry_status" "0"
-      exit 1
+      # Update CSV with result
+      "$PYTHON_CMD" -c "
+from lib.evolution_csv import EvolutionCSV
+csv = EvolutionCSV('$FULL_CSV_PATH')
+csv.update_candidate_status('$candidate_id', 'complete', performance='$score')
+"
     else
-      # Changes were made - move temp file to final location
-      mv "$temp_file" "$output_file"
-      echo "[WORKER-$$] Changes detected - moved to: $output_file"
+      echo "[WORKER-$$] ERROR: No score found in evaluation output" >&2
+      echo "[WORKER-$$] Output: $eval_output" >&2
+      return 1
     fi
   else
-    # If we can't compare, assume it's okay and move the file
-    if [[ -f "$temp_file" ]]; then
-      mv "$temp_file" "$output_file"
-      echo "[WORKER-$$] Moved temp file to: $output_file"
-    fi
-  fi
-fi
-
-# Run evaluator
-echo "[WORKER-$$] Running evaluation..."
-eval_output=""
-eval_exit_code=0
-
-if [[ -n $timeout_seconds ]]; then
-  echo "[WORKER-$$] Evaluation timeout: ${timeout_seconds}s"
-  # For Modal compatibility, don't capture stderr
-  if eval_output=$(EXPERIMENT_ID="$id" timeout "$timeout_seconds" "$PYTHON_CMD" "$FULL_EVALUATOR_PATH" "$output_file"); then
-    eval_exit_code=0
-  else
-    eval_exit_code=$?
-    if [[ $eval_exit_code -eq 124 ]]; then
-      echo "[ERROR] Evaluation timed out" >&2
-      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" update "$candidate_id" "timeout"
-      exit 1
-    fi
-  fi
-else
-  # For Modal compatibility, don't capture stderr
-  if eval_output=$(EXPERIMENT_ID="$id" "$PYTHON_CMD" "$FULL_EVALUATOR_PATH" "$output_file"); then
-    eval_exit_code=0
-  else
-    eval_exit_code=$?
-  fi
-fi
-
-# Log evaluator output
-{
-  echo "=== WORKER $$ - EVALUATOR OUTPUT ==="
-  echo "Exit code: $eval_exit_code"
-  echo "$eval_output"
-  echo
-} >> "$LOGFILE"
-
-# Process results
-if [[ $eval_exit_code -eq 0 ]]; then
-  # First, check if output is just a plain number
-  if [[ $eval_output =~ ^[[:space:]]*-?[0-9]+\.?[0-9]*[[:space:]]*$ ]]; then
-    score=$(echo "$eval_output" | tr -d ' ')
-    if [[ $(echo "$score == 0" | bc -l) == "1" ]]; then
-      handle_failure "$candidate_id" "$retry_status" "$score"
-      exit 1
-    else
-      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" perf "$candidate_id" "$score"
-      "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" update "$candidate_id" "complete"
-      echo "[WORKER-$$] ✓ Evaluation complete, score: $score"
-      exit 0
-    fi
-  fi
-  
-  # Try to parse as JSON and extract all fields
-  if echo "$eval_output" | jq . >/dev/null 2>&1; then
-    # Valid JSON - use CSV helper to update with all fields
-    if ! acquire_csv_lock; then
-      echo "[ERROR] Failed to acquire CSV lock" >&2
-      exit 1
-    fi
+    local exit_code=$?
+    echo "[WORKER-$$] ERROR: Evaluation failed with exit code $exit_code" >&2
+    echo "[WORKER-$$] Output: $eval_output" >&2
     
-    score=$("$PYTHON_CMD" "$SCRIPT_DIR/../lib/csv_helper.py" update_with_json "$FULL_CSV_PATH" "$candidate_id" "$eval_output")
-    release_csv_lock
+    # Mark as failed in CSV
+    "$PYTHON_CMD" -c "
+from lib.evolution_csv import EvolutionCSV
+csv = EvolutionCSV('$FULL_CSV_PATH')
+csv.update_candidate_status('$candidate_id', 'failed')
+"
     
-    if [[ -n $score ]] && [[ $score != "0" ]]; then
-      echo "[WORKER-$$] ✓ Evaluation complete, score: $score"
-      # Extract and display additional fields if present
-      if additional_fields=$(echo "$eval_output" | jq -r 'to_entries | map(select(.key != "score" and .key != "performance")) | map("\(.key): \(.value)") | join(", ")' 2>/dev/null); then
-        if [[ -n $additional_fields ]]; then
-          echo "[WORKER-$$]   Additional metrics: $additional_fields"
-        fi
-      fi
-      exit 0
-    else
-      echo "[WORKER-$$] ✗ Evaluation failed with score 0"
-      exit 1
-    fi
+    return $exit_code
+  fi
+}
+
+# Main worker loop
+echo "[WORKER-$$] Worker started"
+
+while true; do
+  # Try to claim a pending candidate
+  candidate_info=$("$PYTHON_CMD" -c "
+from lib.evolution_csv import EvolutionCSV
+csv = EvolutionCSV('$FULL_CSV_PATH')
+candidate = csv.claim_next_pending()
+if candidate:
+    print(f'{candidate[\"id\"]}|{candidate.get(\"parent_id\", \"\")}|{candidate[\"description\"]}')
+")
+  
+  if [[ -z "$candidate_info" ]]; then
+    # No pending work
+    break
   fi
   
-  # Fallback: Try simple grep for score/performance fields
-  if score=$(echo "$eval_output" | grep -o '"score"[[:space:]]*:[[:space:]]*[0-9.]*' | cut -d: -f2 | tr -d ' '); then
-    if [[ -n $score ]]; then
-      if [[ $(echo "$score == 0" | bc -l) == "1" ]]; then
-        handle_failure "$candidate_id" "$retry_status" "$score"
-        exit 1
-      else
-        "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" perf "$candidate_id" "$score"
-        "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" update "$candidate_id" "complete"
-        echo "[WORKER-$$] ✓ Evaluation complete, score: $score"
-        exit 0
-      fi
-    fi
-  fi
+  # Parse candidate info
+  IFS='|' read -r candidate_id parent_id description <<< "$candidate_info"
   
-  # Try "performance" field
-  if score=$(echo "$eval_output" | grep -o '"performance"[[:space:]]*:[[:space:]]*[0-9.]*' | cut -d: -f2 | tr -d ' '); then
-    if [[ -n $score ]]; then
-      if [[ $(echo "$score == 0" | bc -l) == "1" ]]; then
-        handle_failure "$candidate_id" "$retry_status" "$score"
-        exit 1
-      else
-        "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" perf "$candidate_id" "$score"
-        "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" update "$candidate_id" "complete"
-        echo "[WORKER-$$] ✓ Evaluation complete, score: $score"
-        exit 0
-      fi
-    fi
+  # Process the candidate
+  if process_candidate "$candidate_id" "$parent_id" "$description"; then
+    echo "[WORKER-$$] Successfully processed $candidate_id"
+  else
+    echo "[WORKER-$$] Failed to process $candidate_id"
   fi
-  
-  echo "[ERROR] No score found in evaluator output" >&2
-  echo "[ERROR] Expected: plain number (e.g., 1.23) or JSON with 'score' or 'performance' field" >&2
-  echo "[ERROR] Actual evaluator output was:" >&2
-  echo "$eval_output" >&2
-  handle_failure "$candidate_id" "$retry_status" "0"
-  exit 1
-else
-  echo "[ERROR] Evaluator failed with exit code $eval_exit_code" >&2
-  handle_failure "$candidate_id" "$retry_status" "0"
-  exit 1
-fi
+done
+
+echo "[WORKER-$$] No more pending candidates, worker exiting"

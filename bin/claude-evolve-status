@@ -255,7 +255,12 @@ try:
             status_str = f'{data[\"pending\"]}p {data[\"complete\"]}c {data[\"failed\"]}f {data[\"running\"]}r'
             
             if gen_best:
-                print(f'   {gen}: {total} total ({status_str}) - best: {gen_best[0]} ({gen_best[2]:.4f})')
+                # Check if this generation's best is the overall winner
+                if winner and gen_best[0] == winner[0]:
+                    # Highlight in green if it's the overall winner
+                    print(f'   {gen}: {total} total ({status_str}) - best: \033[32m{gen_best[0]} ({gen_best[2]:.4f})\033[0m')
+                else:
+                    print(f'   {gen}: {total} total ({status_str}) - best: {gen_best[0]} ({gen_best[2]:.4f})')
             else:
                 print(f'   {gen}: {total} total ({status_str}) - best: none')
 
