@@ -11,7 +11,18 @@ source "$SCRIPT_DIR/../lib/config.sh"
 if [[ -n ${CLAUDE_EVOLVE_CONFIG:-} ]]; then
   load_config "$CLAUDE_EVOLVE_CONFIG"
 else
-  load_config
+  # Check if config.yaml exists in current directory
+  if [[ -f "config.yaml" ]]; then
+    export CLAUDE_EVOLVE_CONFIG="$(pwd)/config.yaml"
+    load_config "$CLAUDE_EVOLVE_CONFIG"
+  else
+    load_config
+  fi
+fi
+
+# Export the config path for workers if not already set
+if [[ -z ${CLAUDE_EVOLVE_CONFIG:-} ]] && [[ -f "config.yaml" ]]; then
+  export CLAUDE_EVOLVE_CONFIG="$(pwd)/config.yaml"
 fi
 
 # Validate configuration

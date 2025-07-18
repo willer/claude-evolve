@@ -1,5 +1,40 @@
 # Claude Evolution Project Guidelines
 
+## Evaluator Output Specification
+
+The claude-evolve system supports multiple evaluator output formats to provide flexibility in performance reporting:
+
+### Supported Output Formats
+
+1. **Simple Numeric Value** - Just print a number:
+   ```
+   1.234
+   ```
+
+2. **JSON with performance field** (Recommended for multiple metrics):
+   ```json
+   {"performance": 1.234, "accuracy": 0.95, "latency": 45.2, "memory_mb": 128}
+   ```
+   
+   The system will extract the `performance` field for evolution decisions and save ALL fields to the CSV.
+
+3. **JSON with score field** (Alternative to performance):
+   ```json
+   {"score": 1.234, "precision": 0.88, "recall": 0.92}
+   ```
+
+4. **Legacy SCORE: format** (For backward compatibility):
+   ```
+   SCORE: 1.234
+   ```
+
+### Important Notes
+- Performance values can be any numeric value (including 0.0)
+- A score of 0.0 is NOT a failure - it's just a low performance score
+- To indicate evaluation failure, exit with non-zero status code
+- When using JSON, all fields are preserved in the CSV for later analysis
+- The worker will automatically detect and parse any of these formats
+
 ## Shell Script Best Practices
 
 ### CRITICAL: Proper use of `local` keyword

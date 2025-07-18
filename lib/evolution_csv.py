@@ -240,6 +240,66 @@ class EvolutionCSV:
             
         return updated
         
+    def update_candidate_field(self, candidate_id: str, field_name: str, value: str) -> bool:
+        """Update a specific field for a candidate by adding it as a new column if needed."""
+        rows = self._read_csv()
+        if not rows:
+            return False
+            
+        # Check if we have a header row
+        has_header = rows and rows[0] and rows[0][0].lower() == 'id'
+        header_row = rows[0] if has_header else None
+        
+        # Find or add the field to header
+        if has_header:
+            # Normalize field names - lowercase for comparison
+            field_lower = field_name.lower()
+            field_index = None
+            
+            # Try to find existing column
+            for i, col in enumerate(header_row):
+                if col.lower() == field_lower:
+                    field_index = i
+                    break
+            
+            # If field doesn't exist, add it to header
+            if field_index is None:
+                field_index = len(header_row)
+                header_row.append(field_name)
+        else:
+            # No header - we'll use predefined positions for known fields
+            field_map = {
+                'id': 0,
+                'basedonid': 1,
+                'description': 2,
+                'performance': 3,
+                'status': 4
+            }
+            field_index = field_map.get(field_name.lower())
+            if field_index is None:
+                # Unknown field without header - can't update
+                return False
+        
+        # Update the candidate's field
+        updated = False
+        start_idx = 1 if has_header else 0
+        
+        for i in range(start_idx, len(rows)):
+            row = rows[i]
+            if self.is_valid_candidate_row(row) and row[0].strip() == candidate_id:
+                # Ensure row has enough columns
+                while len(row) <= field_index:
+                    row.append('')
+                    
+                row[field_index] = value
+                updated = True
+                break
+                
+        if updated:
+            self._write_csv(rows)
+            
+        return updated
+        
     def get_candidate_info(self, candidate_id: str) -> Optional[Dict[str, str]]:
         """Get information about a specific candidate."""
         rows = self._read_csv()

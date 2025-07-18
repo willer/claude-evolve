@@ -6,6 +6,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 source "$SCRIPT_DIR/../lib/config.sh"
 source "$SCRIPT_DIR/../lib/csv-lock.sh"
 
+# Load config using the same logic as dispatcher
+if [[ -n ${CLAUDE_EVOLVE_CONFIG:-} ]]; then
+  load_config "$CLAUDE_EVOLVE_CONFIG"
+else
+  load_config
+fi
+
 # Parse arguments
 timeout_seconds=""
 while [[ $# -gt 0 ]]; do
@@ -56,16 +63,21 @@ process_candidate() {
   
   # Check if processing should be skipped
   if [[ -f "$target_file" ]]; then
-    echo "[WORKER-$$]    Skipping copy - File already exists - skipping all processing"
-    echo "[WORKER-$$]    Skipping Claude processing - File already exists - skipping all processing"
+    echo "[WORKER-$$] ï¿½  Skipping copy - File already exists - skipping all processing"
+    echo "[WORKER-$$] ï¿½  Skipping Claude processing - File already exists - skipping all processing"
     
     # Check if already evaluated
     local current_status
     current_status=$("$PYTHON_CMD" -c "
+import sys
+sys.path.insert(0, '$SCRIPT_DIR/..')
 from lib.evolution_csv import EvolutionCSV
-csv = EvolutionCSV('$FULL_CSV_PATH')
-status = csv.get_candidate_status('$candidate_id')
-print(status if status else 'unknown')
+with EvolutionCSV('$FULL_CSV_PATH') as csv:
+    candidate = csv.get_candidate_info('$candidate_id')
+    if candidate:
+        print(candidate.get('status', 'unknown'))
+    else:
+        print('unknown')
 ")
     
     if [[ "$current_status" == "complete" ]]; then
@@ -111,18 +123,104 @@ Important: Make meaningful changes that match the description. Don't just add co
     local eval_end=$(date +%s)
     local eval_duration=$((eval_end - eval_start))
     
-    # Extract performance score
-    local score=$(echo "$eval_output" | grep -E "^SCORE:" | cut -d: -f2 | tr -d ' ')
+    # Extract performance score - support multiple formats
+    # Try to parse the output and extract score
+    local score_and_json=$("$PYTHON_CMD" -c "
+import sys
+import json
+import re
+
+output = '''$eval_output'''
+
+# Try different formats
+score = None
+json_data = None
+
+# Format 1: Simple numeric value (just a number on a line)
+for line in output.strip().split('\n'):
+    line = line.strip()
+    if line and not line.startswith('{'):
+        try:
+            score = float(line)
+            break
+        except ValueError:
+            pass
+
+# Format 2: JSON with 'performance' or 'score' field
+if score is None:
+    for line in output.strip().split('\n'):
+        line = line.strip()
+        if line.startswith('{'):
+            try:
+                data = json.loads(line)
+                json_data = data
+                if 'performance' in data:
+                    score = float(data['performance'])
+                elif 'score' in data:
+                    score = float(data['score'])
+                break
+            except (json.JSONDecodeError, ValueError, KeyError):
+                pass
+
+# Format 3: SCORE: prefix (backward compatibility)
+if score is None:
+    match = re.search(r'^SCORE:\s*([+-]?\d*\.?\d+)', output, re.MULTILINE)
+    if match:
+        try:
+            score = float(match.group(1))
+        except ValueError:
+            pass
+
+# Output results
+if score is not None:
+    print(f'SCORE={score}')
+    if json_data:
+        print('JSON_DATA=' + json.dumps(json_data))
+else:
+    print('SCORE=NONE')
+")
     
-    if [[ -n "$score" ]]; then
+    # Parse the Python output
+    local score=""
+    local json_data=""
+    while IFS= read -r line; do
+      if [[ "$line" =~ ^SCORE=(.*)$ ]]; then
+        score="${BASH_REMATCH[1]}"
+      elif [[ "$line" =~ ^JSON_DATA=(.*)$ ]]; then
+        json_data="${BASH_REMATCH[1]}"
+      fi
+    done <<< "$score_and_json"
+    
+    if [[ "$score" != "NONE" ]] && [[ -n "$score" ]]; then
       echo "[WORKER-$$] Evaluation complete: score=$score (${eval_duration}s)"
       
       # Update CSV with result
-      "$PYTHON_CMD" -c "
+      if [[ -n "$json_data" ]]; then
+        # If we have JSON data, update all fields
+        "$PYTHON_CMD" -c "
+import sys
+import json
+sys.path.insert(0, '$SCRIPT_DIR/..')
 from lib.evolution_csv import EvolutionCSV
-csv = EvolutionCSV('$FULL_CSV_PATH')
-csv.update_candidate_status('$candidate_id', 'complete', performance='$score')
+
+json_data = json.loads('$json_data')
+with EvolutionCSV('$FULL_CSV_PATH') as csv:
+    csv.update_candidate_status('$candidate_id', 'complete')
+    # Update all fields from JSON
+    for key, value in json_data.items():
+        csv.update_candidate_field('$candidate_id', key, str(value))
 "
+      else
+        # Simple score only
+        "$PYTHON_CMD" -c "
+import sys
+sys.path.insert(0, '$SCRIPT_DIR/..')
+from lib.evolution_csv import EvolutionCSV
+with EvolutionCSV('$FULL_CSV_PATH') as csv:
+    csv.update_candidate_status('$candidate_id', 'complete')
+    csv.update_candidate_performance('$candidate_id', '$score')
+"
+      fi
     else
       echo "[WORKER-$$] ERROR: No score found in evaluation output" >&2
       echo "[WORKER-$$] Output: $eval_output" >&2
@@ -135,9 +233,11 @@ csv.update_candidate_status('$candidate_id', 'complete', performance='$score')
     
     # Mark as failed in CSV
     "$PYTHON_CMD" -c "
+import sys
+sys.path.insert(0, '$SCRIPT_DIR/..')
 from lib.evolution_csv import EvolutionCSV
-csv = EvolutionCSV('$FULL_CSV_PATH')
-csv.update_candidate_status('$candidate_id', 'failed')
+with EvolutionCSV('$FULL_CSV_PATH') as csv:
+    csv.update_candidate_status('$candidate_id', 'failed')
 "
     
     return $exit_code
@@ -150,11 +250,17 @@ echo "[WORKER-$$] Worker started"
 while true; do
   # Try to claim a pending candidate
   candidate_info=$("$PYTHON_CMD" -c "
+import sys
+sys.path.insert(0, '$SCRIPT_DIR/..')
 from lib.evolution_csv import EvolutionCSV
-csv = EvolutionCSV('$FULL_CSV_PATH')
-candidate = csv.claim_next_pending()
-if candidate:
-    print(f'{candidate[\"id\"]}|{candidate.get(\"parent_id\", \"\")}|{candidate[\"description\"]}')
+with EvolutionCSV('$FULL_CSV_PATH') as csv:
+    result = csv.get_next_pending_candidate()
+    if result:
+        candidate_id, _ = result
+        # Get full candidate info
+        candidate = csv.get_candidate_info(candidate_id)
+        if candidate:
+            print(f'{candidate[\"id\"]}|{candidate.get(\"parent_id\", \"\")}|{candidate[\"description\"]}')
 ")
   
   if [[ -z "$candidate_info" ]]; then

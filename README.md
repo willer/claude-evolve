@@ -63,17 +63,35 @@ your-project/
 
 ## Evaluator Requirements
 
-Your `evaluator.py` must output a performance score to stdout:
+Your `evaluator.py` must output a performance score to stdout. The system supports multiple output formats:
 
+### Format 1: Simple numeric value
 ```python
-# Simple: just print a number
+# Just print a single number
 print(1.234)
-
-# Advanced: JSON with metrics
-print('{"performance": 1.234, "accuracy": 0.95}')
 ```
 
-Higher scores = better performance. Score of 0 = failure.
+### Format 2: JSON with performance/score field
+```python
+# JSON with 'performance' field (recommended)
+print('{"performance": 1.234, "accuracy": 0.95, "latency": 45.2}')
+
+# OR JSON with 'score' field
+print('{"score": 1.234, "precision": 0.88, "recall": 0.92}')
+```
+
+### Format 3: SCORE: prefix (legacy)
+```python
+# For backward compatibility
+print("SCORE: 1.234")
+```
+
+**Important notes:**
+- Higher scores = better performance
+- When using JSON, all fields are saved to the CSV for analysis
+- The `performance` or `score` field is required for evolution decisions
+- Return value of 0 doesn't mean failure - it's just a low score
+- Actual failures should exit with non-zero status code
 
 ## Configuration
 
