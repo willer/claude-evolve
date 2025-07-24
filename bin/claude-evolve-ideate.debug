@@ -199,98 +199,6 @@ call_claude_with_limit_check() {
   call_ai_with_limit_check "$@"
 }
 
-# Robust AI calling with fallbacks across all available models
-call_ai_with_fallbacks() {
-  local prompt="$1"
-  local generation="${2:-01}"
-  
-  # List of models to try in order
-  local models=()
-  
-  # Check which AI tools are available
-  if command -v codex >/dev/null 2>&1; then
-    models+=("o3")
-  fi
-  if command -v gemini >/dev/null 2>&1; then
-    models+=("gemini")
-  fi
-  # Claude is always available (fallback)
-  models+=("opus" "sonnet" "haiku")
-  
-  # Try each model in sequence
-  for model in "${models[@]}"; do
-    echo "[INFO] Trying $model for ideation (fallback attempt)" >&2
-    
-    local ai_output
-    local ai_exit_code
-    
-    if [[ "$model" == "o3" ]] && command -v codex >/dev/null 2>&1; then
-      ai_output=$(codex -m o3 --full-auto -q "$prompt" 2>&1)
-      ai_exit_code=$?
-      
-      if [[ $ai_exit_code -eq 0 ]]; then
-        # Clean o3 output like in the original function
-        if echo "$ai_output" | grep -q '"content"'; then
-          ai_output=$(echo "$ai_output" | python3 -c "
-import sys
-import json
-try:
-    data = json.load(sys.stdin)
-    if 'content' in data:
-        print(data['content'])
-    elif 'response' in data:
-        print(data['response'])
-    elif 'text' in data:
-        print(data['text'])
-    else:
-        print(json.dumps(data))
-except:
-    print(sys.stdin.read())
-" 2>/dev/null || echo "$ai_output")
-        fi
-        
-        if [[ -n "$ai_output" ]] && ! echo "$ai_output" | grep -q "error\|failed\|exception"; then
-          echo "$ai_output"
-          return 0
-        fi
-      fi
-      
-    elif [[ "$model" == "gemini" ]] && command -v gemini >/dev/null 2>&1; then
-      ai_output=$(gemini -y -p "$prompt" 2>&1)
-      ai_exit_code=$?
-      
-      if [[ $ai_exit_code -eq 0 ]]; then
-        if ! echo "$ai_output" | grep -q "Attempting to authenticate\|Authenticating\|Loading\|Initializing"; then
-          if [[ -n "$ai_output" ]] && [[ $(echo "$ai_output" | wc -l) -ge 2 ]]; then
-            echo "$ai_output"
-            return 0
-          fi
-        fi
-      fi
-      
-    else
-      # Use Claude with the specified model
-      ai_output=$(echo "$prompt" | claude --dangerously-skip-permissions --model "$model" -p 2>&1)
-      ai_exit_code=$?
-      
-      if [[ $ai_exit_code -eq 0 ]]; then
-        # Check for usage limits
-        if ! echo "$ai_output" | grep -q "Claude AI usage limit reached"; then
-          if ! echo "$ai_output" | grep -E "EOF.*<.*null|<<.*EOF|<.*dev.*null" >/dev/null 2>&1; then
-            echo "$ai_output"
-            return 0
-          fi
-        fi
-      fi
-    fi
-    
-    echo "[WARN] $model failed or returned unusable output, trying next model..." >&2
-  done
-  
-  echo "[ERROR] All AI models failed to generate usable output" >&2
-  return 1
-}
-
 # Parse arguments
 use_strategies=true
 
@@ -389,8 +297,7 @@ print(max_gen)
   printf "%02d" $((max_gen + 1))
 }
 
-# This function is no longer used with direct CSV modification approach
-# Keeping for backward compatibility but it's not called anywhere
+# Get next available ID number for current generation
 get_next_id_number() {
   "$PYTHON_CMD" -c "
 import csv
@@ -409,107 +316,87 @@ print(max_id + 1)
 "
 }
 
-# Process AI output by having AI directly modify a temporary CSV copy
-process_ai_ideas_direct() {
-  local count="$1"
-  local idea_type="$2"  # novel, hill-climbing, structural, crossover
-  local top_performers="${3:-}"  # Optional, for non-novel ideas
-  local ai_output="$4"  # The AI's response with ideas
+# Process AI output and add ideas to CSV
+process_ai_ideas() {
+  local ai_output="$1"
+  local count="$2"
+  local idea_type="$3"  # novel, hill-climbing, structural, crossover
+  local top_performers="${4:-}"  # Optional, for non-novel ideas
   
-  # Create temporary CSV copy
-  local temp_csv="/tmp/claude-evolve-temp-csv-$$.csv"
-  cp "$FULL_CSV_PATH" "$temp_csv"
+  local next_id_num=$(get_next_id_number)
+  local ideas_added=0
   
-  echo "[DEBUG] Starting CSV modification for $count $idea_type ideas" >&2
-  echo "[DEBUG] Original CSV path: $FULL_CSV_PATH" >&2
-  echo "[DEBUG] Temp CSV path: $temp_csv" >&2
-  echo "[DEBUG] Original CSV size: $(wc -l < "$FULL_CSV_PATH") lines" >&2
+  while IFS= read -r line && [[ $ideas_added -lt $count ]]; do
+    # Skip empty lines
+    [[ -z "$line" || "$line" =~ ^[[:space:]]*$ ]] && continue
+    
+    # Skip lines that look like headers or metadata
+    [[ "$line" =~ ^#|^\[|^==|^-- ]] && continue
+    
+    # Clean the line
+    line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    line=$(echo "$line" | sed 's/^[0-9]\+\.\?[[:space:]]*//')  # Remove numbering
+    line=$(echo "$line" | sed 's/^-[[:space:]]*//')  # Remove bullet points
+    
+    # Extract parent ID and description based on type
+    local parent_id=""
+    local description="$line"
+    
+    if [[ "$idea_type" != "novel" ]]; then
+      # For non-novel ideas, extract parent ID from "From X:" format
+      if [[ "$line" =~ ^From[[:space:]]+([^:]+):[[:space:]]*(.+)$ ]]; then
+        parent_id="${BASH_REMATCH[1]}"
+        description="${BASH_REMATCH[2]}"
+      else
+        # If no parent specified, use the first from top_performers
+        parent_id=$(echo "$top_performers" | head -1 | cut -d',' -f1)
+      fi
+    fi
+    
+    # Skip if description is too short or contains problematic content
+    [[ ${#description} -lt 20 ]] && continue
+    if echo "$description" | grep -qE 'EOF|/dev/null|<<<|>>>'; then
+      continue
+    fi
+    
+    # Skip AI system messages and errors
+    if echo "$description" | grep -qiE 'loaded.*cached.*credentials|authenticating|loading.*model|initializing|error.*occurred|failed.*to.*load|api.*key|rate.*limit|connection.*error|timeout|please.*try.*again|authentication.*failed|invalid.*request|model.*not.*available'; then
+      echo "[WARN] Skipping AI system message: $description" >&2
+      continue
+    fi
+    
+    # Skip responses that don't look like algorithm descriptions
+    if ! echo "$description" | grep -qiE 'algorithm|strategy|trading|position|signal|indicator|portfolio|risk|stop.?loss|profit|market|price|volatility|momentum|trend|regime|filter|threshold|window|period|weight|allocation|component'; then
+      echo "[WARN] Skipping non-algorithm description: $description" >&2
+      continue
+    fi
+    
+    # Generate ID for this idea
+    local idea_id=$(printf "gen%s-%03d" "$CURRENT_GENERATION" $((next_id_num + ideas_added)))
+    
+    # Escape quotes in description for CSV
+    description="${description//\"/\"\"}"
+    
+    # Append to CSV
+    echo "$idea_id,$parent_id,\"$description\",,pending" >> "$FULL_CSV_PATH"
+    
+    ((ideas_added++))
+    if [[ -n "$parent_id" ]]; then
+      echo "[INFO] Added $idea_type idea $idea_id (parent: $parent_id): ${description:0:50}..."
+    else
+      echo "[INFO] Added $idea_type idea $idea_id: ${description:0:70}..."
+    fi
+  done <<< "$ai_output"
   
-  # Build prompt for AI to directly modify the CSV
-  local csv_prompt="I need you to add exactly $count new $idea_type ideas to this CSV file.
-
-Here are the $count $idea_type ideas to add:
-$ai_output
-
-Current CSV contents:
-$(cat "$temp_csv")
-
-Instructions:
-1. Add exactly $count new rows to the CSV
-2. Use the next available generation numbers (gen$CURRENT_GENERATION-XXX format)
-3. For each idea, create a row with: id,parent_id,description,,pending
-4. For novel ideas: leave parent_id empty
-5. For other idea types: use appropriate parent IDs from these top performers:
-$top_performers
-
-IMPORTANT: Output the complete modified CSV file. Do not add any explanation or other text - just output the CSV."
+  if [[ $ideas_added -lt $count ]]; then
+    echo "[WARN] Only generated $ideas_added out of $count requested $idea_type ideas" >&2
+  fi
   
-  echo "[INFO] Having AI directly modify CSV with $count $idea_type ideas..."
-  
-  # Get AI to modify the CSV with fallbacks
-  local modified_csv
-  if ! modified_csv=$(call_ai_with_fallbacks "$csv_prompt" "$CURRENT_GENERATION" 2>&1); then
-    echo "[ERROR] All AI models failed to modify CSV" >&2
-    rm -f "$temp_csv"
+  # Return error if no valid ideas were generated
+  if [[ $ideas_added -eq 0 ]]; then
+    echo "[ERROR] Failed to generate any valid $idea_type ideas - AI may be returning system messages" >&2
     return 1
   fi
-  
-  # Extract CSV from AI output (in case there's extra text before it)
-  local csv_start_line
-  csv_start_line=$(echo "$modified_csv" | grep -n "id,basedOnId,description,performance,status" | head -1 | cut -d: -f1)
-  
-  if [[ -n "$csv_start_line" ]]; then
-    # Extract CSV starting from the header line
-    modified_csv=$(echo "$modified_csv" | tail -n +$csv_start_line)
-  elif ! echo "$modified_csv" | head -1 | grep -q "id,basedOnId,description,performance,status"; then
-    echo "[WARN] AI output doesn't look like a CSV header. First 200 chars:" >&2
-    echo "$modified_csv" | head -c 200 >&2
-    echo "" >&2
-    rm -f "$temp_csv"
-    return 1
-  fi
-  
-  # Write the modified CSV to temp file
-  echo "$modified_csv" > "$temp_csv"
-  
-  # Debug: Show the AI's CSV modification attempt
-  echo "[DEBUG] AI response length: ${#modified_csv} characters" >&2
-  echo "[DEBUG] First 300 chars of AI response:" >&2
-  echo "$modified_csv" | head -c 300 >&2
-  echo "" >&2
-  echo "[DEBUG] Last 300 chars of AI response:" >&2
-  echo "$modified_csv" | tail -c 300 >&2
-  echo "" >&2
-  
-  # Validate the modified CSV has more entries than original
-  local original_count
-  original_count=$(wc -l < "$FULL_CSV_PATH")
-  local new_count
-  new_count=$(wc -l < "$temp_csv")
-  
-  echo "[DEBUG] Original CSV line count: $original_count" >&2
-  echo "[DEBUG] Modified CSV line count: $new_count" >&2
-  echo "[DEBUG] Expected to add: $count ideas" >&2
-  
-  if [[ $new_count -le $original_count ]]; then
-    echo "[ERROR] Modified CSV doesn't have more entries ($new_count <= $original_count)" >&2
-    echo "[DEBUG] Temp CSV contents:" >&2
-    cat "$temp_csv" | head -10 >&2
-    echo "[DEBUG] Original CSV contents:" >&2
-    cat "$FULL_CSV_PATH" | head -10 >&2
-    rm -f "$temp_csv"
-    return 1
-  fi
-  
-  local added_count=$((new_count - original_count))
-  if [[ $added_count -ne $count ]]; then
-    echo "[WARN] Expected to add $count ideas but added $added_count" >&2
-  fi
-  
-  # Replace original CSV with modified version
-  mv "$temp_csv" "$FULL_CSV_PATH"
-  
-  echo "[INFO] Successfully added $added_count $idea_type ideas to CSV"
   
   return 0
 }
@@ -632,8 +519,7 @@ ideate_ai_strategies() {
   if [[ -z $top_performers ]]; then
     echo "[INFO] No completed algorithms found, will use baseline algorithm for hill climbing"
     # For hill climbing and mutations, use the baseline algorithm
-    # Use a special ID that validation script will recognize
-    top_performers="000,Baseline Algorithm (algorithm.py),0.0"
+    top_performers="Baseline Algorithm (algorithm.py): The original algorithm provided"
   fi
 
   echo "[INFO] Generating $TOTAL_IDEAS ideas using multi-strategy approach:"
@@ -649,9 +535,27 @@ ideate_ai_strategies() {
   [[ $CROSSOVER_HYBRID -gt 0 ]] && generate_crossover_direct "$CROSSOVER_HYBRID" "$top_performers"
 }
 
-# Generate novel exploration ideas using direct CSV modification
+# Generate novel exploration ideas using structured output
 generate_novel_ideas_direct() {
   local count="$1"
+  
+  # Get next available ID for this generation
+  local next_id_num
+  next_id_num=$("$PYTHON_CMD" -c "
+import csv
+import re
+max_id = 0
+pattern = re.compile(r'^gen$CURRENT_GENERATION-(\d+)$')
+with open('$FULL_CSV_PATH', 'r') as f:
+    reader = csv.reader(f)
+    next(reader, None)  # Skip header
+    for row in reader:
+        if row and len(row) > 0:
+            match = pattern.match(row[0].strip())
+            if match:
+                max_id = max(max_id, int(match.group(1)))
+print(max_id + 1)
+")
   
   local prompt="Generate exactly $count novel algorithmic ideas for trading algorithm evolution.
 
@@ -663,15 +567,12 @@ Current evolution context:
 You MUST output EXACTLY $count lines, where each line is a single sentence describing a specific algorithmic change.
 NO PREAMBLE, NO EXPLANATION, NO NUMBERING - just $count lines of algorithm descriptions.
 
-CRITICAL: You MUST output EXACTLY $count idea lines. Not more, not less. If you output fewer than $count lines, the system will fail.
-
 Requirements:
 - Each line should be one clear sentence describing a novel algorithmic approach
 - Focus on creative, ambitious ideas that haven't been tried yet
 - Consider machine learning, new indicators, regime detection, risk management, etc.
-- DO NOT include any explanations, headers, or other text - ONLY the $count idea lines
 
-Example of CORRECT output (exactly 3 lines, no extra text):
+Example output format:
 Train LSTM network on 30-day OHLCV sequences to predict next-day direction probability
 Add cross-correlation filter that reduces positions when correlation with market breaks down
 Implement intraday momentum using 30-minute data to adjust daily position sizes
@@ -680,290 +581,238 @@ Output exactly $count lines now:"
 
   echo "[INFO] Generating $count novel exploration ideas..."
   
-  # Get AI response with fallbacks
+  # Get AI response
   local ai_output
-  if ! ai_output=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>&1); then
-    echo "[ERROR] All AI models failed to generate novel ideas" >&2
+  local ai_error
+  if ! ai_output=$(call_ai_with_limit_check "$prompt" "$CURRENT_GENERATION" 2>&1); then
+    ai_error="$ai_output"
+    
+    # Check for specific error types
+    if echo "$ai_error" | grep -qi "rate.*limit\|too.*many.*requests"; then
+      echo "[ERROR] Hit API rate limit. Please wait a moment and try again." >&2
+    elif echo "$ai_error" | grep -qi "unauthorized\|api.*key\|authentication"; then
+      # Try to identify which provider failed
+      if echo "$ai_error" | grep -qi "codex\|o3"; then
+        echo "[ERROR] Codex/O3 authentication issue. Please check your Codex API key." >&2
+      elif echo "$ai_error" | grep -qi "gemini"; then
+        echo "[ERROR] Gemini authentication issue. Please check your Gemini API key." >&2
+      elif echo "$ai_error" | grep -qi "claude\|anthropic"; then
+        echo "[ERROR] Claude authentication issue. Please check your Anthropic API key." >&2
+      else
+        echo "[ERROR] API authentication issue. Please check your API key configuration." >&2
+        echo "[ERROR] Last attempted model was from generation $CURRENT_GENERATION strategy" >&2
+      fi
+    elif echo "$ai_error" | grep -qi "timeout\|timed.*out"; then
+      echo "[ERROR] Request timed out. The prompt may be too complex." >&2
+    else
+      echo "[ERROR] AI request failed: $ai_error" >&2
+    fi
     return 1
   fi
   
-  # Check if AI output looks suspicious
-  if [[ ${#ai_output} -lt 50 ]]; then
-    echo "[WARN] AI output is suspiciously short: $ai_output" >&2
-    return 1
-  fi
+  # Process the output using helper function
+  process_ai_ideas "$ai_output" "$count" "novel"
   
-  # Count lines to validate we got the right number
-  local line_count
-  line_count=$(echo "$ai_output" | wc -l | tr -d '[:space:]')
-  
-  echo "[DEBUG] Processing $line_count lines from AI output for novel ideas" >&2
-  echo "[DEBUG] AI output for novel ideas:" >&2
-  echo "$ai_output" | head -10 | while IFS= read -r line; do echo "[DEBUG] > $line"; done >&2
-  echo "[DEBUG] AI output length: ${#ai_output} characters" >&2
-  
-  if [[ $line_count -lt $count ]]; then
-    echo "[ERROR] AI only provided $line_count ideas instead of $count" >&2
-    return 1
-  fi
-  
-  # Use direct CSV modification approach
-  process_ai_ideas_direct "$count" "novel" "" "$ai_output"
-  
-  if [[ $? -eq 0 ]]; then
-    echo "[INFO] Novel exploration ideas generated successfully"
-    return 0
-  else
-    echo "[ERROR] Failed to process novel ideas" >&2
-    return 1
-  fi
+  echo "[INFO] Novel exploration ideas generated successfully"
 }
 
-# Generate hill climbing ideas using direct CSV modification
+# Generate hill climbing ideas by getting descriptions from AI
 generate_hill_climbing_direct() {
   local count="$1"
   local top_performers="$2"
   
-  # Extract just the IDs from top performers for clarity
-  local valid_parent_ids
-  valid_parent_ids=$(echo "$top_performers" | cut -d',' -f1 | paste -sd ',' -)
+  # Get next available ID for this generation
+  local next_id_num
+  next_id_num=$("$PYTHON_CMD" -c "
+import csv
+import re
+max_id = 0
+pattern = re.compile(r'^gen$CURRENT_GENERATION-(\d+)$')
+with open('$FULL_CSV_PATH', 'r') as f:
+    reader = csv.reader(f)
+    next(reader, None)  # Skip header
+    for row in reader:
+        if row and len(row) > 0:
+            match = pattern.match(row[0].strip())
+            if match:
+                max_id = max(max_id, int(match.group(1)))
+print(max_id + 1)
+")
   
   local prompt="Generate exactly $count parameter tuning ideas for successful trading algorithms.
 
-IMPORTANT: You MUST use one of these exact parent IDs: $valid_parent_ids
-
-Successful algorithms to tune:
+Successful algorithms to tune (pick one as parent):
 $top_performers
-
-CRITICAL INSTRUCTION: Before generating parameter tuning ideas, you MUST read the source code of the parent algorithms.
-Algorithm source files are located at: $FULL_OUTPUT_DIR/evolution_<PARENT_ID>.py
-For example: $FULL_OUTPUT_DIR/evolution_gen01-251.py
-
-ONLY suggest parameter changes for parameters that actually exist in the parent algorithm's source code.
-DO NOT invent or hallucinate parameter names.
 
 You MUST output EXACTLY $count lines, where each line describes a parameter tuning idea.
 NO PREAMBLE, NO EXPLANATION, NO NUMBERING - just $count lines of parameter tuning descriptions.
 
-CRITICAL: You MUST output EXACTLY $count idea lines. Not more, not less. If you output fewer than $count lines, the system will fail.
+Each line should:
+- Be one clear sentence about adjusting specific parameters
+- Reference the parent algorithm ID at the beginning like \"From gen02-003:\"
+- Focus on hyperparameters, thresholds, periods, weights, etc.
 
-Each line MUST:
-- Be one clear sentence about adjusting specific parameters that exist in the source code
-- Start with \"From <PARENT_ID>:\" using ONLY one of these exact IDs: $valid_parent_ids
-- Focus on actual hyperparameters, thresholds, periods, weights found in the code
-- Include current and new parameter values (e.g., \"from 0.15 to 0.12\")
-
-Example output format (using actual parent IDs and real parameters from the source):
-From gen01-251: Lower rsi_entry from 21 to 18 in bullish above_ema configuration
-From gen01-242: Increase ema_length from 7 to 10 for smoother trend detection
-From gen01-253: Raise allocation from 25 to 30 for ma_x_trend strategy
+Example output format:
+From gen02-003: Lower IBS_BUY_THRESHOLD from 0.15 to 0.12 to enter deeper oversold conditions
+From gen02-003: Increase TRS_RSI_PERIOD from 2 to 3 for smoother RSI signals
+From gen02-003: Raise WEIGHT_TDD from 0.38 to 0.42 to emphasize best performing strategy
 
 Output exactly $count lines now:"
 
   echo "[INFO] Generating $count hill climbing ideas..."
   
-  # Get AI response with fallbacks
+  # Get AI response
   local ai_output
-  if ! ai_output=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>&1); then
-    echo "[ERROR] All AI models failed to generate hill climbing ideas" >&2
+  local ai_error
+  if ! ai_output=$(call_ai_with_limit_check "$prompt" "$CURRENT_GENERATION" 2>&1); then
+    ai_error="$ai_output"
+    
+    # Check for specific error types
+    if echo "$ai_error" | grep -qi "rate.*limit\|too.*many.*requests"; then
+      echo "[ERROR] Hit API rate limit. Please wait a moment and try again." >&2
+    elif echo "$ai_error" | grep -qi "unauthorized\|api.*key\|authentication"; then
+      echo "[ERROR] API authentication issue. Please check your API key." >&2
+    elif echo "$ai_error" | grep -qi "timeout\|timed.*out"; then
+      echo "[ERROR] Request timed out. The prompt may be too complex." >&2
+    elif echo "$ai_error" | grep -qi "token.*limit\|too.*long\|maximum.*length"; then
+      echo "[ERROR] Prompt exceeded token limit. Try reducing the number of top performers." >&2
+    else
+      echo "[ERROR] AI request failed: $ai_error" >&2
+    fi
+    
+    echo "[INFO] Hill climbing can work with ANY completed algorithm - even baseline" >&2
+    echo "[INFO] Each algorithm has parameters that can be tuned for improvement" >&2
     return 1
   fi
   
-  # Check if AI output looks suspicious
-  if [[ ${#ai_output} -lt 50 ]]; then
-    echo "[WARN] AI output is suspiciously short: $ai_output" >&2
-    return 1
-  fi
+  # Process the output using helper function
+  process_ai_ideas "$ai_output" "$count" "hill-climbing" "$top_performers"
   
-  # Count lines to validate we got the right number
-  local line_count
-  line_count=$(echo "$ai_output" | wc -l | tr -d '[:space:]')
-  
-  echo "[DEBUG] Processing $line_count lines from AI output for hill-climbing ideas" >&2
-  echo "[DEBUG] AI output for hill-climbing ideas:" >&2
-  echo "$ai_output" | head -10 | while IFS= read -r line; do echo "[DEBUG] > $line"; done >&2
-  echo "[DEBUG] AI output length: ${#ai_output} characters" >&2
-  
-  if [[ $line_count -lt $count ]]; then
-    echo "[ERROR] AI only provided $line_count ideas instead of $count" >&2
-    return 1
-  fi
-  
-  # Use direct CSV modification approach
-  process_ai_ideas_direct "$count" "hill-climbing" "$top_performers" "$ai_output"
-  
-  if [[ $? -eq 0 ]]; then
-    echo "[INFO] Hill climbing ideas generated successfully"
-    return 0
-  else
-    echo "[ERROR] Failed to process hill climbing ideas" >&2
-    return 1
-  fi
+  echo "[INFO] Hill climbing ideas generated successfully"
 }
 
-# Generate structural mutation ideas using direct CSV modification
+# Generate structural mutation ideas by getting descriptions from AI
 generate_structural_mutation_direct() {
   local count="$1"
   local top_performers="$2"
   
-  # Extract just the IDs from top performers for clarity
-  local valid_parent_ids
-  valid_parent_ids=$(echo "$top_performers" | cut -d',' -f1 | paste -sd ',' -)
-  
   local prompt="Generate exactly $count structural modification ideas for successful trading algorithms.
-
-IMPORTANT: You MUST use one of these exact parent IDs: $valid_parent_ids
 
 Successful algorithms to modify structurally:
 $top_performers
 
-CRITICAL INSTRUCTION: Before generating structural modification ideas, you MUST read the source code of the parent algorithms.
-Algorithm source files are located at: $FULL_OUTPUT_DIR/evolution_<PARENT_ID>.py
-For example: $FULL_OUTPUT_DIR/evolution_gen01-251.py
-
-Understand the current architecture, components, and logic before suggesting structural changes.
-Base your modifications on the actual code structure, not assumptions.
-
 You MUST output EXACTLY $count lines, where each line describes a structural modification idea.
 NO PREAMBLE, NO EXPLANATION, NO NUMBERING - just $count lines of structural change descriptions.
 
-CRITICAL: You MUST output EXACTLY $count idea lines. Not more, not less. If you output fewer than $count lines, the system will fail.
+Each line should:
+- Be one clear sentence about architectural/structural changes
+- Reference the parent algorithm ID at the beginning like \"From gen02-003:\"
+- Focus on replacing components, changing architecture, adding new systems
 
-Each line MUST:
-- Be one clear sentence about architectural/structural changes based on actual code
-- Start with \"From <PARENT_ID>:\" using ONLY one of these exact IDs: $valid_parent_ids
-- Focus on replacing existing components, changing architecture, adding new systems
-- Reference actual components/methods found in the source code
-
-Example output format (using actual parent IDs and real code components):
-From gen01-251: Replace RSI-based entry logic with machine learning momentum prediction
-From gen01-242: Add volatility regime detection to dynamically switch between sub-strategies
-From gen01-253: Implement ensemble voting system combining multiple technical indicators
+Example output format:
+From gen02-003: Replace 2-period RSI with LSTM-predicted momentum scores for TRS strategy
+From gen02-003: Add ensemble voting system where sub-strategies vote on market regime
+From gen02-003: Implement hierarchical risk budgeting with correlation-adjusted position sizing
 
 Output exactly $count lines now:"
 
   echo "[INFO] Generating $count structural mutation ideas..."
   
-  # Get AI response with fallbacks
+  # Get AI response
   local ai_output
-  if ! ai_output=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>&1); then
-    echo "[ERROR] All AI models failed to generate structural mutation ideas" >&2
+  local ai_error
+  if ! ai_output=$(call_ai_with_limit_check "$prompt" "$CURRENT_GENERATION" 2>&1); then
+    ai_error="$ai_output"
+    
+    # Check for specific error types
+    if echo "$ai_error" | grep -qi "rate.*limit\|too.*many.*requests"; then
+      echo "[ERROR] Hit API rate limit. Please wait a moment and try again." >&2
+    elif echo "$ai_error" | grep -qi "unauthorized\|api.*key\|authentication"; then
+      # Try to identify which provider failed
+      if echo "$ai_error" | grep -qi "codex\|o3"; then
+        echo "[ERROR] Codex/O3 authentication issue. Please check your Codex API key." >&2
+      elif echo "$ai_error" | grep -qi "gemini"; then
+        echo "[ERROR] Gemini authentication issue. Please check your Gemini API key." >&2
+      elif echo "$ai_error" | grep -qi "claude\|anthropic"; then
+        echo "[ERROR] Claude authentication issue. Please check your Anthropic API key." >&2
+      else
+        echo "[ERROR] API authentication issue. Please check your API key configuration." >&2
+        echo "[ERROR] Last attempted model was from generation $CURRENT_GENERATION strategy" >&2
+      fi
+    elif echo "$ai_error" | grep -qi "timeout\|timed.*out"; then
+      echo "[ERROR] Request timed out. The prompt may be too complex." >&2
+    else
+      echo "[ERROR] AI request failed: $ai_error" >&2
+    fi
     return 1
   fi
   
-  # Check if AI output looks suspicious
-  if [[ ${#ai_output} -lt 50 ]]; then
-    echo "[WARN] AI output is suspiciously short: $ai_output" >&2
-    return 1
-  fi
+  # Process the output using helper function
+  process_ai_ideas "$ai_output" "$count" "structural" "$top_performers"
   
-  # Count lines to validate we got the right number
-  local line_count
-  line_count=$(echo "$ai_output" | wc -l | tr -d '[:space:]')
-  
-  echo "[DEBUG] Processing $line_count lines from AI output for structural mutation ideas" >&2
-  echo "[DEBUG] AI output for structural mutation ideas:" >&2
-  echo "$ai_output" | head -10 | while IFS= read -r line; do echo "[DEBUG] > $line"; done >&2
-  echo "[DEBUG] AI output length: ${#ai_output} characters" >&2
-  
-  if [[ $line_count -lt $count ]]; then
-    echo "[ERROR] AI only provided $line_count ideas instead of $count" >&2
-    return 1
-  fi
-  
-  # Use direct CSV modification approach
-  process_ai_ideas_direct "$count" "structural" "$top_performers" "$ai_output"
-  
-  if [[ $? -eq 0 ]]; then
-    echo "[INFO] Structural mutation ideas generated successfully"
-    return 0
-  else
-    echo "[ERROR] Failed to process structural mutation ideas" >&2
-    return 1
-  fi
+  echo "[INFO] Structural mutation ideas generated successfully"
 }
 
-# Generate crossover hybrid ideas using direct CSV modification
+# Generate crossover hybrid ideas by getting descriptions from AI
 generate_crossover_direct() {
   local count="$1"
   local top_performers="$2"
   
-  # Extract just the IDs from top performers for clarity
-  local valid_parent_ids
-  valid_parent_ids=$(echo "$top_performers" | cut -d',' -f1 | paste -sd ',' -)
-  
   local prompt="Generate exactly $count hybrid combination ideas from successful trading algorithms.
-
-IMPORTANT: You MUST use ONLY these exact parent IDs: $valid_parent_ids
 
 Top performers to combine (reference at least 2 in each idea):
 $top_performers
 
-CRITICAL INSTRUCTION: Before generating hybrid combination ideas, you MUST read the source code of the parent algorithms.
-Algorithm source files are located at: $FULL_OUTPUT_DIR/evolution_<PARENT_ID>.py
-For example: $FULL_OUTPUT_DIR/evolution_gen01-251.py
-
-Understand what each algorithm actually does by reading their source code.
-Only combine elements that actually exist in the algorithms.
-Base your combinations on real components, methods, and logic found in the code.
-
 You MUST output EXACTLY $count lines, where each line describes a hybrid combination idea.
 NO PREAMBLE, NO EXPLANATION, NO NUMBERING - just $count lines of hybrid combination descriptions.
 
-CRITICAL: You MUST output EXACTLY $count idea lines. Not more, not less. If you output fewer than $count lines, the system will fail.
+Each line should:
+- Be one clear sentence combining elements from 2+ successful algorithms
+- Reference the base parent algorithm ID at the beginning like \"From gen02-003:\"
+- Explicitly mention which elements to combine from which algorithms
 
-Each line MUST:
-- Be one clear sentence combining actual elements from 2+ algorithms based on their source code
-- Start with \"From <PARENT_ID>:\" using ONLY one of these exact IDs: $valid_parent_ids
-- Reference ONLY the IDs listed above when mentioning algorithms to combine
-- Specify real components/features found in the actual source code
-
-Example output format (using actual parent IDs and real code elements):
-From gen01-251: Combine TRS 2025 parameters from gen01-251 with Profile 3 allocations from gen01-253
-From gen01-242: Merge Laguerre RSI logic from gen01-242 with momentum detection from gen01-243
-From gen01-253: Integrate MATS 2025 Profile 3 from gen01-253 with risk management from gen01-252
+Example output format:
+From gen02-003: Combine VIX regime filter from gen02-003 with LSTM predictions from gen01-005
+From gen02-003: Merge volatility regime detection from gen02-003 with ML momentum from gen01-007
+From gen02-003: Integrate multi-timeframe signals from gen02-003 with correlation sizing from gen01-009
 
 Output exactly $count lines now:"
 
   echo "[INFO] Generating $count crossover hybrid ideas..."
   
-  # Get AI response with fallbacks
+  # Get AI response
   local ai_output
-  if ! ai_output=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>&1); then
-    echo "[ERROR] All AI models failed to generate crossover hybrid ideas" >&2
+  local ai_error
+  if ! ai_output=$(call_ai_with_limit_check "$prompt" "$CURRENT_GENERATION" 2>&1); then
+    ai_error="$ai_output"
+    
+    # Check for specific error types
+    if echo "$ai_error" | grep -qi "rate.*limit\|too.*many.*requests"; then
+      echo "[ERROR] Hit API rate limit. Please wait a moment and try again." >&2
+    elif echo "$ai_error" | grep -qi "unauthorized\|api.*key\|authentication"; then
+      # Try to identify which provider failed
+      if echo "$ai_error" | grep -qi "codex\|o3"; then
+        echo "[ERROR] Codex/O3 authentication issue. Please check your Codex API key." >&2
+      elif echo "$ai_error" | grep -qi "gemini"; then
+        echo "[ERROR] Gemini authentication issue. Please check your Gemini API key." >&2
+      elif echo "$ai_error" | grep -qi "claude\|anthropic"; then
+        echo "[ERROR] Claude authentication issue. Please check your Anthropic API key." >&2
+      else
+        echo "[ERROR] API authentication issue. Please check your API key configuration." >&2
+        echo "[ERROR] Last attempted model was from generation $CURRENT_GENERATION strategy" >&2
+      fi
+    elif echo "$ai_error" | grep -qi "timeout\|timed.*out"; then
+      echo "[ERROR] Request timed out. The prompt may be too complex." >&2
+    else
+      echo "[ERROR] AI request failed: $ai_error" >&2
+    fi
     return 1
   fi
   
-  # Check if AI output looks suspicious
-  if [[ ${#ai_output} -lt 50 ]]; then
-    echo "[WARN] AI output is suspiciously short: $ai_output" >&2
-    return 1
-  fi
+  # Process the output using helper function
+  process_ai_ideas "$ai_output" "$count" "crossover" "$top_performers"
   
-  # Count lines to validate we got the right number
-  local line_count
-  line_count=$(echo "$ai_output" | wc -l | tr -d '[:space:]')
-  
-  echo "[DEBUG] Processing $line_count lines from AI output for crossover hybrid ideas" >&2
-  echo "[DEBUG] AI output for crossover hybrid ideas:" >&2
-  echo "$ai_output" | head -10 | while IFS= read -r line; do echo "[DEBUG] > $line"; done >&2
-  echo "[DEBUG] AI output length: ${#ai_output} characters" >&2
-  
-  if [[ $line_count -lt $count ]]; then
-    echo "[ERROR] AI only provided $line_count ideas instead of $count" >&2
-    return 1
-  fi
-  
-  # Use direct CSV modification approach
-  process_ai_ideas_direct "$count" "crossover" "$top_performers" "$ai_output"
-  
-  if [[ $? -eq 0 ]]; then
-    echo "[INFO] Crossover hybrid ideas generated successfully"
-    return 0
-  else
-    echo "[ERROR] Failed to process crossover hybrid ideas" >&2
-    return 1
-  fi
+  echo "[INFO] Crossover hybrid ideas generated successfully"
 }
 
 # Legacy AI generation mode (for backward compatibility)
@@ -1028,29 +877,18 @@ Output exactly $TOTAL_IDEAS lines now:"
 
   echo "[INFO] Generating $TOTAL_IDEAS ideas (legacy mode)..."
   
-  # Get AI response with fallbacks
+  # Get AI response
   local ai_output
-  if ! ai_output=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>&1); then
-    echo "[WARN] All AI models failed to generate ideas" >&2
+  if ! ai_output=$(call_ai_with_limit_check "$prompt" "$CURRENT_GENERATION" 2>&1); then
+    echo "[WARN] AI failed to generate ideas" >&2
     return 1
   fi
   
-  # Check if AI output looks suspicious
-  if [[ ${#ai_output} -lt 50 ]]; then
-    echo "[WARN] AI output is suspiciously short: $ai_output" >&2
-    return 1
-  fi
+  # Process the output using helper function
+  # For legacy mode, we treat all as "novel" since we're not specifying a strategy
+  process_ai_ideas "$ai_output" "$TOTAL_IDEAS" "novel"
   
-  # Use direct CSV modification approach for legacy mode too
-  process_ai_ideas_direct "$TOTAL_IDEAS" "novel" "" "$ai_output"
-  
-  if [[ $? -eq 0 ]]; then
-    echo "[INFO] Legacy ideas generated"
-    return 0
-  else
-    echo "[ERROR] Failed to process legacy ideas" >&2
-    return 1
-  fi
+  echo "[INFO] Legacy ideas generated"
 }
 
 # Determine generation number for this ideation run

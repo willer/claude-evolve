@@ -6,19 +6,61 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 source "$SCRIPT_DIR/../lib/config.sh"
 source "$SCRIPT_DIR/../lib/csv-lock.sh"
 
-# Load config using the same logic as dispatcher
-if [[ -n ${CLAUDE_EVOLVE_CONFIG:-} ]]; then
-  load_config "$CLAUDE_EVOLVE_CONFIG"
-else
-  load_config
-fi
+# Track current candidate for cleanup
+CURRENT_CANDIDATE_ID=""
+TERMINATION_SIGNAL=""
 
-# Parse arguments
+# Cleanup function to handle termination
+cleanup_on_exit() {
+  if [[ -n "$CURRENT_CANDIDATE_ID" ]]; then
+    # Only mark as failed if it was a timeout (SIGTERM from timeout command)
+    # For user interruption (Ctrl-C) or kill, leave it for retry
+    if [[ "$TERMINATION_SIGNAL" == "TERM" ]]; then
+      echo "[WORKER-$$] Timeout detected, marking $CURRENT_CANDIDATE_ID as failed" >&2
+      "$PYTHON_CMD" -c "
+import sys
+sys.path.insert(0, '$SCRIPT_DIR/..')
+from lib.evolution_csv import EvolutionCSV
+try:
+    with EvolutionCSV('$FULL_CSV_PATH') as csv:
+        csv.update_candidate_status('$CURRENT_CANDIDATE_ID', 'failed')
+except:
+    pass  # Best effort cleanup
+" 2>/dev/null || true
+    else
+      echo "[WORKER-$$] Interrupted, leaving $CURRENT_CANDIDATE_ID for retry" >&2
+      # Optionally reset to pending instead of leaving as running
+      "$PYTHON_CMD" -c "
+import sys
+sys.path.insert(0, '$SCRIPT_DIR/..')
+from lib.evolution_csv import EvolutionCSV
+try:
+    with EvolutionCSV('$FULL_CSV_PATH') as csv:
+        csv.update_candidate_status('$CURRENT_CANDIDATE_ID', 'pending')
+except:
+    pass  # Best effort cleanup
+" 2>/dev/null || true
+    fi
+  fi
+}
+
+# Set up signal handlers
+trap 'TERMINATION_SIGNAL="TERM"; cleanup_on_exit' TERM
+trap 'TERMINATION_SIGNAL="INT"; cleanup_on_exit' INT
+trap 'TERMINATION_SIGNAL="HUP"; cleanup_on_exit' HUP
+trap 'cleanup_on_exit' EXIT
+
+# Parse arguments first to get config path
 timeout_seconds=""
+config_path=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --timeout)
       timeout_seconds="$2"
+      shift 2
+      ;;
+    --config)
+      config_path="$2"
       shift 2
       ;;
     *)
@@ -27,6 +69,15 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# Load config using the provided path, environment variable, or default
+if [[ -n $config_path ]]; then
+  load_config "$config_path"
+elif [[ -n ${CLAUDE_EVOLVE_CONFIG:-} ]]; then
+  load_config "$CLAUDE_EVOLVE_CONFIG"
+else
+  load_config
+fi
 
 # Validate paths
 if [[ ! -f "$FULL_CSV_PATH" ]]; then
@@ -58,11 +109,21 @@ process_candidate() {
     fi
   fi
   
-  # Target file for evolution
+  # Check if this is a baseline candidate (no parent and specific ID pattern)
+  local is_baseline=false
+  if [[ -z "$parent_id" ]] && [[ "$candidate_id" =~ ^(baseline|baseline-000|000|0|gen00-000)$ ]]; then
+    is_baseline=true
+    echo "[WORKER-$$] Detected baseline candidate - will run algorithm.py directly"
+  fi
+  
+  # Target file for evolution (not used for baseline)
   local target_file="$FULL_OUTPUT_DIR/evolution_${candidate_id}.py"
   
   # Check if processing should be skipped
-  if [[ -f "$target_file" ]]; then
+  if [[ "$is_baseline" == "true" ]]; then
+    # For baseline, skip all file operations
+    echo "[WORKER-$$] Baseline candidate - skipping file operations"
+  elif [[ -f "$target_file" ]]; then
     echo "[WORKER-$$] �  Skipping copy - File already exists - skipping all processing"
     echo "[WORKER-$$] �  Skipping Claude processing - File already exists - skipping all processing"
     
@@ -100,28 +161,54 @@ The modification should be substantial and follow the description exactly. Make 
 
 Important: Make meaningful changes that match the description. Don't just add comments or make trivial adjustments."
     
-    if ! echo "$evolution_prompt" | claude --dangerously-skip-permissions -p 2>&1; then
-      echo "[WORKER-$$] ERROR: Claude evolution failed" >&2
-      rm -f "$target_file"  # Clean up on failure
-      return 1
+    if [[ "$is_baseline" != "true" ]]; then
+      local claude_output
+      claude_output=$(echo "$evolution_prompt" | claude --dangerously-skip-permissions -p 2>&1)
+      local claude_exit_code=$?
+      
+      # Check for usage limits
+      if echo "$claude_output" | grep -q "Claude AI usage limit reached"; then
+        echo "[WORKER-$$] ERROR: Claude AI usage limit reached!" >&2
+        echo "[WORKER-$$] ERROR: Cannot continue processing - API limits exceeded" >&2
+        rm -f "$target_file"  # Clean up on failure
+        # Exit with special code 3 to indicate API limit
+        exit 3
+      fi
+      
+      if [[ $claude_exit_code -ne 0 ]]; then
+        echo "[WORKER-$$] ERROR: Claude evolution failed with exit code $claude_exit_code" >&2
+        echo "[WORKER-$$] ERROR: Claude output: $claude_output" >&2
+        rm -f "$target_file"  # Clean up on failure
+        return 1
+      fi
+      
+      echo "[WORKER-$$] Evolution applied successfully"
     fi
-    
-    echo "[WORKER-$$] Evolution applied successfully"
   fi
   
   # Run evaluation
   echo "[WORKER-$$] Evaluating algorithm..."
-  local eval_output
+  local eval_output_file="/tmp/claude-evolve-eval-$$-$candidate_id.out"
   local eval_start=$(date +%s)
   
   # Prepare evaluation command
-  local eval_cmd=("$PYTHON_CMD" "$FULL_EVALUATOR_PATH" "$candidate_id")
+  # For baseline, pass "baseline" or empty string to evaluator to use algorithm.py
+  local eval_arg="$candidate_id"
+  if [[ "$is_baseline" == "true" ]]; then
+    # Evaluator should interpret this as "use algorithm.py directly"
+    eval_arg=""
+  fi
+  local eval_cmd=("$PYTHON_CMD" "$FULL_EVALUATOR_PATH" "$eval_arg")
   [[ -n "$timeout_seconds" ]] && eval_cmd=(timeout "$timeout_seconds" "${eval_cmd[@]}")
   
-  # Run evaluation and capture output
-  if eval_output=$("${eval_cmd[@]}" 2>&1); then
+  # Run evaluation with tee to both display and capture output
+  # Use stdbuf to disable buffering for real-time output
+  if stdbuf -o0 -e0 "${eval_cmd[@]}" 2>&1 | tee "$eval_output_file" >&2; then
     local eval_end=$(date +%s)
     local eval_duration=$((eval_end - eval_start))
+    
+    # Read captured output for parsing
+    eval_output=$(<"$eval_output_file")
     
     # Extract performance score - support multiple formats
     # Try to parse the output and extract score
@@ -224,10 +311,21 @@ with EvolutionCSV('$FULL_CSV_PATH') as csv:
     else
       echo "[WORKER-$$] ERROR: No score found in evaluation output" >&2
       echo "[WORKER-$$] Output: $eval_output" >&2
+      # rm -f "$eval_output_file"  # Keep for debugging
+      echo "[WORKER-$$] Evaluation output saved to: $eval_output_file" >&2
       return 1
     fi
+    
+    # Clean up temp file (comment out to keep for debugging)
+    # rm -f "$eval_output_file"
+    echo "[WORKER-$$] Evaluation output saved to: $eval_output_file" >&2
   else
     local exit_code=$?
+    # Read any output that was captured before failure
+    eval_output=$(<"$eval_output_file")
+    # rm -f "$eval_output_file"  # Keep for debugging
+    echo "[WORKER-$$] Evaluation output saved to: $eval_output_file" >&2
+    
     echo "[WORKER-$$] ERROR: Evaluation failed with exit code $exit_code" >&2
     echo "[WORKER-$$] Output: $eval_output" >&2
     
@@ -271,12 +369,26 @@ with EvolutionCSV('$FULL_CSV_PATH') as csv:
   # Parse candidate info
   IFS='|' read -r candidate_id parent_id description <<< "$candidate_info"
   
+  # Set current candidate for cleanup
+  CURRENT_CANDIDATE_ID="$candidate_id"
+  
   # Process the candidate
   if process_candidate "$candidate_id" "$parent_id" "$description"; then
     echo "[WORKER-$$] Successfully processed $candidate_id"
   else
     echo "[WORKER-$$] Failed to process $candidate_id"
+    # Ensure status is set to failed (might already be done in process_candidate)
+    "$PYTHON_CMD" -c "
+import sys
+sys.path.insert(0, '$SCRIPT_DIR/..')
+from lib.evolution_csv import EvolutionCSV
+with EvolutionCSV('$FULL_CSV_PATH') as csv:
+    csv.update_candidate_status('$candidate_id', 'failed')
+" 2>/dev/null || true
   fi
+  
+  # Clear current candidate
+  CURRENT_CANDIDATE_ID=""
 done
 
 echo "[WORKER-$$] No more pending candidates, worker exiting"

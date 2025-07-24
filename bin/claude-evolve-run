@@ -13,16 +13,23 @@ if [[ -n ${CLAUDE_EVOLVE_CONFIG:-} ]]; then
 else
   # Check if config.yaml exists in current directory
   if [[ -f "config.yaml" ]]; then
-    export CLAUDE_EVOLVE_CONFIG="$(pwd)/config.yaml"
-    load_config "$CLAUDE_EVOLVE_CONFIG"
+    # Don't export to avoid collision with parallel runs
+    CONFIG_FILE="$(pwd)/config.yaml"
+    load_config "$CONFIG_FILE"
   else
     load_config
   fi
 fi
 
-# Export the config path for workers if not already set
-if [[ -z ${CLAUDE_EVOLVE_CONFIG:-} ]] && [[ -f "config.yaml" ]]; then
-  export CLAUDE_EVOLVE_CONFIG="$(pwd)/config.yaml"
+# Store the config path for workers (don't export to avoid collision)
+if [[ -n ${CLAUDE_EVOLVE_CONFIG:-} ]]; then
+  WORKER_CONFIG_PATH="$CLAUDE_EVOLVE_CONFIG"
+elif [[ -n ${CONFIG_FILE:-} ]]; then
+  WORKER_CONFIG_PATH="$CONFIG_FILE"
+elif [[ -f "config.yaml" ]]; then
+  WORKER_CONFIG_PATH="$(pwd)/config.yaml"
+else
+  WORKER_CONFIG_PATH=""
 fi
 
 # Validate configuration
@@ -229,6 +236,7 @@ start_worker() {
   
   local worker_args=()
   [[ -n $timeout_seconds ]] && worker_args+=(--timeout "$timeout_seconds")
+  [[ -n $WORKER_CONFIG_PATH ]] && worker_args+=(--config "$WORKER_CONFIG_PATH")
   
   echo "[DISPATCHER] Starting worker..."
   "$worker_script" "${worker_args[@]}" &
@@ -252,6 +260,12 @@ cleanup_workers() {
         if [[ $exit_code -eq 2 ]]; then
           echo "[DISPATCHER] Worker $pid hit rate limit, will retry later"
           # Rate limits don't count as consecutive failures
+        elif [[ $exit_code -eq 3 ]]; then
+          echo "[DISPATCHER] Worker $pid hit API usage limit - stopping all processing" >&2
+          echo "[DISPATCHER] Cannot continue evolution run due to API limits" >&2
+          echo "[DISPATCHER] Please wait for limits to reset before restarting" >&2
+          # Set a flag to stop the main loop
+          api_limit_reached=true
         else
           echo "[DISPATCHER] Worker $pid failed with exit code $exit_code"
           # With retry mechanism, failures are normal - just keep processing
@@ -289,6 +303,16 @@ get_csv_stats() {
 
 echo "[DISPATCHER] Starting unified evolution engine"
 echo "[DISPATCHER] Configuration: max_workers=$MAX_WORKERS, timeout=${timeout_seconds:-none}"
+
+# Clean up any stuck 'running' statuses at startup
+if [[ -f "$FULL_CSV_PATH" ]]; then
+  echo "[DISPATCHER] Resetting any stuck 'running' candidates to 'pending'..."
+  if "$SCRIPT_DIR/claude-evolve-edit" running pending >/dev/null 2>&1; then
+    echo "[DISPATCHER] Successfully reset stuck candidates"
+  else
+    echo "[DISPATCHER] No stuck candidates found or edit command not available"
+  fi
+fi
 
 # Validate CSV and clean up stuck statuses and duplicates
 if [[ -f "$FULL_CSV_PATH" ]]; then
@@ -451,10 +475,19 @@ ensure_baseline_entry
 # With retry mechanism, we don't need consecutive failure tracking
 # Failures are handled gracefully through the retry system
 
+# Flag to track API limit status
+api_limit_reached=false
+
 # Main dispatch loop
 while true; do
   # Clean up finished workers
   cleanup_workers
+  
+  # Check if API limit was reached
+  if [[ "$api_limit_reached" == "true" ]]; then
+    echo "[DISPATCHER] Stopping evolution run due to API usage limits" >&2
+    break
+  fi
   
   # Get current status
   csv_stats=$(get_csv_stats "$FULL_CSV_PATH")
@@ -514,5 +547,14 @@ done
 
 # Clean shutdown
 shutdown_workers
-echo "[DISPATCHER] Evolution run complete"
-echo "[DISPATCHER] Exiting with code 0"
+
+# Final status message
+if [[ "$api_limit_reached" == "true" ]]; then
+  echo "[DISPATCHER] Evolution run stopped due to API usage limits"
+  echo "[DISPATCHER] Wait for limits to reset, then run 'claude-evolve run' again"
+  echo "[DISPATCHER] Exiting with code 1 (API limits reached)"
+  exit 1
+else
+  echo "[DISPATCHER] Evolution run complete"
+  echo "[DISPATCHER] Exiting with code 0"
+fi

@@ -121,8 +121,9 @@ class EvolutionCSV:
         # Check status field (5th column, index 4)
         status = row[4].strip().lower() if row[4] else ''
         
-        # Blank, missing, "pending", or "running" all mean pending
-        if not status or status in ['pending', 'running']:
+        # Only blank, missing, or "pending" mean pending
+        # "running" should NOT be considered pending to avoid duplicate processing
+        if not status or status == 'pending':
             return True
             
         # Check for retry statuses
@@ -320,6 +321,39 @@ class EvolutionCSV:
                 }
                 
         return None
+        
+    def delete_candidate(self, candidate_id: str) -> bool:
+        """Delete a candidate from the CSV file."""
+        rows = self._read_csv()
+        if not rows:
+            return False
+            
+        # Check if we have a header row
+        has_header = rows and rows[0] and rows[0][0].lower() == 'id'
+        
+        # Find and remove the candidate
+        deleted = False
+        new_rows = []
+        
+        # Keep header if it exists
+        if has_header:
+            new_rows.append(rows[0])
+            start_idx = 1
+        else:
+            start_idx = 0
+            
+        for i in range(start_idx, len(rows)):
+            row = rows[i]
+            if self.is_valid_candidate_row(row) and row[0].strip() == candidate_id:
+                deleted = True
+                # Skip this row (delete it)
+                continue
+            new_rows.append(row)
+                
+        if deleted:
+            self._write_csv(new_rows)
+            
+        return deleted
         
     def has_pending_work(self) -> bool:
         """Check if there are any pending candidates. Used by dispatcher."""

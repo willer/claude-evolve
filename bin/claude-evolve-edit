@@ -33,11 +33,12 @@ SELECTORS:
 ACTIONS:
   failed           Mark candidates as failed (keeps scores)
   complete         Mark candidates as complete (keeps scores)  
-  pending          Mark candidates as pending (keeps scores)
+  pending          Mark candidates as pending (clears all data)
   failed-retry1    Mark candidates for retry attempt 1 (bug fixing)
   failed-retry2    Mark candidates for retry attempt 2 (bug fixing)
   failed-retry3    Mark candidates for retry attempt 3 (bug fixing)
   reboot           Reset completely (delete .py files, clear scores, set pending)
+  delete           Delete candidates from CSV and remove .py files (asks confirmation)
 
 EXAMPLES:
   claude-evolve edit gen03 failed        # Mark all gen03 as failed
@@ -46,6 +47,7 @@ EXAMPLES:
   claude-evolve edit complete failed     # Mark all complete as failed for re-run
   claude-evolve edit all pending         # Mark everything as pending for re-run
   claude-evolve edit gen02 reboot        # Full reset of gen02 (delete files + clear data)
+  claude-evolve edit gen02 delete        # Delete gen02 from CSV and remove .py files
 
 DESCRIPTION:
   This command helps manage evolution runs when you need to re-evaluate candidates.
@@ -77,9 +79,9 @@ fi
 
 # Validate action
 case "$ACTION" in
-  failed|complete|pending|failed-retry1|failed-retry2|failed-retry3|reboot) ;;
+  failed|complete|pending|failed-retry1|failed-retry2|failed-retry3|reboot|delete) ;;
   *)
-    echo "[ERROR] Action must be one of: failed, complete, pending, failed-retry1, failed-retry2, failed-retry3, reboot" >&2
+    echo "[ERROR] Action must be one of: failed, complete, pending, failed-retry1, failed-retry2, failed-retry3, reboot, delete" >&2
     exit 1
     ;;
 esac
@@ -152,9 +154,10 @@ try:
         
         if matches:
             if clear_scores:
-                # Reboot: clear everything after description (keep id, basedOnId, description)
+                # Clear everything after description (keep id, basedOnId, description)
                 if len(row) >= 3:
-                    rows[i] = [row[0], row[1], row[2], '', '']  # id, basedOnId, description, empty performance, empty status
+                    # Keep first 3 columns, then add empty performance and the new status
+                    rows[i] = [row[0], row[1], row[2], '', new_status]
                     updated_count += 1
             else:
                 # Just update status (preserve other fields)
@@ -277,6 +280,66 @@ except Exception as e:
   echo "[INFO] Deleted $deleted_count evolution files"
 }
 
+# Function to delete candidates from CSV
+delete_candidates_from_csv() {
+  local selector="$1"
+  
+  echo "[INFO] Deleting candidates matching '$selector' from CSV..."
+  
+  "$PYTHON_CMD" -c "
+import sys
+sys.path.insert(0, '$SCRIPT_DIR/..')
+from lib.evolution_csv import EvolutionCSV
+import re
+
+selector = '$selector'
+deleted_count = 0
+
+with EvolutionCSV('$FULL_CSV_PATH') as csv:
+    # Read CSV directly to get all candidates
+    import csv as csv_module
+    candidates_to_delete = []
+    
+    with open('$FULL_CSV_PATH', 'r') as f:
+        reader = csv_module.reader(f)
+        rows = list(reader)
+        has_header = rows and rows[0] and rows[0][0].lower() == 'id'
+        start_idx = 1 if has_header else 0
+        
+        for row in rows[start_idx:]:
+            if not row or not row[0].strip():
+                continue
+                
+            candidate_id = row[0].strip()
+            current_status = row[4].strip() if len(row) > 4 else ''
+            
+            matches = False
+            if selector == 'all':
+                matches = True
+            elif selector.startswith('gen') and re.match(r'^gen\\d+$', selector):
+                # Generation selector (e.g., gen01, gen02)
+                gen_pattern = f'^{selector}-'
+                matches = re.match(gen_pattern, candidate_id) is not None
+            elif selector == 'pending':
+                matches = current_status == '' or current_status == 'pending'
+            elif selector == 'failed':
+                matches = current_status.startswith('failed')
+            else:
+                matches = current_status == selector
+            
+            if matches:
+                candidates_to_delete.append(candidate_id)
+    
+    # Delete candidates
+    for candidate_id in candidates_to_delete:
+        csv.delete_candidate(candidate_id)
+        deleted_count += 1
+        print(f'[INFO] Deleted from CSV: {candidate_id}')
+    
+    print(f'[INFO] Deleted {deleted_count} candidates from CSV')
+"
+}
+
 # Main execution
 echo "[INFO] Processing '$SELECTOR' with action: $ACTION"
 
@@ -288,7 +351,7 @@ case "$ACTION" in
     update_candidates_status "$SELECTOR" "complete" "false"
     ;;
   pending)
-    update_candidates_status "$SELECTOR" "" "false"  # Empty status means pending
+    update_candidates_status "$SELECTOR" "pending" "true"  # Clear all data and set to pending
     ;;
   failed-retry1)
     update_candidates_status "$SELECTOR" "failed-retry1" "false"
@@ -304,6 +367,19 @@ case "$ACTION" in
     delete_evolution_files "$SELECTOR"
     update_candidates_status "$SELECTOR" "" "true"  # Clear scores and set pending
     echo "[INFO] Reboot complete: files deleted, scores cleared, status set to pending"
+    ;;
+  delete)
+    # Ask for confirmation
+    read -p "[WARNING] This will permanently delete candidates matching '$SELECTOR' from CSV and remove their .py files. Are you sure? (yes/no): " confirmation
+    if [[ "$confirmation" != "yes" ]]; then
+      echo "[INFO] Delete operation cancelled"
+      exit 0
+    fi
+    
+    echo "[INFO] Performing delete of '$SELECTOR'..."
+    delete_evolution_files "$SELECTOR"
+    delete_candidates_from_csv "$SELECTOR"
+    echo "[INFO] Delete complete: candidates removed from CSV and files deleted"
     ;;
 esac
 

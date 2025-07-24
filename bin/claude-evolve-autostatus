@@ -1,0 +1,347 @@
+#!/bin/bash
+set -e
+
+# Source configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
+source "$SCRIPT_DIR/../lib/config.sh"
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --working-dir)
+      if [[ -n ${2:-} ]]; then
+        export CLAUDE_EVOLVE_CONFIG="$2/config.yaml"
+        shift 2
+      else
+        echo "[ERROR] --working-dir requires a directory path" >&2
+        exit 1
+      fi
+      ;;
+    -h|--help)
+      echo "Usage: claude-evolve-autostatus [--working-dir DIR]"
+      echo ""
+      echo "Auto-updating status display that fits to terminal size."
+      echo "Press 'q' to quit while running."
+      exit 0
+      ;;
+    *)
+      echo "[ERROR] Unknown argument: $1" >&2
+      exit 1
+      ;;
+  esac
+done
+
+# Load config using the same logic as other commands
+if [[ -n ${CLAUDE_EVOLVE_CONFIG:-} ]]; then
+  load_config "$CLAUDE_EVOLVE_CONFIG"
+else
+  load_config
+fi
+
+# Run the Python autostatus script
+exec "$PYTHON_CMD" -c '
+import os
+import sys
+import time
+import termios
+import tty
+import select
+import signal
+import csv
+from datetime import datetime
+
+class TerminalDisplay:
+    """Handles terminal display with ANSI escape sequences for flicker-free updates."""
+    
+    def __init__(self):
+        self.rows, self.cols = self.get_terminal_size()
+        signal.signal(signal.SIGWINCH, self.handle_resize)
+        
+    def get_terminal_size(self):
+        """Get current terminal size."""
+        try:
+            rows, cols = os.popen("stty size", "r").read().split()
+            return int(rows), int(cols)
+        except:
+            return 24, 80  # Default fallback
+    
+    def handle_resize(self, signum, frame):
+        """Handle terminal resize signal."""
+        self.rows, self.cols = self.get_terminal_size()
+    
+    def clear_screen(self):
+        """Clear the entire screen."""
+        print("\033[2J\033[H", end="")
+    
+    def move_cursor(self, row, col):
+        """Move cursor to specific position."""
+        print(f"\033[{row};{col}H", end="")
+    
+    def clear_line(self):
+        """Clear current line."""
+        print("\033[2K", end="")
+    
+    def hide_cursor(self):
+        """Hide the cursor."""
+        print("\033[?25l", end="")
+    
+    def show_cursor(self):
+        """Show the cursor."""
+        print("\033[?25h", end="")
+    
+    def reset(self):
+        """Reset terminal to normal state."""
+        self.show_cursor()
+        print("\033[0m", end="")  # Reset colors
+
+
+class AutoStatus:
+    """Auto-updating status display."""
+    
+    def __init__(self, csv_path):
+        self.csv_path = csv_path
+        self.display = TerminalDisplay()
+        self.running = True
+        
+    def get_status_data(self):
+        """Get current status data from CSV."""
+        # Read CSV data directly - using list reader to handle position-based access
+        with open(self.csv_path, "r") as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+        
+        if len(rows) <= 1:
+            return {
+                "leader": None,
+                "generations": {},
+                "csv_path": self.csv_path,
+                "working_dir": os.path.dirname(self.csv_path)
+            }
+        
+        # Process candidates by generation
+        all_candidates = []
+        stats_by_gen = {}
+        
+        for row in rows[1:]:  # Skip header
+            if len(row) >= 1 and row[0]:  # Must have an ID
+                candidate_id = row[0]
+                
+                # Extract generation (e.g., "gen03" from "gen03-001")
+                if "-" in candidate_id:
+                    gen = candidate_id.split("-")[0]
+                    
+                    # Get status and performance
+                    status = row[4] if len(row) > 4 and row[4] else "pending"
+                    performance = row[3] if len(row) > 3 and row[3] else ""
+                    
+                    # Normalize failed-retry* to failed
+                    if status.startswith("failed"):
+                        status = "failed"
+                    
+                    # Track by generation
+                    if gen not in stats_by_gen:
+                        stats_by_gen[gen] = {
+                            "pending": 0, "complete": 0, "failed": 0, "running": 0,
+                            "candidates": []
+                        }
+                    
+                    if status in stats_by_gen[gen]:
+                        stats_by_gen[gen][status] += 1
+                    else:
+                        stats_by_gen[gen]["pending"] += 1
+                    
+                    # Collect candidate info
+                    if status == "complete" and performance:
+                        try:
+                            score = float(performance)
+                            description = row[2] if len(row) > 2 else "No description"
+                            candidate_info = (candidate_id, description, score)
+                            stats_by_gen[gen]["candidates"].append(candidate_info)
+                            all_candidates.append(candidate_info)
+                        except ValueError:
+                            pass
+        
+        # Find the overall leader
+        leader = None
+        if all_candidates:
+            leader = max(all_candidates, key=lambda x: x[2])
+        
+        # Find best performer in each generation
+        for gen in stats_by_gen:
+            if stats_by_gen[gen]["candidates"]:
+                stats_by_gen[gen]["best"] = max(stats_by_gen[gen]["candidates"], key=lambda x: x[2])
+            else:
+                stats_by_gen[gen]["best"] = None
+        
+        return {
+            "leader": leader,
+            "generations": stats_by_gen,
+            "csv_path": self.csv_path,
+            "working_dir": os.path.dirname(self.csv_path)
+        }
+    
+    def format_duration(self, seconds):
+        """Format duration in human-readable form."""
+        if seconds < 60:
+            return f"{seconds}s"
+        elif seconds < 3600:
+            return f"{seconds//60}m {seconds%60}s"
+        else:
+            hours = seconds // 3600
+            mins = (seconds % 3600) // 60
+            return f"{hours}h {mins}m"
+    
+    def render(self):
+        """Render the current status to the terminal."""
+        try:
+            data = self.get_status_data()
+        except Exception as e:
+            self.display.clear_screen()
+            self.display.move_cursor(1, 1)
+            print(f"Error reading status: {e}")
+            return
+        
+        # Clear screen and start rendering
+        self.display.clear_screen()
+        row = 1
+        
+        # Header
+        self.display.move_cursor(row, 1)
+        header = "Claude Evolution Auto-Status"
+        print(f"\033[1;36m{header.center(self.display.cols)}\033[0m")
+        row += 1
+        
+        # Timestamp and working dir
+        self.display.move_cursor(row, 1)
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        working_dir = os.path.basename(data["working_dir"])
+        print(f"Last updated: {timestamp} | Working dir: {working_dir} | Press '\''q'\'' to quit")
+        row += 2
+        
+        # Leader
+        self.display.move_cursor(row, 1)
+        if data["leader"]:
+            leader_id, leader_desc, leader_score = data["leader"]
+            # Truncate description for leader
+            max_desc_len = self.display.cols - 30
+            if len(leader_desc) > max_desc_len:
+                leader_desc = leader_desc[:max_desc_len-3] + "..."
+            print(f"\033[1;32mLeader:\033[0m {leader_id} | {leader_score:.4f} | {leader_desc}")
+        else:
+            print("\033[1;32mLeader:\033[0m None (no completed candidates)")
+        row += 2
+        
+        # Generation table
+        generations = data["generations"]
+        if generations:
+            # Table header
+            self.display.move_cursor(row, 1)
+            header_fmt = "{:<10} | {:^20} | {:>10} | {:>8} | {}".format(
+                "Generation", "Stats (p/c/f/r)", "Top ID", "Score", "Description"
+            )
+            print("\033[1m" + header_fmt[:self.display.cols] + "\033[0m")
+            row += 1
+            
+            self.display.move_cursor(row, 1)
+            print("-" * min(self.display.cols, len(header_fmt)))
+            row += 1
+            
+            # Sort generations
+            sorted_gens = sorted(generations.keys())
+            
+            # Calculate how many generations we can show
+            available_rows = self.display.rows - row - 1  # Leave room at bottom
+            start_idx = max(0, len(sorted_gens) - available_rows)
+            
+            # Show generations (most recent at bottom)
+            for gen in sorted_gens[start_idx:]:
+                if row >= self.display.rows - 1:
+                    break
+                
+                gen_data = generations[gen]
+                stats_str = f"{gen_data['\''pending'\'']}/{gen_data['\''complete'\'']}/{gen_data['\''failed'\'']}/{gen_data['\''running'\'']}"
+                
+                self.display.move_cursor(row, 1)
+                
+                if gen_data["best"]:
+                    best_id, best_desc, best_score = gen_data["best"]
+                    # Truncate description
+                    max_desc_len = self.display.cols - 55
+                    if len(best_desc) > max_desc_len:
+                        best_desc = best_desc[:max_desc_len-3] + "..."
+                    
+                    # Highlight if this is the overall leader
+                    if data["leader"] and best_id == data["leader"][0]:
+                        line = "{:<10} | {:^20} | \033[32m{:>10}\033[0m | {:>8.4f} | {}".format(
+                            gen, stats_str, best_id, best_score, best_desc
+                        )
+                    else:
+                        line = "{:<10} | {:^20} | {:>10} | {:>8.4f} | {}".format(
+                            gen, stats_str, best_id, best_score, best_desc
+                        )
+                else:
+                    line = "{:<10} | {:^20} | {:>10} | {:>8} | {}".format(
+                        gen, stats_str, "-", "-", "No completed candidates"
+                    )
+                
+                print(line[:self.display.cols])
+                row += 1
+        
+        # Ensure cursor is at bottom
+        self.display.move_cursor(self.display.rows, 1)
+        sys.stdout.flush()
+    
+    def check_input(self):
+        """Check for keyboard input without blocking."""
+        if select.select([sys.stdin], [], [], 0)[0]:
+            char = sys.stdin.read(1)
+            if char.lower() == "q":
+                self.running = False
+                return True
+        return False
+    
+    def run(self):
+        """Main loop for auto-updating display."""
+        # Save terminal settings
+        old_settings = termios.tcgetattr(sys.stdin)
+        
+        try:
+            # Set terminal to cbreak mode (allows Ctrl-C) instead of raw mode
+            tty.setcbreak(sys.stdin.fileno())
+            
+            self.display.hide_cursor()
+            
+            while self.running:
+                try:
+                    self.render()
+                except Exception as e:
+                    # Show error at bottom of screen
+                    self.display.move_cursor(self.display.rows - 1, 1)
+                    self.display.clear_line()
+                    print(f"\033[31mError: {str(e)}\033[0m", end="")
+                    sys.stdout.flush()
+                    time.sleep(2)  # Give time to read error
+                
+                # Check for input and wait
+                for _ in range(10):  # Check 10 times per second
+                    if self.check_input():
+                        break
+                    time.sleep(0.1)
+        
+        except KeyboardInterrupt:
+            self.running = False
+        
+        finally:
+            # Restore terminal settings
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+            self.display.reset()
+            self.display.clear_screen()
+            self.display.move_cursor(1, 1)
+            print("Exiting auto-status...")
+
+
+# Main execution
+csv_path = "'"$FULL_CSV_PATH"'"
+auto_status = AutoStatus(csv_path)
+auto_status.run()
+'
