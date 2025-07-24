@@ -409,8 +409,121 @@ print(max_id + 1)
 "
 }
 
-# Process AI output by having AI directly modify a temporary CSV copy
-process_ai_ideas_direct() {
+# Validate that AI directly modified the CSV file
+validate_direct_csv_modification() {
+  local temp_csv="$1"
+  local expected_count="$2"
+  local idea_type="$3"
+  
+  # Check if the file was actually modified
+  if [[ ! -f "$temp_csv" ]]; then
+    echo "[ERROR] CSV file was not found after AI modification" >&2
+    return 1
+  fi
+  
+  # Validate the modified CSV has more entries than original
+  local original_count
+  original_count=$(wc -l < "$FULL_CSV_PATH")
+  local new_count
+  new_count=$(wc -l < "$temp_csv")
+  
+  echo "[DEBUG] Original CSV line count: $original_count" >&2
+  echo "[DEBUG] Modified CSV line count: $new_count" >&2
+  echo "[DEBUG] Expected to add: $expected_count ideas" >&2
+  
+  if [[ $new_count -le $original_count ]]; then
+    echo "[ERROR] CSV file wasn't modified - same number of lines ($new_count <= $original_count)" >&2
+    echo "[DEBUG] First 10 lines of CSV after AI attempt:" >&2
+    head -10 "$temp_csv" >&2
+    return 1
+  fi
+  
+  local added_count=$((new_count - original_count))
+  if [[ $added_count -ne $expected_count ]]; then
+    echo "[WARN] Expected to add $expected_count ideas but added $added_count" >&2
+  fi
+  
+  # Replace original CSV with modified version
+  mv "$temp_csv" "$FULL_CSV_PATH"
+  
+  echo "[INFO] Successfully added $added_count $idea_type ideas to CSV"
+  return 0
+}
+
+# DEPRECATED: Old validation function for CSV output approach
+validate_and_apply_csv_modification_old() {
+  local modified_csv="$1"
+  local temp_csv="$2"
+  local expected_count="$3"
+  local idea_type="$4"
+  
+  # Check if the response looks like an error message (but not if it's just CSV data containing these words)
+  if echo "$modified_csv" | head -1 | grep -q "id,basedOnId,description,performance,status"; then
+    # This looks like a CSV file, not an error message
+    echo "[DEBUG] AI returned what appears to be a CSV file" >&2
+  elif echo "$modified_csv" | grep -qi "error\|failed\|limit\|exceeded\|sorry\|cannot\|unable"; then
+    echo "[ERROR] AI failed to modify CSV and returned an error message:" >&2
+    echo "$modified_csv" | head -200 >&2
+    return 1
+  fi
+  
+  # Check if response is too short to be a valid CSV
+  if [[ ${#modified_csv} -lt 50 ]]; then
+    echo "[ERROR] AI response is too short to be a valid CSV (${#modified_csv} chars):" >&2
+    echo "$modified_csv" >&2
+    return 1
+  fi
+  
+  # Extract CSV from AI output (in case there's extra text before it)
+  local csv_start_line
+  csv_start_line=$(echo "$modified_csv" | grep -n "id,basedOnId,description,performance,status" | head -1 | cut -d: -f1)
+  
+  if [[ -n "$csv_start_line" ]]; then
+    # Extract CSV starting from the header line
+    modified_csv=$(echo "$modified_csv" | tail -n +$csv_start_line)
+    echo "[DEBUG] Found CSV header at line $csv_start_line, extracting from there" >&2
+  elif ! echo "$modified_csv" | head -1 | grep -q "id,basedOnId,description,performance,status"; then
+    echo "[ERROR] AI failed to return a valid CSV file. Expected CSV with header, but got:" >&2
+    echo "$modified_csv" | head -c 500 >&2
+    echo "" >&2
+    echo "[DEBUG] The AI was asked to output the complete modified CSV but didn't" >&2
+    return 1
+  fi
+  
+  # Write the modified CSV to temp file
+  echo "$modified_csv" > "$temp_csv"
+  
+  # Validate the modified CSV has more entries than original
+  local original_count
+  original_count=$(wc -l < "$FULL_CSV_PATH")
+  local new_count
+  new_count=$(wc -l < "$temp_csv")
+  
+  echo "[DEBUG] Original CSV line count: $original_count" >&2
+  echo "[DEBUG] Modified CSV line count: $new_count" >&2
+  echo "[DEBUG] Expected to add: $expected_count ideas" >&2
+  
+  if [[ $new_count -le $original_count ]]; then
+    echo "[ERROR] Modified CSV doesn't have more entries ($new_count <= $original_count)" >&2
+    echo "[DEBUG] First 10 lines of modified CSV:" >&2
+    head -10 "$temp_csv" >&2
+    return 1
+  fi
+  
+  local added_count=$((new_count - original_count))
+  if [[ $added_count -ne $expected_count ]]; then
+    echo "[WARN] Expected to add $expected_count ideas but added $added_count" >&2
+  fi
+  
+  # Replace original CSV with modified version
+  mv "$temp_csv" "$FULL_CSV_PATH"
+  
+  echo "[INFO] Successfully added $added_count $idea_type ideas to CSV"
+  return 0
+}
+
+# DEPRECATED: Old two-step process function - kept for reference
+process_ai_ideas_direct_old() {
   local count="$1"
   local idea_type="$2"  # novel, hill-climbing, structural, crossover
   local top_performers="${3:-}"  # Optional, for non-novel ideas
@@ -448,8 +561,27 @@ IMPORTANT: Output the complete modified CSV file. Do not add any explanation or 
   
   # Get AI to modify the CSV with fallbacks
   local modified_csv
-  if ! modified_csv=$(call_ai_with_fallbacks "$csv_prompt" "$CURRENT_GENERATION" 2>&1); then
+  local stderr_file="/tmp/claude-evolve-stderr-$$.txt"
+  if ! modified_csv=$(call_ai_with_fallbacks "$csv_prompt" "$CURRENT_GENERATION" 2>"$stderr_file"); then
     echo "[ERROR] All AI models failed to modify CSV" >&2
+    cat "$stderr_file" >&2
+    rm -f "$temp_csv" "$stderr_file"
+    return 1
+  fi
+  rm -f "$stderr_file"
+  
+  # Check if the response looks like an error message
+  if echo "$modified_csv" | grep -qi "error\|failed\|limit\|exceeded\|sorry\|cannot\|unable"; then
+    echo "[ERROR] AI failed to modify CSV and returned an error message:" >&2
+    echo "$modified_csv" | head -200 >&2
+    rm -f "$temp_csv" 
+    return 1
+  fi
+  
+  # Check if response is too short to be a valid CSV
+  if [[ ${#modified_csv} -lt 50 ]]; then
+    echo "[ERROR] AI response is too short to be a valid CSV (${#modified_csv} chars):" >&2
+    echo "$modified_csv" >&2
     rm -f "$temp_csv"
     return 1
   fi
@@ -461,10 +593,12 @@ IMPORTANT: Output the complete modified CSV file. Do not add any explanation or 
   if [[ -n "$csv_start_line" ]]; then
     # Extract CSV starting from the header line
     modified_csv=$(echo "$modified_csv" | tail -n +$csv_start_line)
+    echo "[DEBUG] Found CSV header at line $csv_start_line, extracting from there" >&2
   elif ! echo "$modified_csv" | head -1 | grep -q "id,basedOnId,description,performance,status"; then
-    echo "[WARN] AI output doesn't look like a CSV header. First 200 chars:" >&2
-    echo "$modified_csv" | head -c 200 >&2
+    echo "[ERROR] AI failed to return a valid CSV file. Expected CSV with header, but got:" >&2
+    echo "$modified_csv" | head -c 500 >&2
     echo "" >&2
+    echo "[DEBUG] The AI was asked to output the complete modified CSV but didn't" >&2
     rm -f "$temp_csv"
     return 1
   fi
@@ -653,70 +787,52 @@ ideate_ai_strategies() {
 generate_novel_ideas_direct() {
   local count="$1"
   
-  local prompt="Generate exactly $count novel algorithmic ideas for trading algorithm evolution.
+  # Create temporary CSV copy
+  local temp_csv="/tmp/claude-evolve-temp-csv-$$.csv"
+  cp "$FULL_CSV_PATH" "$temp_csv"
+  
+  echo "[INFO] Generating $count novel exploration ideas..."
+  echo "[DEBUG] Original CSV has $(wc -l < "$FULL_CSV_PATH") lines" >&2
+  
+  local prompt="Please add exactly $count novel algorithmic ideas directly to the CSV file $temp_csv.
 
 Current evolution context:
 - Generation: $CURRENT_GENERATION
 - Algorithm: $FULL_ALGORITHM_PATH
 - Brief: $(head -20 "$FULL_BRIEF_PATH")
 
-You MUST output EXACTLY $count lines, where each line is a single sentence describing a specific algorithmic change.
-NO PREAMBLE, NO EXPLANATION, NO NUMBERING - just $count lines of algorithm descriptions.
+Instructions:
+1. Read the current CSV file to see existing entries
+2. Add exactly $count new rows to the CSV file
+3. Use the next available generation numbers (gen$CURRENT_GENERATION-XXX format)
+4. For each idea, create a row with: id,,description,,pending (empty parent_id for novel ideas)
+5. Each description should be one clear sentence describing a novel algorithmic approach
+6. Focus on creative, ambitious ideas that haven't been tried yet
+7. Consider machine learning, new indicators, regime detection, risk management, etc.
 
-CRITICAL: You MUST output EXACTLY $count idea lines. Not more, not less. If you output fewer than $count lines, the system will fail.
+IMPORTANT: Edit the CSV file directly. Do not return or print CSV data - just modify the file in place."
 
-Requirements:
-- Each line should be one clear sentence describing a novel algorithmic approach
-- Focus on creative, ambitious ideas that haven't been tried yet
-- Consider machine learning, new indicators, regime detection, risk management, etc.
-- DO NOT include any explanations, headers, or other text - ONLY the $count idea lines
-
-Example of CORRECT output (exactly 3 lines, no extra text):
-Train LSTM network on 30-day OHLCV sequences to predict next-day direction probability
-Add cross-correlation filter that reduces positions when correlation with market breaks down
-Implement intraday momentum using 30-minute data to adjust daily position sizes
-
-Output exactly $count lines now:"
-
-  echo "[INFO] Generating $count novel exploration ideas..."
-  
-  # Get AI response with fallbacks
-  local ai_output
-  if ! ai_output=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>&1); then
+  # Get AI to directly edit the CSV file
+  local ai_response
+  local stderr_file="/tmp/claude-evolve-stderr-$$.txt"
+  if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>"$stderr_file"); then
     echo "[ERROR] All AI models failed to generate novel ideas" >&2
+    cat "$stderr_file" >&2
+    rm -f "$temp_csv" "$stderr_file"
+    return 1
+  fi
+  rm -f "$stderr_file"
+  
+  echo "[DEBUG] AI response: $ai_response" >&2
+  
+  # Validate that the CSV file was actually modified
+  if ! validate_direct_csv_modification "$temp_csv" "$count" "novel"; then
+    rm -f "$temp_csv"
     return 1
   fi
   
-  # Check if AI output looks suspicious
-  if [[ ${#ai_output} -lt 50 ]]; then
-    echo "[WARN] AI output is suspiciously short: $ai_output" >&2
-    return 1
-  fi
-  
-  # Count lines to validate we got the right number
-  local line_count
-  line_count=$(echo "$ai_output" | wc -l | tr -d '[:space:]')
-  
-  echo "[DEBUG] Processing $line_count lines from AI output for novel ideas" >&2
-  echo "[DEBUG] AI output for novel ideas:" >&2
-  echo "$ai_output" | head -10 | while IFS= read -r line; do echo "[DEBUG] > $line"; done >&2
-  echo "[DEBUG] AI output length: ${#ai_output} characters" >&2
-  
-  if [[ $line_count -lt $count ]]; then
-    echo "[ERROR] AI only provided $line_count ideas instead of $count" >&2
-    return 1
-  fi
-  
-  # Use direct CSV modification approach
-  process_ai_ideas_direct "$count" "novel" "" "$ai_output"
-  
-  if [[ $? -eq 0 ]]; then
-    echo "[INFO] Novel exploration ideas generated successfully"
-    return 0
-  else
-    echo "[ERROR] Failed to process novel ideas" >&2
-    return 1
-  fi
+  echo "[INFO] Novel exploration ideas generated successfully"
+  return 0
 }
 
 # Generate hill climbing ideas using direct CSV modification
@@ -724,11 +840,18 @@ generate_hill_climbing_direct() {
   local count="$1"
   local top_performers="$2"
   
+  # Create temporary CSV copy
+  local temp_csv="/tmp/claude-evolve-temp-csv-$$.csv"
+  cp "$FULL_CSV_PATH" "$temp_csv"
+  
+  echo "[INFO] Generating $count hill climbing ideas..."
+  echo "[DEBUG] Original CSV has $(wc -l < "$FULL_CSV_PATH") lines" >&2
+  
   # Extract just the IDs from top performers for clarity
   local valid_parent_ids
   valid_parent_ids=$(echo "$top_performers" | cut -d',' -f1 | paste -sd ',' -)
   
-  local prompt="Generate exactly $count parameter tuning ideas for successful trading algorithms.
+  local prompt="Please add exactly $count parameter tuning ideas directly to the CSV file $temp_csv.
 
 IMPORTANT: You MUST use one of these exact parent IDs: $valid_parent_ids
 
@@ -739,66 +862,38 @@ CRITICAL INSTRUCTION: Before generating parameter tuning ideas, you MUST read th
 Algorithm source files are located at: $FULL_OUTPUT_DIR/evolution_<PARENT_ID>.py
 For example: $FULL_OUTPUT_DIR/evolution_gen01-251.py
 
-ONLY suggest parameter changes for parameters that actually exist in the parent algorithm's source code.
-DO NOT invent or hallucinate parameter names.
+Instructions:
+1. Read the current CSV file to see existing entries
+2. Add exactly $count new rows to the CSV file
+3. Use the next available generation numbers (gen$CURRENT_GENERATION-XXX format)
+4. For each idea, create a row with: id,parent_id,description,,pending
+5. Each parent_id MUST be one of: $valid_parent_ids
+6. Each description should focus on adjusting specific parameters that exist in the parent's source code
+7. Include current and new parameter values (e.g., \"Lower rsi_entry from 21 to 18\")
 
-You MUST output EXACTLY $count lines, where each line describes a parameter tuning idea.
-NO PREAMBLE, NO EXPLANATION, NO NUMBERING - just $count lines of parameter tuning descriptions.
+IMPORTANT: Edit the CSV file directly. Do not return or print CSV data - just modify the file in place."
 
-CRITICAL: You MUST output EXACTLY $count idea lines. Not more, not less. If you output fewer than $count lines, the system will fail.
-
-Each line MUST:
-- Be one clear sentence about adjusting specific parameters that exist in the source code
-- Start with \"From <PARENT_ID>:\" using ONLY one of these exact IDs: $valid_parent_ids
-- Focus on actual hyperparameters, thresholds, periods, weights found in the code
-- Include current and new parameter values (e.g., \"from 0.15 to 0.12\")
-
-Example output format (using actual parent IDs and real parameters from the source):
-From gen01-251: Lower rsi_entry from 21 to 18 in bullish above_ema configuration
-From gen01-242: Increase ema_length from 7 to 10 for smoother trend detection
-From gen01-253: Raise allocation from 25 to 30 for ma_x_trend strategy
-
-Output exactly $count lines now:"
-
-  echo "[INFO] Generating $count hill climbing ideas..."
-  
-  # Get AI response with fallbacks
-  local ai_output
-  if ! ai_output=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>&1); then
+  # Get AI to directly edit the CSV file
+  local ai_response
+  local stderr_file="/tmp/claude-evolve-stderr-$$.txt"
+  if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>"$stderr_file"); then
     echo "[ERROR] All AI models failed to generate hill climbing ideas" >&2
+    cat "$stderr_file" >&2
+    rm -f "$temp_csv" "$stderr_file"
+    return 1
+  fi
+  rm -f "$stderr_file"
+  
+  echo "[DEBUG] AI response: $ai_response" >&2
+  
+  # Validate that the CSV file was actually modified
+  if ! validate_direct_csv_modification "$temp_csv" "$count" "hill-climbing"; then
+    rm -f "$temp_csv"
     return 1
   fi
   
-  # Check if AI output looks suspicious
-  if [[ ${#ai_output} -lt 50 ]]; then
-    echo "[WARN] AI output is suspiciously short: $ai_output" >&2
-    return 1
-  fi
-  
-  # Count lines to validate we got the right number
-  local line_count
-  line_count=$(echo "$ai_output" | wc -l | tr -d '[:space:]')
-  
-  echo "[DEBUG] Processing $line_count lines from AI output for hill-climbing ideas" >&2
-  echo "[DEBUG] AI output for hill-climbing ideas:" >&2
-  echo "$ai_output" | head -10 | while IFS= read -r line; do echo "[DEBUG] > $line"; done >&2
-  echo "[DEBUG] AI output length: ${#ai_output} characters" >&2
-  
-  if [[ $line_count -lt $count ]]; then
-    echo "[ERROR] AI only provided $line_count ideas instead of $count" >&2
-    return 1
-  fi
-  
-  # Use direct CSV modification approach
-  process_ai_ideas_direct "$count" "hill-climbing" "$top_performers" "$ai_output"
-  
-  if [[ $? -eq 0 ]]; then
-    echo "[INFO] Hill climbing ideas generated successfully"
-    return 0
-  else
-    echo "[ERROR] Failed to process hill climbing ideas" >&2
-    return 1
-  fi
+  echo "[INFO] Hill climbing ideas generated successfully"
+  return 0
 }
 
 # Generate structural mutation ideas using direct CSV modification
@@ -806,11 +901,18 @@ generate_structural_mutation_direct() {
   local count="$1"
   local top_performers="$2"
   
+  # Create temporary CSV copy
+  local temp_csv="/tmp/claude-evolve-temp-csv-$$.csv"
+  cp "$FULL_CSV_PATH" "$temp_csv"
+  
+  echo "[INFO] Generating $count structural mutation ideas..."
+  echo "[DEBUG] Original CSV has $(wc -l < "$FULL_CSV_PATH") lines" >&2
+  
   # Extract just the IDs from top performers for clarity
   local valid_parent_ids
   valid_parent_ids=$(echo "$top_performers" | cut -d',' -f1 | paste -sd ',' -)
   
-  local prompt="Generate exactly $count structural modification ideas for successful trading algorithms.
+  local prompt="Please add exactly $count structural modification ideas directly to the CSV file $temp_csv.
 
 IMPORTANT: You MUST use one of these exact parent IDs: $valid_parent_ids
 
@@ -821,66 +923,38 @@ CRITICAL INSTRUCTION: Before generating structural modification ideas, you MUST 
 Algorithm source files are located at: $FULL_OUTPUT_DIR/evolution_<PARENT_ID>.py
 For example: $FULL_OUTPUT_DIR/evolution_gen01-251.py
 
-Understand the current architecture, components, and logic before suggesting structural changes.
-Base your modifications on the actual code structure, not assumptions.
+Instructions:
+1. Read the current CSV file to see existing entries
+2. Add exactly $count new rows to the CSV file
+3. Use the next available generation numbers (gen$CURRENT_GENERATION-XXX format)
+4. For each idea, create a row with: id,parent_id,description,,pending
+5. Each parent_id MUST be one of: $valid_parent_ids
+6. Each description should focus on architectural/structural changes based on the parent's actual code
+7. Reference actual components/methods found in the source code
 
-You MUST output EXACTLY $count lines, where each line describes a structural modification idea.
-NO PREAMBLE, NO EXPLANATION, NO NUMBERING - just $count lines of structural change descriptions.
+IMPORTANT: Edit the CSV file directly. Do not return or print CSV data - just modify the file in place."
 
-CRITICAL: You MUST output EXACTLY $count idea lines. Not more, not less. If you output fewer than $count lines, the system will fail.
-
-Each line MUST:
-- Be one clear sentence about architectural/structural changes based on actual code
-- Start with \"From <PARENT_ID>:\" using ONLY one of these exact IDs: $valid_parent_ids
-- Focus on replacing existing components, changing architecture, adding new systems
-- Reference actual components/methods found in the source code
-
-Example output format (using actual parent IDs and real code components):
-From gen01-251: Replace RSI-based entry logic with machine learning momentum prediction
-From gen01-242: Add volatility regime detection to dynamically switch between sub-strategies
-From gen01-253: Implement ensemble voting system combining multiple technical indicators
-
-Output exactly $count lines now:"
-
-  echo "[INFO] Generating $count structural mutation ideas..."
-  
-  # Get AI response with fallbacks
-  local ai_output
-  if ! ai_output=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>&1); then
+  # Get AI to directly edit the CSV file
+  local ai_response
+  local stderr_file="/tmp/claude-evolve-stderr-$$.txt"
+  if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>"$stderr_file"); then
     echo "[ERROR] All AI models failed to generate structural mutation ideas" >&2
+    cat "$stderr_file" >&2
+    rm -f "$temp_csv" "$stderr_file"
+    return 1
+  fi
+  rm -f "$stderr_file"
+  
+  echo "[DEBUG] AI response: $ai_response" >&2
+  
+  # Validate that the CSV file was actually modified
+  if ! validate_direct_csv_modification "$temp_csv" "$count" "structural"; then
+    rm -f "$temp_csv"
     return 1
   fi
   
-  # Check if AI output looks suspicious
-  if [[ ${#ai_output} -lt 50 ]]; then
-    echo "[WARN] AI output is suspiciously short: $ai_output" >&2
-    return 1
-  fi
-  
-  # Count lines to validate we got the right number
-  local line_count
-  line_count=$(echo "$ai_output" | wc -l | tr -d '[:space:]')
-  
-  echo "[DEBUG] Processing $line_count lines from AI output for structural mutation ideas" >&2
-  echo "[DEBUG] AI output for structural mutation ideas:" >&2
-  echo "$ai_output" | head -10 | while IFS= read -r line; do echo "[DEBUG] > $line"; done >&2
-  echo "[DEBUG] AI output length: ${#ai_output} characters" >&2
-  
-  if [[ $line_count -lt $count ]]; then
-    echo "[ERROR] AI only provided $line_count ideas instead of $count" >&2
-    return 1
-  fi
-  
-  # Use direct CSV modification approach
-  process_ai_ideas_direct "$count" "structural" "$top_performers" "$ai_output"
-  
-  if [[ $? -eq 0 ]]; then
-    echo "[INFO] Structural mutation ideas generated successfully"
-    return 0
-  else
-    echo "[ERROR] Failed to process structural mutation ideas" >&2
-    return 1
-  fi
+  echo "[INFO] Structural mutation ideas generated successfully"
+  return 0
 }
 
 # Generate crossover hybrid ideas using direct CSV modification
@@ -888,11 +962,18 @@ generate_crossover_direct() {
   local count="$1"
   local top_performers="$2"
   
+  # Create temporary CSV copy
+  local temp_csv="/tmp/claude-evolve-temp-csv-$$.csv"
+  cp "$FULL_CSV_PATH" "$temp_csv"
+  
+  echo "[INFO] Generating $count crossover hybrid ideas..."
+  echo "[DEBUG] Original CSV has $(wc -l < "$FULL_CSV_PATH") lines" >&2
+  
   # Extract just the IDs from top performers for clarity
   local valid_parent_ids
   valid_parent_ids=$(echo "$top_performers" | cut -d',' -f1 | paste -sd ',' -)
   
-  local prompt="Generate exactly $count hybrid combination ideas from successful trading algorithms.
+  local prompt="Please add exactly $count hybrid combination ideas directly to the CSV file $temp_csv.
 
 IMPORTANT: You MUST use ONLY these exact parent IDs: $valid_parent_ids
 
@@ -903,67 +984,38 @@ CRITICAL INSTRUCTION: Before generating hybrid combination ideas, you MUST read 
 Algorithm source files are located at: $FULL_OUTPUT_DIR/evolution_<PARENT_ID>.py
 For example: $FULL_OUTPUT_DIR/evolution_gen01-251.py
 
-Understand what each algorithm actually does by reading their source code.
-Only combine elements that actually exist in the algorithms.
-Base your combinations on real components, methods, and logic found in the code.
+Instructions:
+1. Read the current CSV file to see existing entries
+2. Add exactly $count new rows to the CSV file
+3. Use the next available generation numbers (gen$CURRENT_GENERATION-XXX format)
+4. For each idea, create a row with: id,parent_id,description,,pending
+5. Each parent_id MUST be one of: $valid_parent_ids (choose the primary parent)
+6. Each description should combine actual elements from 2+ algorithms based on their source code
+7. Reference specific components/features found in the actual source code
 
-You MUST output EXACTLY $count lines, where each line describes a hybrid combination idea.
-NO PREAMBLE, NO EXPLANATION, NO NUMBERING - just $count lines of hybrid combination descriptions.
+IMPORTANT: Edit the CSV file directly. Do not return or print CSV data - just modify the file in place."
 
-CRITICAL: You MUST output EXACTLY $count idea lines. Not more, not less. If you output fewer than $count lines, the system will fail.
-
-Each line MUST:
-- Be one clear sentence combining actual elements from 2+ algorithms based on their source code
-- Start with \"From <PARENT_ID>:\" using ONLY one of these exact IDs: $valid_parent_ids
-- Reference ONLY the IDs listed above when mentioning algorithms to combine
-- Specify real components/features found in the actual source code
-
-Example output format (using actual parent IDs and real code elements):
-From gen01-251: Combine TRS 2025 parameters from gen01-251 with Profile 3 allocations from gen01-253
-From gen01-242: Merge Laguerre RSI logic from gen01-242 with momentum detection from gen01-243
-From gen01-253: Integrate MATS 2025 Profile 3 from gen01-253 with risk management from gen01-252
-
-Output exactly $count lines now:"
-
-  echo "[INFO] Generating $count crossover hybrid ideas..."
-  
-  # Get AI response with fallbacks
-  local ai_output
-  if ! ai_output=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>&1); then
+  # Get AI to directly edit the CSV file
+  local ai_response
+  local stderr_file="/tmp/claude-evolve-stderr-$$.txt"
+  if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>"$stderr_file"); then
     echo "[ERROR] All AI models failed to generate crossover hybrid ideas" >&2
+    cat "$stderr_file" >&2
+    rm -f "$temp_csv" "$stderr_file"
+    return 1
+  fi
+  rm -f "$stderr_file"
+  
+  echo "[DEBUG] AI response: $ai_response" >&2
+  
+  # Validate that the CSV file was actually modified
+  if ! validate_direct_csv_modification "$temp_csv" "$count" "crossover"; then
+    rm -f "$temp_csv"
     return 1
   fi
   
-  # Check if AI output looks suspicious
-  if [[ ${#ai_output} -lt 50 ]]; then
-    echo "[WARN] AI output is suspiciously short: $ai_output" >&2
-    return 1
-  fi
-  
-  # Count lines to validate we got the right number
-  local line_count
-  line_count=$(echo "$ai_output" | wc -l | tr -d '[:space:]')
-  
-  echo "[DEBUG] Processing $line_count lines from AI output for crossover hybrid ideas" >&2
-  echo "[DEBUG] AI output for crossover hybrid ideas:" >&2
-  echo "$ai_output" | head -10 | while IFS= read -r line; do echo "[DEBUG] > $line"; done >&2
-  echo "[DEBUG] AI output length: ${#ai_output} characters" >&2
-  
-  if [[ $line_count -lt $count ]]; then
-    echo "[ERROR] AI only provided $line_count ideas instead of $count" >&2
-    return 1
-  fi
-  
-  # Use direct CSV modification approach
-  process_ai_ideas_direct "$count" "crossover" "$top_performers" "$ai_output"
-  
-  if [[ $? -eq 0 ]]; then
-    echo "[INFO] Crossover hybrid ideas generated successfully"
-    return 0
-  else
-    echo "[ERROR] Failed to process crossover hybrid ideas" >&2
-    return 1
-  fi
+  echo "[INFO] Crossover hybrid ideas generated successfully"
+  return 0
 }
 
 # Legacy AI generation mode (for backward compatibility)
@@ -973,6 +1025,13 @@ ideate_ai_legacy() {
     exit 1
   fi
 
+  # Create temporary CSV copy
+  local temp_csv="/tmp/claude-evolve-temp-csv-$$.csv"
+  cp "$FULL_CSV_PATH" "$temp_csv"
+  
+  echo "[INFO] Generating $TOTAL_IDEAS ideas (legacy mode)..."
+  echo "[DEBUG] Original CSV has $(wc -l < "$FULL_CSV_PATH") lines" >&2
+
   # Get top performers for context
   local top_performers=""
   if [[ -f "$FULL_CSV_PATH" ]]; then
@@ -980,8 +1039,8 @@ ideate_ai_legacy() {
     top_performers=$(awk -F, 'NR > 1 && $4 != "" { print $1 ": " $3 " (score: " $4 ")" }' "$FULL_CSV_PATH" | head -5)
   fi
 
-  # Build prompt for description-only output
-  local prompt="Generate exactly $TOTAL_IDEAS novel algorithmic ideas for trading algorithm evolution.
+  # Build prompt for direct CSV modification
+  local prompt="Please add exactly $TOTAL_IDEAS algorithmic ideas directly to the CSV file $temp_csv.
 
 Algorithm files for context:
 - Base algorithm: $FULL_ALGORITHM_PATH  
@@ -1004,13 +1063,13 @@ $top_performers"
 
   prompt+="
 
-You MUST output EXACTLY $TOTAL_IDEAS lines, where each line is a single sentence describing a specific algorithmic change.
-NO PREAMBLE, NO EXPLANATION, NO NUMBERING - just $TOTAL_IDEAS lines of algorithm descriptions.
-
-Requirements:
-- Each line should be one clear sentence describing an algorithmic approach
-- Mix both parameter tuning and structural changes
-- If building on existing algorithms, start with 'From ALGORITHM_ID:'
+Instructions:
+1. Read the current CSV file to see existing entries
+2. Add exactly $TOTAL_IDEAS new rows to the CSV file
+3. Use the next available generation numbers (gen$CURRENT_GENERATION-XXX format)
+4. For each idea, create a row with: id,parent_id,description,,pending
+5. Mix both parameter tuning and structural changes
+6. If building on existing algorithms, use their ID as parent_id, otherwise leave parent_id empty
 
 ⚠️ AVOID ONLY: Kelly floor/cap adjustments that assume leverage > 1.0 (these get clamped and have no effect)
 
@@ -1024,33 +1083,29 @@ Requirements:
 - Time-Based Patterns: Intraday effects, calendar anomalies, volatility timing
 - Parameter Optimization: Entry thresholds, indicator periods, strategy weights
 
-Output exactly $TOTAL_IDEAS lines now:"
+IMPORTANT: Edit the CSV file directly. Do not return or print CSV data - just modify the file in place."
 
-  echo "[INFO] Generating $TOTAL_IDEAS ideas (legacy mode)..."
+  # Get AI to directly edit the CSV file
+  local ai_response
+  local stderr_file="/tmp/claude-evolve-stderr-$$.txt"
+  if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>"$stderr_file"); then
+    echo "[ERROR] All AI models failed to generate ideas" >&2
+    cat "$stderr_file" >&2
+    rm -f "$temp_csv" "$stderr_file"
+    return 1
+  fi
+  rm -f "$stderr_file"
   
-  # Get AI response with fallbacks
-  local ai_output
-  if ! ai_output=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>&1); then
-    echo "[WARN] All AI models failed to generate ideas" >&2
+  echo "[DEBUG] AI response: $ai_response" >&2
+  
+  # Validate that the CSV file was actually modified
+  if ! validate_direct_csv_modification "$temp_csv" "$TOTAL_IDEAS" "mixed"; then
+    rm -f "$temp_csv"
     return 1
   fi
   
-  # Check if AI output looks suspicious
-  if [[ ${#ai_output} -lt 50 ]]; then
-    echo "[WARN] AI output is suspiciously short: $ai_output" >&2
-    return 1
-  fi
-  
-  # Use direct CSV modification approach for legacy mode too
-  process_ai_ideas_direct "$TOTAL_IDEAS" "novel" "" "$ai_output"
-  
-  if [[ $? -eq 0 ]]; then
-    echo "[INFO] Legacy ideas generated"
-    return 0
-  else
-    echo "[ERROR] Failed to process legacy ideas" >&2
-    return 1
-  fi
+  echo "[INFO] Legacy ideas generated"
+  return 0
 }
 
 # Determine generation number for this ideation run

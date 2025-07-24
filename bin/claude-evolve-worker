@@ -358,7 +358,7 @@ with EvolutionCSV('$FULL_CSV_PATH') as csv:
         # Get full candidate info
         candidate = csv.get_candidate_info(candidate_id)
         if candidate:
-            print(f'{candidate[\"id\"]}|{candidate.get(\"parent_id\", \"\")}|{candidate[\"description\"]}')
+            print(f'{candidate[\"id\"]}|{candidate.get(\"basedOnId\", \"\")}|{candidate[\"description\"]}')
 ")
   
   if [[ -z "$candidate_info" ]]; then
