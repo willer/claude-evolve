@@ -81,9 +81,9 @@ call_ai_with_limit_check() {
   if [[ "$preferred_model" == "o3" ]] && command -v codex >/dev/null 2>&1; then
     echo "[INFO] Using codex o3 for ideation" >&2
     
-    # Call codex with o3 model using -q flag and --full-auto
+    # Call codex with o3 model using exec subcommand
     local ai_output
-    ai_output=$(codex -m o3 --full-auto -q "$prompt" 2>&1)
+    ai_output=$(echo "$prompt" | codex exec -m o3 --full-auto 2>&1)
     local ai_exit_code=$?
     
     if [[ $ai_exit_code -eq 0 ]]; then
@@ -243,7 +243,7 @@ call_ai_with_fallbacks() {
     local ai_exit_code
     
     if [[ "$model" == "o3" ]] && command -v codex >/dev/null 2>&1; then
-      ai_output=$(codex -m o3 --full-auto -q "$prompt" 2>&1)
+      ai_output=$(echo "$prompt" | codex exec -m o3 --full-auto 2>&1)
       ai_exit_code=$?
       
       if [[ $ai_exit_code -eq 0 ]]; then
