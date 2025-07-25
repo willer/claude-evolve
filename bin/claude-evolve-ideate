@@ -204,22 +204,40 @@ call_ai_with_fallbacks() {
   local prompt="$1"
   local generation="${2:-01}"
   
-  # List of models to try in order
-  local models=()
+  # Determine which model to use based on generation (round-robin)
+  local gen_num
+  if [[ $generation =~ ^0*([0-9]+)$ ]]; then
+    gen_num=$((10#${BASH_REMATCH[1]}))
+  else
+    gen_num=1
+  fi
   
   # Check which AI tools are available
+  local available_models=()
   if command -v codex >/dev/null 2>&1; then
-    models+=("o3")
+    available_models+=("o3")
   fi
   if command -v gemini >/dev/null 2>&1; then
-    models+=("gemini")
+    available_models+=("gemini")
   fi
-  # Claude is always available (fallback)
-  models+=("opus" "sonnet" "haiku")
+  available_models+=("opus")  # Claude Opus always available
   
-  # Try each model in sequence
+  # Create ordered list based on round-robin for this generation
+  local num_models=${#available_models[@]}
+  local start_index=$((gen_num % num_models))
+  local models=()
+  
+  # Add models in round-robin order starting from the calculated index
+  for ((i=0; i<num_models; i++)); do
+    local idx=$(((start_index + i) % num_models))
+    models+=("${available_models[$idx]}")
+  done
+  
+  echo "[INFO] Model order for generation $generation (round-robin): ${models[*]}" >&2
+  
+  # Try each model in the ordered sequence
   for model in "${models[@]}"; do
-    echo "[INFO] Trying $model for ideation (fallback attempt)" >&2
+    echo "[INFO] Trying $model for ideation" >&2
     
     local ai_output
     local ai_exit_code
@@ -422,17 +440,18 @@ validate_direct_csv_modification() {
   fi
   
   # Validate the modified CSV has more entries than original
+  # Count actual data rows (excluding header and empty lines)
   local original_count
-  original_count=$(wc -l < "$FULL_CSV_PATH")
+  original_count=$(grep -v '^[[:space:]]*$' "$FULL_CSV_PATH" | tail -n +2 | wc -l)
   local new_count
-  new_count=$(wc -l < "$temp_csv")
+  new_count=$(grep -v '^[[:space:]]*$' "$temp_csv" | tail -n +2 | wc -l)
   
-  echo "[DEBUG] Original CSV line count: $original_count" >&2
-  echo "[DEBUG] Modified CSV line count: $new_count" >&2
+  echo "[DEBUG] Original CSV data rows: $original_count" >&2
+  echo "[DEBUG] Modified CSV data rows: $new_count" >&2
   echo "[DEBUG] Expected to add: $expected_count ideas" >&2
   
   if [[ $new_count -le $original_count ]]; then
-    echo "[ERROR] CSV file wasn't modified - same number of lines ($new_count <= $original_count)" >&2
+    echo "[ERROR] CSV file wasn't modified - same number of data rows ($new_count <= $original_count)" >&2
     echo "[DEBUG] First 10 lines of CSV after AI attempt:" >&2
     head -10 "$temp_csv" >&2
     return 1
@@ -529,8 +548,8 @@ process_ai_ideas_direct_old() {
   local top_performers="${3:-}"  # Optional, for non-novel ideas
   local ai_output="$4"  # The AI's response with ideas
   
-  # Create temporary CSV copy
-  local temp_csv="/tmp/claude-evolve-temp-csv-$$.csv"
+  # Create temporary CSV copy in evolution directory (so AI can access it)
+  local temp_csv="$FULL_EVOLUTION_DIR/temp-csv-$$.csv"
   cp "$FULL_CSV_PATH" "$temp_csv"
   
   echo "[DEBUG] Starting CSV modification for $count $idea_type ideas" >&2
@@ -787,41 +806,53 @@ ideate_ai_strategies() {
 generate_novel_ideas_direct() {
   local count="$1"
   
-  # Create temporary CSV copy
-  local temp_csv="/tmp/claude-evolve-temp-csv-$$.csv"
+  # Create temporary CSV copy in evolution directory (so AI can access it)
+  local temp_csv="$FULL_EVOLUTION_DIR/temp-csv-$$.csv"
   cp "$FULL_CSV_PATH" "$temp_csv"
   
   echo "[INFO] Generating $count novel exploration ideas..."
-  echo "[DEBUG] Original CSV has $(wc -l < "$FULL_CSV_PATH") lines" >&2
+  local data_rows=$(grep -v '^[[:space:]]*$' "$FULL_CSV_PATH" | tail -n +2 | wc -l)
+  echo "[DEBUG] Original CSV has $data_rows data rows" >&2
   
-  local prompt="Please add exactly $count novel algorithmic ideas directly to the CSV file $temp_csv.
+  # Use relative paths and change to evolution directory so AI can access files
+  local temp_csv_basename=$(basename "$temp_csv")
+  
+  local prompt="I need you to use your file editing capabilities to add exactly $count novel algorithmic ideas to the CSV file: $temp_csv_basename
 
 Current evolution context:
 - Generation: $CURRENT_GENERATION
-- Algorithm: $FULL_ALGORITHM_PATH
+- Algorithm: algorithm.py (base algorithm)
 - Brief: $(head -20 "$FULL_BRIEF_PATH")
 
 Instructions:
-1. Read the current CSV file to see existing entries
-2. Add exactly $count new rows to the CSV file
+1. Use the Read tool to examine the current CSV file
+2. Use the Edit or MultiEdit tool to add exactly $count new rows to the CSV file
 3. Use the next available generation numbers (gen$CURRENT_GENERATION-XXX format)
 4. For each idea, create a row with: id,,description,,pending (empty parent_id for novel ideas)
 5. Each description should be one clear sentence describing a novel algorithmic approach
 6. Focus on creative, ambitious ideas that haven't been tried yet
 7. Consider machine learning, new indicators, regime detection, risk management, etc.
 
-IMPORTANT: Edit the CSV file directly. Do not return or print CSV data - just modify the file in place."
+CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly."
 
+  # Change to evolution directory so AI can access files
+  local original_pwd=$(pwd)
+  cd "$FULL_EVOLUTION_DIR"
+  
   # Get AI to directly edit the CSV file
   local ai_response
-  local stderr_file="/tmp/claude-evolve-stderr-$$.txt"
+  local stderr_file="stderr-$$.txt"
   if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>"$stderr_file"); then
     echo "[ERROR] All AI models failed to generate novel ideas" >&2
     cat "$stderr_file" >&2
+    cd "$original_pwd"
     rm -f "$temp_csv" "$stderr_file"
     return 1
   fi
   rm -f "$stderr_file"
+  
+  # Restore working directory
+  cd "$original_pwd"
   
   echo "[DEBUG] AI response: $ai_response" >&2
   
@@ -840,18 +871,22 @@ generate_hill_climbing_direct() {
   local count="$1"
   local top_performers="$2"
   
-  # Create temporary CSV copy
-  local temp_csv="/tmp/claude-evolve-temp-csv-$$.csv"
+  # Create temporary CSV copy in evolution directory (so AI can access it)
+  local temp_csv="$FULL_EVOLUTION_DIR/temp-csv-$$.csv"
   cp "$FULL_CSV_PATH" "$temp_csv"
   
   echo "[INFO] Generating $count hill climbing ideas..."
-  echo "[DEBUG] Original CSV has $(wc -l < "$FULL_CSV_PATH") lines" >&2
+  local data_rows=$(grep -v '^[[:space:]]*$' "$FULL_CSV_PATH" | tail -n +2 | wc -l)
+  echo "[DEBUG] Original CSV has $data_rows data rows" >&2
   
   # Extract just the IDs from top performers for clarity
   local valid_parent_ids
   valid_parent_ids=$(echo "$top_performers" | cut -d',' -f1 | paste -sd ',' -)
   
-  local prompt="Please add exactly $count parameter tuning ideas directly to the CSV file $temp_csv.
+  # Use relative paths and change to evolution directory so AI can access files
+  local temp_csv_basename=$(basename "$temp_csv")
+  
+  local prompt="I need you to use your file editing capabilities to add exactly $count parameter tuning ideas to the CSV file: $temp_csv_basename
 
 IMPORTANT: You MUST use one of these exact parent IDs: $valid_parent_ids
 
@@ -859,30 +894,38 @@ Successful algorithms to tune:
 $top_performers
 
 CRITICAL INSTRUCTION: Before generating parameter tuning ideas, you MUST read the source code of the parent algorithms.
-Algorithm source files are located at: $FULL_OUTPUT_DIR/evolution_<PARENT_ID>.py
-For example: $FULL_OUTPUT_DIR/evolution_gen01-251.py
+Algorithm source files are located at: evolution_<PARENT_ID>.py
+For example: evolution_gen01-251.py
 
 Instructions:
-1. Read the current CSV file to see existing entries
-2. Add exactly $count new rows to the CSV file
+1. Use the Read tool to examine the current CSV file
+2. Use the Edit or MultiEdit tool to add exactly $count new rows to the CSV file
 3. Use the next available generation numbers (gen$CURRENT_GENERATION-XXX format)
 4. For each idea, create a row with: id,parent_id,description,,pending
 5. Each parent_id MUST be one of: $valid_parent_ids
 6. Each description should focus on adjusting specific parameters that exist in the parent's source code
 7. Include current and new parameter values (e.g., \"Lower rsi_entry from 21 to 18\")
 
-IMPORTANT: Edit the CSV file directly. Do not return or print CSV data - just modify the file in place."
+CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly."
 
+  # Change to evolution directory so AI can access files
+  local original_pwd=$(pwd)
+  cd "$FULL_EVOLUTION_DIR"
+  
   # Get AI to directly edit the CSV file
   local ai_response
-  local stderr_file="/tmp/claude-evolve-stderr-$$.txt"
+  local stderr_file="stderr-$$.txt"
   if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>"$stderr_file"); then
     echo "[ERROR] All AI models failed to generate hill climbing ideas" >&2
     cat "$stderr_file" >&2
+    cd "$original_pwd"
     rm -f "$temp_csv" "$stderr_file"
     return 1
   fi
   rm -f "$stderr_file"
+  
+  # Restore working directory
+  cd "$original_pwd"
   
   echo "[DEBUG] AI response: $ai_response" >&2
   
@@ -901,18 +944,22 @@ generate_structural_mutation_direct() {
   local count="$1"
   local top_performers="$2"
   
-  # Create temporary CSV copy
-  local temp_csv="/tmp/claude-evolve-temp-csv-$$.csv"
+  # Create temporary CSV copy in evolution directory (so AI can access it)
+  local temp_csv="$FULL_EVOLUTION_DIR/temp-csv-$$.csv"
   cp "$FULL_CSV_PATH" "$temp_csv"
   
   echo "[INFO] Generating $count structural mutation ideas..."
-  echo "[DEBUG] Original CSV has $(wc -l < "$FULL_CSV_PATH") lines" >&2
+  local data_rows=$(grep -v '^[[:space:]]*$' "$FULL_CSV_PATH" | tail -n +2 | wc -l)
+  echo "[DEBUG] Original CSV has $data_rows data rows" >&2
   
   # Extract just the IDs from top performers for clarity
   local valid_parent_ids
   valid_parent_ids=$(echo "$top_performers" | cut -d',' -f1 | paste -sd ',' -)
   
-  local prompt="Please add exactly $count structural modification ideas directly to the CSV file $temp_csv.
+  # Use relative paths and change to evolution directory so AI can access files
+  local temp_csv_basename=$(basename "$temp_csv")
+  
+  local prompt="I need you to use your file editing capabilities to add exactly $count structural modification ideas to the CSV file: $temp_csv_basename
 
 IMPORTANT: You MUST use one of these exact parent IDs: $valid_parent_ids
 
@@ -920,30 +967,38 @@ Successful algorithms to modify structurally:
 $top_performers
 
 CRITICAL INSTRUCTION: Before generating structural modification ideas, you MUST read the source code of the parent algorithms.
-Algorithm source files are located at: $FULL_OUTPUT_DIR/evolution_<PARENT_ID>.py
-For example: $FULL_OUTPUT_DIR/evolution_gen01-251.py
+Algorithm source files are located at: evolution_<PARENT_ID>.py
+For example: evolution_gen01-251.py
 
 Instructions:
-1. Read the current CSV file to see existing entries
-2. Add exactly $count new rows to the CSV file
+1. Use the Read tool to examine the current CSV file
+2. Use the Edit or MultiEdit tool to add exactly $count new rows to the CSV file
 3. Use the next available generation numbers (gen$CURRENT_GENERATION-XXX format)
 4. For each idea, create a row with: id,parent_id,description,,pending
 5. Each parent_id MUST be one of: $valid_parent_ids
 6. Each description should focus on architectural/structural changes based on the parent's actual code
 7. Reference actual components/methods found in the source code
 
-IMPORTANT: Edit the CSV file directly. Do not return or print CSV data - just modify the file in place."
+CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly."
 
+  # Change to evolution directory so AI can access files
+  local original_pwd=$(pwd)
+  cd "$FULL_EVOLUTION_DIR"
+  
   # Get AI to directly edit the CSV file
   local ai_response
-  local stderr_file="/tmp/claude-evolve-stderr-$$.txt"
+  local stderr_file="stderr-$$.txt"
   if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>"$stderr_file"); then
     echo "[ERROR] All AI models failed to generate structural mutation ideas" >&2
     cat "$stderr_file" >&2
+    cd "$original_pwd"
     rm -f "$temp_csv" "$stderr_file"
     return 1
   fi
   rm -f "$stderr_file"
+  
+  # Restore working directory
+  cd "$original_pwd"
   
   echo "[DEBUG] AI response: $ai_response" >&2
   
@@ -962,18 +1017,22 @@ generate_crossover_direct() {
   local count="$1"
   local top_performers="$2"
   
-  # Create temporary CSV copy
-  local temp_csv="/tmp/claude-evolve-temp-csv-$$.csv"
+  # Create temporary CSV copy in evolution directory (so AI can access it)
+  local temp_csv="$FULL_EVOLUTION_DIR/temp-csv-$$.csv"
   cp "$FULL_CSV_PATH" "$temp_csv"
   
   echo "[INFO] Generating $count crossover hybrid ideas..."
-  echo "[DEBUG] Original CSV has $(wc -l < "$FULL_CSV_PATH") lines" >&2
+  local data_rows=$(grep -v '^[[:space:]]*$' "$FULL_CSV_PATH" | tail -n +2 | wc -l)
+  echo "[DEBUG] Original CSV has $data_rows data rows" >&2
   
   # Extract just the IDs from top performers for clarity
   local valid_parent_ids
   valid_parent_ids=$(echo "$top_performers" | cut -d',' -f1 | paste -sd ',' -)
   
-  local prompt="Please add exactly $count hybrid combination ideas directly to the CSV file $temp_csv.
+  # Use relative paths and change to evolution directory so AI can access files
+  local temp_csv_basename=$(basename "$temp_csv")
+  
+  local prompt="I need you to use your file editing capabilities to add exactly $count hybrid combination ideas to the CSV file: $temp_csv_basename
 
 IMPORTANT: You MUST use ONLY these exact parent IDs: $valid_parent_ids
 
@@ -981,30 +1040,38 @@ Top performers to combine (reference at least 2 in each idea):
 $top_performers
 
 CRITICAL INSTRUCTION: Before generating hybrid combination ideas, you MUST read the source code of the parent algorithms.
-Algorithm source files are located at: $FULL_OUTPUT_DIR/evolution_<PARENT_ID>.py
-For example: $FULL_OUTPUT_DIR/evolution_gen01-251.py
+Algorithm source files are located at: evolution_<PARENT_ID>.py
+For example: evolution_gen01-251.py
 
 Instructions:
-1. Read the current CSV file to see existing entries
-2. Add exactly $count new rows to the CSV file
+1. Use the Read tool to examine the current CSV file
+2. Use the Edit or MultiEdit tool to add exactly $count new rows to the CSV file
 3. Use the next available generation numbers (gen$CURRENT_GENERATION-XXX format)
 4. For each idea, create a row with: id,parent_id,description,,pending
 5. Each parent_id MUST be one of: $valid_parent_ids (choose the primary parent)
 6. Each description should combine actual elements from 2+ algorithms based on their source code
 7. Reference specific components/features found in the actual source code
 
-IMPORTANT: Edit the CSV file directly. Do not return or print CSV data - just modify the file in place."
+CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly."
 
+  # Change to evolution directory so AI can access files
+  local original_pwd=$(pwd)
+  cd "$FULL_EVOLUTION_DIR"
+  
   # Get AI to directly edit the CSV file
   local ai_response
-  local stderr_file="/tmp/claude-evolve-stderr-$$.txt"
+  local stderr_file="stderr-$$.txt"
   if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>"$stderr_file"); then
     echo "[ERROR] All AI models failed to generate crossover hybrid ideas" >&2
     cat "$stderr_file" >&2
+    cd "$original_pwd"
     rm -f "$temp_csv" "$stderr_file"
     return 1
   fi
   rm -f "$stderr_file"
+  
+  # Restore working directory
+  cd "$original_pwd"
   
   echo "[DEBUG] AI response: $ai_response" >&2
   
@@ -1025,8 +1092,8 @@ ideate_ai_legacy() {
     exit 1
   fi
 
-  # Create temporary CSV copy
-  local temp_csv="/tmp/claude-evolve-temp-csv-$$.csv"
+  # Create temporary CSV copy in evolution directory (so AI can access it)
+  local temp_csv="$FULL_EVOLUTION_DIR/temp-csv-$$.csv"
   cp "$FULL_CSV_PATH" "$temp_csv"
   
   echo "[INFO] Generating $TOTAL_IDEAS ideas (legacy mode)..."
@@ -1040,15 +1107,18 @@ ideate_ai_legacy() {
   fi
 
   # Build prompt for direct CSV modification
-  local prompt="Please add exactly $TOTAL_IDEAS algorithmic ideas directly to the CSV file $temp_csv.
+  # Use relative paths and change to evolution directory so AI can access files
+  local temp_csv_basename=$(basename "$temp_csv")
+  
+  local prompt="I need you to use your file editing capabilities to add exactly $TOTAL_IDEAS algorithmic ideas to the CSV file: $temp_csv_basename
 
 Algorithm files for context:
-- Base algorithm: $FULL_ALGORITHM_PATH  
-- Evolved algorithms: $FULL_OUTPUT_DIR/evolution_*.py
+- Base algorithm: algorithm.py  
+- Evolved algorithms: evolution_*.py
 
 IMPORTANT: Before generating ideas, you should:
-1. Read the base algorithm to understand the codebase structure and possibilities
-2. Read ALL existing evolution_*.py files to see what modifications have been attempted
+1. Use the Read tool to examine the base algorithm to understand the codebase structure and possibilities
+2. Use the Read tool to examine ALL existing evolution_*.py files to see what modifications have been attempted
 3. Consider which approaches might work well
 
 Project Brief:
@@ -1064,8 +1134,8 @@ $top_performers"
   prompt+="
 
 Instructions:
-1. Read the current CSV file to see existing entries
-2. Add exactly $TOTAL_IDEAS new rows to the CSV file
+1. Use the Read tool to examine the current CSV file
+2. Use the Edit or MultiEdit tool to add exactly $TOTAL_IDEAS new rows to the CSV file
 3. Use the next available generation numbers (gen$CURRENT_GENERATION-XXX format)
 4. For each idea, create a row with: id,parent_id,description,,pending
 5. Mix both parameter tuning and structural changes
@@ -1083,18 +1153,26 @@ Instructions:
 - Time-Based Patterns: Intraday effects, calendar anomalies, volatility timing
 - Parameter Optimization: Entry thresholds, indicator periods, strategy weights
 
-IMPORTANT: Edit the CSV file directly. Do not return or print CSV data - just modify the file in place."
+CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly."
 
+  # Change to evolution directory so AI can access files
+  local original_pwd=$(pwd)
+  cd "$FULL_EVOLUTION_DIR"
+  
   # Get AI to directly edit the CSV file
   local ai_response
-  local stderr_file="/tmp/claude-evolve-stderr-$$.txt"
+  local stderr_file="stderr-$$.txt"
   if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>"$stderr_file"); then
     echo "[ERROR] All AI models failed to generate ideas" >&2
     cat "$stderr_file" >&2
+    cd "$original_pwd"
     rm -f "$temp_csv" "$stderr_file"
     return 1
   fi
   rm -f "$stderr_file"
+  
+  # Restore working directory
+  cd "$original_pwd"
   
   echo "[DEBUG] AI response: $ai_response" >&2
   

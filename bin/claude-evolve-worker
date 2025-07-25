@@ -79,6 +79,98 @@ else
   load_config
 fi
 
+# AI fallback function for code evolution
+call_ai_for_evolution() {
+  local prompt="$1"
+  
+  # Try Claude Sonnet first
+  echo "[WORKER-$$] Attempting code evolution with Claude Sonnet" >&2
+  local ai_output
+  ai_output=$(echo "$prompt" | claude --dangerously-skip-permissions -p 2>&1)
+  local ai_exit_code=$?
+  
+  # Check for usage limits
+  if echo "$ai_output" | grep -q "Claude AI usage limit reached"; then
+    echo "[WORKER-$$] ERROR: Claude AI usage limit reached!" >&2
+    echo "[WORKER-$$] ERROR: Cannot continue processing - API limits exceeded" >&2
+    # Exit with special code 3 to indicate API limit
+    exit 3
+  fi
+  
+  # If Claude succeeded, return success
+  if [[ $ai_exit_code -eq 0 ]]; then
+    echo "[WORKER-$$] Claude Sonnet succeeded" >&2
+    return 0
+  fi
+  
+  echo "[WORKER-$$] Claude Sonnet failed (exit code $ai_exit_code), trying Gemini" >&2
+  echo "[WORKER-$$] Claude error: $ai_output" >&2
+  
+  # Try Gemini if available
+  if command -v gemini >/dev/null 2>&1; then
+    echo "[WORKER-$$] Attempting code evolution with Gemini" >&2
+    ai_output=$(gemini -y -p "$prompt" 2>&1)
+    ai_exit_code=$?
+    
+    # Check for authentication messages or valid response
+    if [[ $ai_exit_code -eq 0 ]]; then
+      if ! echo "$ai_output" | grep -q "Attempting to authenticate\|Authenticating\|Loading\|Initializing"; then
+        if [[ -n "$ai_output" ]] && [[ $(echo "$ai_output" | wc -l) -ge 2 ]]; then
+          echo "[WORKER-$$] Gemini succeeded" >&2
+          return 0
+        fi
+      fi
+    fi
+    
+    echo "[WORKER-$$] Gemini failed (exit code $ai_exit_code), trying Codex" >&2
+    echo "[WORKER-$$] Gemini error: $ai_output" >&2
+  else
+    echo "[WORKER-$$] Gemini not available, trying Codex" >&2
+  fi
+  
+  # Try Codex (default model) if available
+  if command -v codex >/dev/null 2>&1; then
+    echo "[WORKER-$$] Attempting code evolution with Codex (default model)" >&2
+    ai_output=$(codex --full-auto -q "$prompt" 2>&1)
+    ai_exit_code=$?
+    
+    if [[ $ai_exit_code -eq 0 ]]; then
+      # Clean codex output if it's JSON
+      if echo "$ai_output" | grep -q '"content"'; then
+        ai_output=$(echo "$ai_output" | python3 -c "
+import sys
+import json
+try:
+    data = json.load(sys.stdin)
+    if 'content' in data:
+        print(data['content'])
+    elif 'response' in data:
+        print(data['response'])
+    elif 'text' in data:
+        print(data['text'])
+    else:
+        print(json.dumps(data))
+except:
+    print(sys.stdin.read())
+" 2>/dev/null || echo "$ai_output")
+      fi
+      
+      if [[ -n "$ai_output" ]] && ! echo "$ai_output" | grep -q "error\|failed\|exception"; then
+        echo "[WORKER-$$] Codex succeeded" >&2
+        return 0
+      fi
+    fi
+    
+    echo "[WORKER-$$] Codex failed (exit code $ai_exit_code)" >&2
+    echo "[WORKER-$$] Codex error: $ai_output" >&2
+  else
+    echo "[WORKER-$$] Codex not available" >&2
+  fi
+  
+  echo "[WORKER-$$] All AI models failed for code evolution" >&2
+  return 1
+}
+
 # Validate paths
 if [[ ! -f "$FULL_CSV_PATH" ]]; then
   echo "[WORKER-$$] CSV file not found: $FULL_CSV_PATH" >&2
@@ -153,34 +245,32 @@ with EvolutionCSV('$FULL_CSV_PATH') as csv:
     echo "[WORKER-$$] Copying $source_file to $target_file"
     cp "$source_file" "$target_file"
     
-    # Apply evolution using Claude
-    echo "[WORKER-$$] Applying evolution with Claude..."
-    local evolution_prompt="Modify the algorithm in $target_file based on this description: $description
+    # Apply evolution using AI
+    echo "[WORKER-$$] Applying evolution..."
+    
+    # Use relative path for AI prompt
+    local target_basename=$(basename "$target_file")
+    local evolution_prompt="Modify the algorithm in $target_basename based on this description: $description
     
 The modification should be substantial and follow the description exactly. Make sure the algorithm still follows all interface requirements and can run properly.
 
 Important: Make meaningful changes that match the description. Don't just add comments or make trivial adjustments."
     
     if [[ "$is_baseline" != "true" ]]; then
-      local claude_output
-      claude_output=$(echo "$evolution_prompt" | claude --dangerously-skip-permissions -p 2>&1)
-      local claude_exit_code=$?
+      # Change to evolution directory so AI can access files
+      local original_pwd=$(pwd)
+      cd "$FULL_EVOLUTION_DIR"
       
-      # Check for usage limits
-      if echo "$claude_output" | grep -q "Claude AI usage limit reached"; then
-        echo "[WORKER-$$] ERROR: Claude AI usage limit reached!" >&2
-        echo "[WORKER-$$] ERROR: Cannot continue processing - API limits exceeded" >&2
-        rm -f "$target_file"  # Clean up on failure
-        # Exit with special code 3 to indicate API limit
-        exit 3
-      fi
-      
-      if [[ $claude_exit_code -ne 0 ]]; then
-        echo "[WORKER-$$] ERROR: Claude evolution failed with exit code $claude_exit_code" >&2
-        echo "[WORKER-$$] ERROR: Claude output: $claude_output" >&2
+      # Try AI models with fallback: Claude Sonnet → Gemini → Codex
+      if ! call_ai_for_evolution "$evolution_prompt"; then
+        echo "[WORKER-$$] ERROR: All AI models failed to generate code" >&2
+        cd "$original_pwd"
         rm -f "$target_file"  # Clean up on failure
         return 1
       fi
+      
+      # Restore working directory
+      cd "$original_pwd"
       
       echo "[WORKER-$$] Evolution applied successfully"
     fi
@@ -188,7 +278,7 @@ Important: Make meaningful changes that match the description. Don't just add co
   
   # Run evaluation
   echo "[WORKER-$$] Evaluating algorithm..."
-  local eval_output_file="/tmp/claude-evolve-eval-$$-$candidate_id.out"
+  local eval_output_file="$FULL_EVOLUTION_DIR/temp-eval-$$-$candidate_id.out"
   local eval_start=$(date +%s)
   
   # Prepare evaluation command
