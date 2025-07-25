@@ -83,45 +83,14 @@ call_ai_with_limit_check() {
     
     # Call codex with o3 model using exec subcommand
     local ai_output
-    ai_output=$(echo "$prompt" | codex exec -m o3 --full-auto 2>&1)
+    # Pass prompt as argument, not via stdin
+    ai_output=$(timeout 300 codex exec -m o3 --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
     local ai_exit_code=$?
     
     if [[ $ai_exit_code -eq 0 ]]; then
-      # Clean o3 output - it may be JSON with the response in a field
-      local cleaned_output
-      # Try to extract content from JSON response if present
-      if echo "$ai_output" | grep -q '"content"'; then
-        # Attempt to extract content field from JSON
-        cleaned_output=$(echo "$ai_output" | python3 -c "
-import sys
-import json
-try:
-    data = json.load(sys.stdin)
-    if 'content' in data:
-        print(data['content'])
-    elif 'response' in data:
-        print(data['response'])
-    elif 'text' in data:
-        print(data['text'])
-    else:
-        # If no known field, print the whole thing
-        print(json.dumps(data))
-except:
-    # If not valid JSON, print as-is
-    print(sys.stdin.read())
-" 2>/dev/null || echo "$ai_output")
-      else
-        cleaned_output="$ai_output"
-      fi
-      
-      # Validate the output is not empty and doesn't contain error messages
-      if [[ -n "$cleaned_output" ]] && ! echo "$cleaned_output" | grep -q "error\|failed\|exception"; then
-        echo "$cleaned_output"
-        return 0
-      else
-        echo "[WARN] Codex o3 returned invalid output, falling back to Claude Opus" >&2
-        preferred_model="opus"
-      fi
+      # For ideation, AI modifies files directly - just return success
+      echo "[INFO] Codex o3 succeeded" >&2
+      return 0
     else
       echo "[WARN] Codex o3 failed with exit code $ai_exit_code, falling back to Claude Opus" >&2
       preferred_model="opus"
@@ -131,21 +100,13 @@ except:
     
     # Call gemini with -y and -p flags
     local ai_output
-    ai_output=$(gemini -y -p "$prompt" 2>&1)
+    ai_output=$(echo "$prompt" | timeout 300 gemini -y -p 2>&1)
     local ai_exit_code=$?
     
     if [[ $ai_exit_code -eq 0 ]]; then
-      # Check for authentication messages or other non-response content
-      if echo "$ai_output" | grep -q "Attempting to authenticate\|Authenticating\|Loading\|Initializing"; then
-        echo "[WARN] Gemini is still authenticating, falling back to Claude Opus" >&2
-        preferred_model="opus"
-      elif [[ -z "$ai_output" ]] || [[ $(echo "$ai_output" | wc -l) -lt 2 ]]; then
-        echo "[WARN] Gemini returned insufficient output, falling back to Claude Opus" >&2
-        preferred_model="opus"
-      else
-        echo "$ai_output"
-        return 0
-      fi
+      # For ideation, AI modifies files directly - just return success
+      echo "[INFO] Gemini succeeded" >&2
+      return 0
     else
       echo "[WARN] Gemini failed with exit code $ai_exit_code, falling back to Claude Opus" >&2
       preferred_model="opus"
@@ -157,7 +118,7 @@ except:
   
   # Call Claude and capture output
   local claude_output
-  claude_output=$(echo "$prompt" | claude --dangerously-skip-permissions --model "$preferred_model" -p 2>&1)
+  claude_output=$(echo "$prompt" | timeout 300 claude --dangerously-skip-permissions --model "$preferred_model" -p 2>&1)
   local claude_exit_code=$?
   
   # Check for usage limit
@@ -181,17 +142,13 @@ except:
     exit 1
   fi
   
-  # Validate output doesn't contain shell constructs that could corrupt CSV
-  if echo "$claude_output" | grep -E "EOF.*<.*null|<<.*EOF|<.*dev.*null" >/dev/null 2>&1; then
-    echo "[ERROR] AI output contains invalid shell constructs" >&2
-    echo "[DEBUG] Problematic output: $claude_output" | head -5 >&2
-    return 1
+  if [[ $claude_exit_code -eq 0 ]]; then
+    # For ideation, AI modifies files directly - just return success
+    echo "[INFO] Claude $preferred_model succeeded" >&2
+    return 0
+  else
+    return $claude_exit_code
   fi
-  
-  # Output Claude's response
-  echo "$claude_output"
-  
-  return $claude_exit_code
 }
 
 # Backward compatibility alias
@@ -243,47 +200,24 @@ call_ai_with_fallbacks() {
     local ai_exit_code
     
     if [[ "$model" == "o3" ]] && command -v codex >/dev/null 2>&1; then
-      ai_output=$(echo "$prompt" | codex exec -m o3 --full-auto 2>&1)
+      # Pass prompt as argument, not via stdin
+    ai_output=$(timeout 300 codex exec -m o3 --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       ai_exit_code=$?
       
       if [[ $ai_exit_code -eq 0 ]]; then
-        # Clean o3 output like in the original function
-        if echo "$ai_output" | grep -q '"content"'; then
-          ai_output=$(echo "$ai_output" | python3 -c "
-import sys
-import json
-try:
-    data = json.load(sys.stdin)
-    if 'content' in data:
-        print(data['content'])
-    elif 'response' in data:
-        print(data['response'])
-    elif 'text' in data:
-        print(data['text'])
-    else:
-        print(json.dumps(data))
-except:
-    print(sys.stdin.read())
-" 2>/dev/null || echo "$ai_output")
-        fi
-        
-        if [[ -n "$ai_output" ]] && ! echo "$ai_output" | grep -q "error\|failed\|exception"; then
-          echo "$ai_output"
-          return 0
-        fi
+        # For ideation, we don't care about output content - AI modifies files directly
+        echo "[INFO] o3 completed successfully (exit code 0)" >&2
+        return 0
       fi
       
     elif [[ "$model" == "gemini" ]] && command -v gemini >/dev/null 2>&1; then
-      ai_output=$(gemini -y -p "$prompt" 2>&1)
+      ai_output=$(echo "$prompt" | timeout 300 gemini -y -p 2>&1)
       ai_exit_code=$?
       
       if [[ $ai_exit_code -eq 0 ]]; then
-        if ! echo "$ai_output" | grep -q "Attempting to authenticate\|Authenticating\|Loading\|Initializing"; then
-          if [[ -n "$ai_output" ]] && [[ $(echo "$ai_output" | wc -l) -ge 2 ]]; then
-            echo "$ai_output"
-            return 0
-          fi
-        fi
+        # For ideation, we don't care about output content - AI modifies files directly
+        echo "[INFO] gemini completed successfully (exit code 0)" >&2
+        return 0
       fi
       
     else
@@ -293,16 +227,20 @@ except:
       
       if [[ $ai_exit_code -eq 0 ]]; then
         # Check for usage limits
-        if ! echo "$ai_output" | grep -q "Claude AI usage limit reached"; then
-          if ! echo "$ai_output" | grep -E "EOF.*<.*null|<<.*EOF|<.*dev.*null" >/dev/null 2>&1; then
-            echo "$ai_output"
-            return 0
-          fi
+        if echo "$ai_output" | grep -q "Claude AI usage limit reached"; then
+          echo "[INFO] Claude hit usage limit" >&2
+        else
+          # For ideation, we don't care about output content - AI modifies files directly
+          echo "[INFO] $model completed successfully (exit code 0)" >&2
+          return 0
         fi
       fi
     fi
     
     echo "[WARN] $model failed or returned unusable output, trying next model..." >&2
+    echo "[DEBUG] $model exit code: ${ai_exit_code:-unknown}" >&2
+    echo "[DEBUG] $model output length: ${#ai_output} chars" >&2
+    echo "[DEBUG] $model output preview: $(echo "$ai_output" | head -3 | tr '\n' ' ')" >&2
   done
   
   echo "[ERROR] All AI models failed to generate usable output" >&2
@@ -826,12 +764,13 @@ Current evolution context:
 
 Instructions:
 1. Use the Read tool to examine the current CSV file
-2. Use the Edit or MultiEdit tool to add exactly $count new rows to the CSV file
-3. Use the next available generation numbers (gen$CURRENT_GENERATION-XXX format)
-4. For each idea, create a row with: id,,description,,pending (empty parent_id for novel ideas)
-5. Each description should be one clear sentence describing a novel algorithmic approach
-6. Focus on creative, ambitious ideas that haven't been tried yet
-7. Consider machine learning, new indicators, regime detection, risk management, etc.
+2. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
+3. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001
+4. Use the Edit or MultiEdit tool to add exactly $count new rows to the CSV file
+5. For each idea, create a row with: id,,description,,pending (empty parent_id for novel ideas)
+6. Each description should be one clear sentence describing a novel algorithmic approach
+7. Focus on creative, ambitious ideas that haven't been tried yet
+8. Consider machine learning, new indicators, regime detection, risk management, etc.
 
 CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly."
 
@@ -844,7 +783,10 @@ CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CS
   local stderr_file="stderr-$$.txt"
   if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>"$stderr_file"); then
     echo "[ERROR] All AI models failed to generate novel ideas" >&2
+    echo "[DEBUG] Stderr output from AI calls:" >&2
     cat "$stderr_file" >&2
+    echo "[DEBUG] Temp CSV location: $temp_csv" >&2
+    echo "[DEBUG] Working directory: $(pwd)" >&2
     cd "$original_pwd"
     rm -f "$temp_csv" "$stderr_file"
     return 1
@@ -899,12 +841,13 @@ For example: evolution_gen01-251.py
 
 Instructions:
 1. Use the Read tool to examine the current CSV file
-2. Use the Edit or MultiEdit tool to add exactly $count new rows to the CSV file
-3. Use the next available generation numbers (gen$CURRENT_GENERATION-XXX format)
-4. For each idea, create a row with: id,parent_id,description,,pending
-5. Each parent_id MUST be one of: $valid_parent_ids
-6. Each description should focus on adjusting specific parameters that exist in the parent's source code
-7. Include current and new parameter values (e.g., \"Lower rsi_entry from 21 to 18\")
+2. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
+3. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001
+4. Use the Edit or MultiEdit tool to add exactly $count new rows to the CSV file
+5. For each idea, create a row with: id,parent_id,description,,pending
+6. Each parent_id MUST be one of: $valid_parent_ids
+7. Each description should focus on adjusting specific parameters that exist in the parent's source code
+8. Include current and new parameter values (e.g., \"Lower rsi_entry from 21 to 18\")
 
 CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly."
 
@@ -972,12 +915,13 @@ For example: evolution_gen01-251.py
 
 Instructions:
 1. Use the Read tool to examine the current CSV file
-2. Use the Edit or MultiEdit tool to add exactly $count new rows to the CSV file
-3. Use the next available generation numbers (gen$CURRENT_GENERATION-XXX format)
-4. For each idea, create a row with: id,parent_id,description,,pending
-5. Each parent_id MUST be one of: $valid_parent_ids
-6. Each description should focus on architectural/structural changes based on the parent's actual code
-7. Reference actual components/methods found in the source code
+2. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
+3. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001
+4. Use the Edit or MultiEdit tool to add exactly $count new rows to the CSV file
+5. For each idea, create a row with: id,parent_id,description,,pending
+6. Each parent_id MUST be one of: $valid_parent_ids
+7. Each description should focus on architectural/structural changes based on the parent's actual code
+8. Reference actual components/methods found in the source code
 
 CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly."
 
@@ -1045,12 +989,13 @@ For example: evolution_gen01-251.py
 
 Instructions:
 1. Use the Read tool to examine the current CSV file
-2. Use the Edit or MultiEdit tool to add exactly $count new rows to the CSV file
-3. Use the next available generation numbers (gen$CURRENT_GENERATION-XXX format)
-4. For each idea, create a row with: id,parent_id,description,,pending
-5. Each parent_id MUST be one of: $valid_parent_ids (choose the primary parent)
-6. Each description should combine actual elements from 2+ algorithms based on their source code
-7. Reference specific components/features found in the actual source code
+2. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
+3. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001
+4. Use the Edit or MultiEdit tool to add exactly $count new rows to the CSV file
+5. For each idea, create a row with: id,parent_id,description,,pending
+6. Each parent_id MUST be one of: $valid_parent_ids (choose the primary parent)
+7. Each description should combine actual elements from 2+ algorithms based on their source code
+8. Reference specific components/features found in the actual source code
 
 CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly."
 
@@ -1135,11 +1080,12 @@ $top_performers"
 
 Instructions:
 1. Use the Read tool to examine the current CSV file
-2. Use the Edit or MultiEdit tool to add exactly $TOTAL_IDEAS new rows to the CSV file
-3. Use the next available generation numbers (gen$CURRENT_GENERATION-XXX format)
-4. For each idea, create a row with: id,parent_id,description,,pending
-5. Mix both parameter tuning and structural changes
-6. If building on existing algorithms, use their ID as parent_id, otherwise leave parent_id empty
+2. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
+3. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001
+4. Use the Edit or MultiEdit tool to add exactly $TOTAL_IDEAS new rows to the CSV file
+5. For each idea, create a row with: id,parent_id,description,,pending
+6. Mix both parameter tuning and structural changes
+7. If building on existing algorithms, use their ID as parent_id, otherwise leave parent_id empty
 
 ⚠️ AVOID ONLY: Kelly floor/cap adjustments that assume leverage > 1.0 (these get clamped and have no effect)
 
