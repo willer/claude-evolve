@@ -1,6 +1,6 @@
 {
   "name": "claude-evolve",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "bin": {
     "claude-evolve": "./bin/claude-evolve",
     "claude-evolve-main": "./bin/claude-evolve-main",

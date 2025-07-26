@@ -100,7 +100,8 @@ call_ai_with_limit_check() {
     
     # Call gemini with -y and -p flags
     local ai_output
-    ai_output=$(echo "$prompt" | timeout 300 gemini -y -p 2>&1)
+    # Pass prompt as argument, not via stdin
+    ai_output=$(timeout 300 gemini -y -p "$prompt" 2>&1)
     local ai_exit_code=$?
     
     if [[ $ai_exit_code -eq 0 ]]; then
@@ -118,7 +119,8 @@ call_ai_with_limit_check() {
   
   # Call Claude and capture output
   local claude_output
-  claude_output=$(echo "$prompt" | timeout 300 claude --dangerously-skip-permissions --model "$preferred_model" -p 2>&1)
+  # Pass prompt as argument, not via stdin
+  claude_output=$(timeout 300 claude --dangerously-skip-permissions --model "$preferred_model" -p "$prompt" 2>&1)
   local claude_exit_code=$?
   
   # Check for usage limit
@@ -211,7 +213,8 @@ call_ai_with_fallbacks() {
       fi
       
     elif [[ "$model" == "gemini" ]] && command -v gemini >/dev/null 2>&1; then
-      ai_output=$(echo "$prompt" | timeout 300 gemini -y -p 2>&1)
+      # Pass prompt as argument, not via stdin
+      ai_output=$(timeout 300 gemini -y -p "$prompt" 2>&1)
       ai_exit_code=$?
       
       if [[ $ai_exit_code -eq 0 ]]; then
@@ -222,7 +225,8 @@ call_ai_with_fallbacks() {
       
     else
       # Use Claude with the specified model
-      ai_output=$(echo "$prompt" | claude --dangerously-skip-permissions --model "$model" -p 2>&1)
+      # Pass prompt as argument, not via stdin
+      ai_output=$(timeout 300 claude --dangerously-skip-permissions --model "$model" -p "$prompt" 2>&1)
       ai_exit_code=$?
       
       if [[ $ai_exit_code -eq 0 ]]; then
@@ -755,23 +759,25 @@ generate_novel_ideas_direct() {
   # Use relative paths and change to evolution directory so AI can access files
   local temp_csv_basename=$(basename "$temp_csv")
   
-  local prompt="I need you to use your file editing capabilities to add exactly $count novel algorithmic ideas to the CSV file: $temp_csv_basename
+  local prompt="I need you to use your file editing capabilities to APPEND exactly $count novel algorithmic ideas to the CSV file: $temp_csv_basename
 
 Current evolution context:
 - Generation: $CURRENT_GENERATION
 - Algorithm: algorithm.py (base algorithm)
 - Brief: $(head -20 "$FULL_BRIEF_PATH")
 
-Instructions:
+CRITICAL INSTRUCTIONS:
 1. Use the Read tool to examine the current CSV file
-2. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
-3. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001
-4. Use the Edit or MultiEdit tool to add exactly $count new rows to the CSV file
-5. For each idea, create a row with: id,,description,,pending (empty parent_id for novel ideas)
-6. Each description should be one clear sentence describing a novel algorithmic approach
-7. Focus on creative, ambitious ideas that haven't been tried yet
-8. Consider machine learning, new indicators, regime detection, risk management, etc.
+2. DO NOT DELETE OR REPLACE ANY EXISTING ROWS - YOU MUST PRESERVE ALL EXISTING DATA
+3. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
+4. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001
+5. Use the Edit or MultiEdit tool to APPEND exactly $count new rows AT THE END of the CSV file
+6. For each idea, create a row with: id,,description,,pending (empty parent_id for novel ideas)
+7. Each description should be one clear sentence describing a novel algorithmic approach
+8. Focus on creative, ambitious ideas that haven't been tried yet
+9. Consider machine learning, new indicators, regime detection, risk management, etc.
 
+IMPORTANT: You must APPEND new rows to the existing CSV file. DO NOT replace the file contents. All existing rows must remain unchanged.
 CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly."
 
   # Change to evolution directory so AI can access files
@@ -828,7 +834,7 @@ generate_hill_climbing_direct() {
   # Use relative paths and change to evolution directory so AI can access files
   local temp_csv_basename=$(basename "$temp_csv")
   
-  local prompt="I need you to use your file editing capabilities to add exactly $count parameter tuning ideas to the CSV file: $temp_csv_basename
+  local prompt="I need you to use your file editing capabilities to APPEND exactly $count parameter tuning ideas to the CSV file: $temp_csv_basename
 
 IMPORTANT: You MUST use one of these exact parent IDs: $valid_parent_ids
 
@@ -839,16 +845,18 @@ CRITICAL INSTRUCTION: Before generating parameter tuning ideas, you MUST read th
 Algorithm source files are located at: evolution_<PARENT_ID>.py
 For example: evolution_gen01-251.py
 
-Instructions:
+CRITICAL INSTRUCTIONS:
 1. Use the Read tool to examine the current CSV file
-2. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
-3. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001
-4. Use the Edit or MultiEdit tool to add exactly $count new rows to the CSV file
-5. For each idea, create a row with: id,parent_id,description,,pending
-6. Each parent_id MUST be one of: $valid_parent_ids
-7. Each description should focus on adjusting specific parameters that exist in the parent's source code
-8. Include current and new parameter values (e.g., \"Lower rsi_entry from 21 to 18\")
+2. DO NOT DELETE OR REPLACE ANY EXISTING ROWS - YOU MUST PRESERVE ALL EXISTING DATA
+3. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
+4. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001
+5. Use the Edit or MultiEdit tool to APPEND exactly $count new rows AT THE END of the CSV file
+6. For each idea, create a row with: id,parent_id,description,,pending
+7. Each parent_id MUST be one of: $valid_parent_ids
+8. Each description should focus on adjusting specific parameters that exist in the parent's source code
+9. Include current and new parameter values (e.g., \"Lower rsi_entry from 21 to 18\")
 
+IMPORTANT: You must APPEND new rows to the existing CSV file. DO NOT replace the file contents. All existing rows must remain unchanged.
 CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly."
 
   # Change to evolution directory so AI can access files
@@ -902,7 +910,7 @@ generate_structural_mutation_direct() {
   # Use relative paths and change to evolution directory so AI can access files
   local temp_csv_basename=$(basename "$temp_csv")
   
-  local prompt="I need you to use your file editing capabilities to add exactly $count structural modification ideas to the CSV file: $temp_csv_basename
+  local prompt="I need you to use your file editing capabilities to APPEND exactly $count structural modification ideas to the CSV file: $temp_csv_basename
 
 IMPORTANT: You MUST use one of these exact parent IDs: $valid_parent_ids
 
@@ -913,16 +921,18 @@ CRITICAL INSTRUCTION: Before generating structural modification ideas, you MUST 
 Algorithm source files are located at: evolution_<PARENT_ID>.py
 For example: evolution_gen01-251.py
 
-Instructions:
+CRITICAL INSTRUCTIONS:
 1. Use the Read tool to examine the current CSV file
-2. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
-3. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001
-4. Use the Edit or MultiEdit tool to add exactly $count new rows to the CSV file
-5. For each idea, create a row with: id,parent_id,description,,pending
-6. Each parent_id MUST be one of: $valid_parent_ids
-7. Each description should focus on architectural/structural changes based on the parent's actual code
-8. Reference actual components/methods found in the source code
+2. DO NOT DELETE OR REPLACE ANY EXISTING ROWS - YOU MUST PRESERVE ALL EXISTING DATA
+3. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
+4. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001
+5. Use the Edit or MultiEdit tool to APPEND exactly $count new rows AT THE END of the CSV file
+6. For each idea, create a row with: id,parent_id,description,,pending
+7. Each parent_id MUST be one of: $valid_parent_ids
+8. Each description should focus on architectural/structural changes based on the parent's actual code
+9. Reference actual components/methods found in the source code
 
+IMPORTANT: You must APPEND new rows to the existing CSV file. DO NOT replace the file contents. All existing rows must remain unchanged.
 CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly."
 
   # Change to evolution directory so AI can access files
@@ -976,7 +986,7 @@ generate_crossover_direct() {
   # Use relative paths and change to evolution directory so AI can access files
   local temp_csv_basename=$(basename "$temp_csv")
   
-  local prompt="I need you to use your file editing capabilities to add exactly $count hybrid combination ideas to the CSV file: $temp_csv_basename
+  local prompt="I need you to use your file editing capabilities to APPEND exactly $count hybrid combination ideas to the CSV file: $temp_csv_basename
 
 IMPORTANT: You MUST use ONLY these exact parent IDs: $valid_parent_ids
 
@@ -987,16 +997,18 @@ CRITICAL INSTRUCTION: Before generating hybrid combination ideas, you MUST read 
 Algorithm source files are located at: evolution_<PARENT_ID>.py
 For example: evolution_gen01-251.py
 
-Instructions:
+CRITICAL INSTRUCTIONS:
 1. Use the Read tool to examine the current CSV file
-2. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
-3. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001
-4. Use the Edit or MultiEdit tool to add exactly $count new rows to the CSV file
-5. For each idea, create a row with: id,parent_id,description,,pending
-6. Each parent_id MUST be one of: $valid_parent_ids (choose the primary parent)
-7. Each description should combine actual elements from 2+ algorithms based on their source code
-8. Reference specific components/features found in the actual source code
+2. DO NOT DELETE OR REPLACE ANY EXISTING ROWS - YOU MUST PRESERVE ALL EXISTING DATA
+3. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
+4. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001
+5. Use the Edit or MultiEdit tool to APPEND exactly $count new rows AT THE END of the CSV file
+6. For each idea, create a row with: id,parent_id,description,,pending
+7. Each parent_id MUST be one of: $valid_parent_ids (choose the primary parent)
+8. Each description should combine actual elements from 2+ algorithms based on their source code
+9. Reference specific components/features found in the actual source code
 
+IMPORTANT: You must APPEND new rows to the existing CSV file. DO NOT replace the file contents. All existing rows must remain unchanged.
 CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly."
 
   # Change to evolution directory so AI can access files
@@ -1078,14 +1090,15 @@ $top_performers"
 
   prompt+="
 
-Instructions:
+CRITICAL INSTRUCTIONS:
 1. Use the Read tool to examine the current CSV file
-2. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
-3. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001
-4. Use the Edit or MultiEdit tool to add exactly $TOTAL_IDEAS new rows to the CSV file
-5. For each idea, create a row with: id,parent_id,description,,pending
-6. Mix both parameter tuning and structural changes
-7. If building on existing algorithms, use their ID as parent_id, otherwise leave parent_id empty
+2. DO NOT DELETE OR REPLACE ANY EXISTING ROWS - YOU MUST PRESERVE ALL EXISTING DATA
+3. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
+4. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001
+5. Use the Edit or MultiEdit tool to APPEND exactly $TOTAL_IDEAS new rows AT THE END of the CSV file
+6. For each idea, create a row with: id,parent_id,description,,pending
+7. Mix both parameter tuning and structural changes
+8. If building on existing algorithms, use their ID as parent_id, otherwise leave parent_id empty
 
 ⚠️ AVOID ONLY: Kelly floor/cap adjustments that assume leverage > 1.0 (these get clamped and have no effect)
 
@@ -1099,6 +1112,7 @@ Instructions:
 - Time-Based Patterns: Intraday effects, calendar anomalies, volatility timing
 - Parameter Optimization: Entry thresholds, indicator periods, strategy weights
 
+IMPORTANT: You must APPEND new rows to the existing CSV file. DO NOT replace the file contents. All existing rows must remain unchanged.
 CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly."
 
   # Change to evolution directory so AI can access files
