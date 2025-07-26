@@ -764,7 +764,7 @@ generate_novel_ideas_direct() {
 Current evolution context:
 - Generation: $CURRENT_GENERATION
 - Algorithm: algorithm.py (base algorithm)
-- Brief: $(head -20 "$FULL_BRIEF_PATH")
+- Brief: $(head -5 "$FULL_BRIEF_PATH" 2>/dev/null | head -c 500 || echo "No brief file found")
 
 CRITICAL INSTRUCTIONS:
 1. Use the Read tool to examine the current CSV file
@@ -779,6 +779,17 @@ CRITICAL INSTRUCTIONS:
 
 IMPORTANT: You must APPEND new rows to the existing CSV file. DO NOT replace the file contents. All existing rows must remain unchanged.
 CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly."
+
+  # Debug prompt size and context
+  echo "[DEBUG] Novel ideas prompt length: ${#prompt} characters" >&2
+  echo "[DEBUG] Working dir: $(pwd)" >&2
+  echo "[DEBUG] Evolution dir: $FULL_EVOLUTION_DIR" >&2
+  echo "[DEBUG] Temp CSV: $temp_csv" >&2
+  if [[ -f "$temp_csv" ]]; then
+    echo "[DEBUG] Temp CSV exists, size: $(wc -l < "$temp_csv") lines" >&2
+  else
+    echo "[DEBUG] Temp CSV does not exist yet" >&2
+  fi
 
   # Change to evolution directory so AI can access files
   local original_pwd=$(pwd)
