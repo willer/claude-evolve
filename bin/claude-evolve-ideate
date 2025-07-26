@@ -954,25 +954,29 @@ CRITICAL INSTRUCTION: Before generating structural modification ideas, you MUST 
 Algorithm source files are located at: evolution_<PARENT_ID>.py
 For example: evolution_gen01-251.py
 
-CRITICAL INSTRUCTIONS:
-1. Use the Read tool to examine the current CSV file
-2. DO NOT DELETE OR REPLACE ANY EXISTING ROWS - YOU MUST PRESERVE ALL EXISTING DATA
-3. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
-4. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001
-5. Use the Edit or MultiEdit tool to APPEND exactly $count new rows AT THE END of the CSV file
-6. For each idea, create a row with: id,parent_id,description,,pending
-7. Each parent_id MUST be one of: $valid_parent_ids
-8. Each description should focus on architectural/structural changes based on the parent's actual code
-9. Reference actual components/methods found in the source code
+Generate exactly $count structural modification ideas for the successful algorithms.
 
-IMPORTANT: You must APPEND new rows to the existing CSV file. DO NOT replace the file contents. All existing rows must remain unchanged.
-CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly."
+You MUST output exactly $count lines of CSV data to be appended to the evolution tracking file.
+Each line should have this exact format: id,parent_id,description,,pending
+
+Requirements:
+1. Use IDs starting from gen$CURRENT_GENERATION-XXX (determine next available number)
+2. Each parent_id MUST be one of: $valid_parent_ids
+3. Each description should focus on architectural/structural changes based on the parent's actual code
+4. Reference actual components/methods found in the source code
+5. End each line with ,,pending (empty performance, status=pending)
+
+IMPORTANT: Output ONLY the CSV rows, no headers, no explanations, no markdown.
+Example output format:
+gen13-007,gen12-251,Replace RSI indicator with LSTM neural network for momentum prediction,,pending
+gen13-008,gen12-251,Add ensemble voting system to combine signals from all sub-strategies,,pending
+gen13-009,gen12-251,Implement hierarchical risk allocation based on strategy performance history,,pending"
 
   # Change to evolution directory so AI can access files
   local original_pwd=$(pwd)
   cd "$FULL_EVOLUTION_DIR"
   
-  # Get AI to directly edit the CSV file
+  # Get AI to generate CSV rows
   local ai_response
   local stderr_file="stderr-$$.txt"
   if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>"$stderr_file"); then
@@ -987,13 +991,16 @@ CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CS
   # Restore working directory
   cd "$original_pwd"
   
-  echo "[DEBUG] AI response: $ai_response" >&2
+  echo "[DEBUG] AI response received, processing CSV rows..." >&2
   
-  # Validate that the CSV file was actually modified
-  if ! validate_direct_csv_modification "$temp_csv" "$count" "structural"; then
+  # Process and append the CSV rows
+  if ! process_csv_output "$ai_response" "$temp_csv" "$count" "structural"; then
     rm -f "$temp_csv"
     return 1
   fi
+  
+  # Replace original CSV with modified version
+  mv "$temp_csv" "$FULL_CSV_PATH"
   
   echo "[INFO] Structural mutation ideas generated successfully"
   return 0
@@ -1030,25 +1037,29 @@ CRITICAL INSTRUCTION: Before generating hybrid combination ideas, you MUST read 
 Algorithm source files are located at: evolution_<PARENT_ID>.py
 For example: evolution_gen01-251.py
 
-CRITICAL INSTRUCTIONS:
-1. Use the Read tool to examine the current CSV file
-2. DO NOT DELETE OR REPLACE ANY EXISTING ROWS - YOU MUST PRESERVE ALL EXISTING DATA
-3. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
-4. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001
-5. Use the Edit or MultiEdit tool to APPEND exactly $count new rows AT THE END of the CSV file
-6. For each idea, create a row with: id,parent_id,description,,pending
-7. Each parent_id MUST be one of: $valid_parent_ids (choose the primary parent)
-8. Each description should combine actual elements from 2+ algorithms based on their source code
-9. Reference specific components/features found in the actual source code
+Generate exactly $count hybrid combination ideas from the successful algorithms.
 
-IMPORTANT: You must APPEND new rows to the existing CSV file. DO NOT replace the file contents. All existing rows must remain unchanged.
-CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly."
+You MUST output exactly $count lines of CSV data to be appended to the evolution tracking file.
+Each line should have this exact format: id,parent_id,description,,pending
+
+Requirements:
+1. Use IDs starting from gen$CURRENT_GENERATION-XXX (determine next available number)
+2. Each parent_id MUST be one of: $valid_parent_ids (choose the primary parent)
+3. Each description should combine actual elements from 2+ algorithms based on their source code
+4. Reference specific components/features found in the actual source code
+5. End each line with ,,pending (empty performance, status=pending)
+
+IMPORTANT: Output ONLY the CSV rows, no headers, no explanations, no markdown.
+Example output format:
+gen13-010,gen12-251,Combine VIX filter from gen12-251 with LSTM predictions from gen11-142,,pending
+gen13-011,gen12-251,Merge momentum signals from gen12-251 with regime detection from gen11-089,,pending
+gen13-012,gen12-251,Integrate position sizing from gen12-251 with ML features from gen11-205,,pending"
 
   # Change to evolution directory so AI can access files
   local original_pwd=$(pwd)
   cd "$FULL_EVOLUTION_DIR"
   
-  # Get AI to directly edit the CSV file
+  # Get AI to generate CSV rows
   local ai_response
   local stderr_file="stderr-$$.txt"
   if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>"$stderr_file"); then
@@ -1063,13 +1074,16 @@ CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CS
   # Restore working directory
   cd "$original_pwd"
   
-  echo "[DEBUG] AI response: $ai_response" >&2
+  echo "[DEBUG] AI response received, processing CSV rows..." >&2
   
-  # Validate that the CSV file was actually modified
-  if ! validate_direct_csv_modification "$temp_csv" "$count" "crossover"; then
+  # Process and append the CSV rows
+  if ! process_csv_output "$ai_response" "$temp_csv" "$count" "crossover"; then
     rm -f "$temp_csv"
     return 1
   fi
+  
+  # Replace original CSV with modified version
+  mv "$temp_csv" "$FULL_CSV_PATH"
   
   echo "[INFO] Crossover hybrid ideas generated successfully"
   return 0
@@ -1145,14 +1159,17 @@ CRITICAL INSTRUCTIONS:
 - Time-Based Patterns: Intraday effects, calendar anomalies, volatility timing
 - Parameter Optimization: Entry thresholds, indicator periods, strategy weights
 
-IMPORTANT: You must APPEND new rows to the existing CSV file. DO NOT replace the file contents. All existing rows must remain unchanged.
-CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly."
+Generate exactly $TOTAL_IDEAS lines of CSV data in this exact format:
+id,parent_id,description,,pending
+
+Use IDs starting from gen$CURRENT_GENERATION-XXX. If building on existing algorithms, use their ID as parent_id.
+IMPORTANT: Output ONLY the CSV rows, no headers, no explanations, no markdown."
 
   # Change to evolution directory so AI can access files
   local original_pwd=$(pwd)
   cd "$FULL_EVOLUTION_DIR"
   
-  # Get AI to directly edit the CSV file
+  # Get AI to generate CSV rows
   local ai_response
   local stderr_file="stderr-$$.txt"
   if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>"$stderr_file"); then
@@ -1167,13 +1184,16 @@ CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CS
   # Restore working directory
   cd "$original_pwd"
   
-  echo "[DEBUG] AI response: $ai_response" >&2
+  echo "[DEBUG] AI response received, processing CSV rows..." >&2
   
-  # Validate that the CSV file was actually modified
-  if ! validate_direct_csv_modification "$temp_csv" "$TOTAL_IDEAS" "mixed"; then
+  # Process and append the CSV rows
+  if ! process_csv_output "$ai_response" "$temp_csv" "$TOTAL_IDEAS" "legacy"; then
     rm -f "$temp_csv"
     return 1
   fi
+  
+  # Replace original CSV with modified version
+  mv "$temp_csv" "$FULL_CSV_PATH"
   
   echo "[INFO] Legacy ideas generated"
   return 0
