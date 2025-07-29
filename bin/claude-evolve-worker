@@ -5,6 +5,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 source "$SCRIPT_DIR/../lib/config.sh"
 source "$SCRIPT_DIR/../lib/csv-lock.sh"
+source "$SCRIPT_DIR/../lib/ai-cli.sh"
 
 # Track current candidate for cleanup
 CURRENT_CANDIDATE_ID=""
@@ -79,149 +80,6 @@ else
   load_config
 fi
 
-# Call an AI model with a prompt - handles model-specific invocation
-call_ai_model() {
-  local model="$1"
-  local prompt="$2"
-  local ai_output
-  local ai_exit_code
-  
-  case "$model" in
-    "claude")
-      # Pass prompt as argument, not via stdin
-      ai_output=$(timeout 300 claude --dangerously-skip-permissions -p "$prompt" 2>&1)
-      ai_exit_code=$?
-      ;;
-      
-    "gemini")
-      # Pass prompt as argument, not via stdin
-      ai_output=$(timeout 300 gemini -y -p "$prompt" 2>&1)
-      ai_exit_code=$?
-      ;;
-      
-    "codex")
-      # Pass prompt as argument, not via stdin
-      ai_output=$(timeout 300 codex exec --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
-      ai_exit_code=$?
-      ;;
-      
-    *)
-      echo "[WORKER-$$] ERROR: Unknown AI model: $model" >&2
-      return 1
-      ;;
-  esac
-  
-  # Return output via stdout
-  echo "$ai_output"
-  return $ai_exit_code
-}
-
-# Check if AI output indicates a usage limit was hit
-is_usage_limit_error() {
-  local output="$1"
-  local model="$2"
-  
-  case "$model" in
-    "claude")
-      echo "$output" | grep -q "Claude AI usage limit reached"
-      ;;
-    "gemini")
-      # Check for various Gemini quota/limit messages
-      echo "$output" | grep -qE "Quota exceeded|quota limit|rate limit|usage limit|429|Too Many Requests"
-      ;;
-    "codex")
-      # Add codex-specific limit patterns if they exist
-      false
-      ;;
-    *)
-      false
-      ;;
-  esac
-}
-
-# Validate if AI output is successful
-is_valid_ai_output() {
-  local output="$1"
-  local model="$2"
-  local exit_code="$3"
-  
-  # First check exit code
-  [[ $exit_code -ne 0 ]] && return 1
-  
-  # Model-specific validation
-  case "$model" in
-    "claude")
-      # Claude is straightforward - exit code 0 means success
-      return 0
-      ;;
-      
-    "gemini")
-      # Gemini needs extra validation for auth messages
-      if echo "$output" | grep -q "Attempting to authenticate\|Authenticating\|Loading\|Initializing"; then
-        return 1
-      fi
-      # Also check for minimal output
-      if [[ -z "$output" ]] || [[ $(echo "$output" | wc -l) -lt 2 ]]; then
-        return 1
-      fi
-      return 0
-      ;;
-      
-    "codex")
-      # Codex might return JSON that needs extraction
-      if echo "$output" | grep -q '"content"'; then
-        # Will be cleaned later, just check it's not an error
-        if echo "$output" | grep -q "error\|failed\|exception"; then
-          return 1
-        fi
-      fi
-      [[ -n "$output" ]]
-      ;;
-      
-    *)
-      return 1
-      ;;
-  esac
-}
-
-# Clean AI output if needed (e.g., extract from JSON)
-clean_ai_output() {
-  local output="$1"
-  local model="$2"
-  
-  case "$model" in
-    "codex")
-      # Clean codex output - extract content between "codex" marker and "tokens used"
-      if echo "$output" | grep -q "^\[.*\] codex$"; then
-        # Extract content between "codex" line and "tokens used" line
-        output=$(echo "$output" | awk '/\] codex$/{flag=1;next}/\] tokens used/{flag=0}flag')
-      elif echo "$output" | grep -q '"content"'; then
-        # Old JSON format
-        output=$(echo "$output" | python3 -c "
-import sys
-import json
-try:
-    data = json.load(sys.stdin)
-    if 'content' in data:
-        print(data['content'])
-    elif 'response' in data:
-        print(data['response'])
-    elif 'text' in data:
-        print(data['text'])
-    else:
-        print(json.dumps(data))
-except:
-    print(sys.stdin.read())
-" 2>/dev/null || echo "$output")
-      fi
-      # Trim whitespace
-      output=$(echo "$output" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-      ;;
-  esac
-  
-  echo "$output"
-}
-
 # AI round-robin with fallback function for code evolution
 call_ai_for_evolution() {
   local prompt="$1"
@@ -238,90 +96,26 @@ call_ai_for_evolution() {
   # Calculate hash for round-robin (combine generation and ID)
   local hash_value=$((gen_num * 1000 + id_num))
   
-  # Check which AI tools are available
-  local available_models=()
-  if command -v claude >/dev/null 2>&1; then
-    available_models+=("claude")
-  fi
-  if command -v gemini >/dev/null 2>&1; then
-    available_models+=("gemini")
-  fi
-  if command -v codex >/dev/null 2>&1; then
-    available_models+=("codex")
-  fi
+  # Use the centralized AI library for evolution (run command)
+  local ai_output
+  ai_output=$(call_ai_with_round_robin "$prompt" "run" "$hash_value")
+  local ai_exit_code=$?
   
-  if [[ ${#available_models[@]} -eq 0 ]]; then
-    echo "[WORKER-$$] ERROR: No AI models available!" >&2
-    return 1
-  fi
-  
-  # Create ordered list based on round-robin for this candidate
-  local num_models=${#available_models[@]}
-  local start_index=$((hash_value % num_models))
-  local models=()
-  
-  # Add models in round-robin order starting from the calculated index
-  for ((i=0; i<num_models; i++)); do
-    local idx=$(((start_index + i) % num_models))
-    models+=("${available_models[$idx]}")
-  done
-  
-  echo "[WORKER-$$] Model order for $candidate_id (round-robin): ${models[*]}" >&2
-  echo "[WORKER-$$] Available models: ${available_models[*]}" >&2
-  echo "[WORKER-$$] Number of models to try: ${#models[@]}" >&2
-  
-  # Track models that hit usage limits and models we tried
-  local limited_models=()
-  local tried_models=()
-  
-  # Try each model in the ordered sequence
-  for model in "${models[@]}"; do
-    echo "[WORKER-$$] Attempting code evolution with $model" >&2
-    tried_models+=("$model")
-    
-    # Call the AI model
-    local ai_output
-    ai_output=$(call_ai_model "$model" "$prompt")
-    local ai_exit_code=$?
-    
-    # Check for usage limits
-    if is_usage_limit_error "$ai_output" "$model"; then
-      echo "[WORKER-$$] $model hit usage limit - trying next model" >&2
-      limited_models+=("$model")
-      continue
-    fi
-    
-    # Validate output
-    if is_valid_ai_output "$ai_output" "$model" "$ai_exit_code"; then
-      # Clean output if needed
-      ai_output=$(clean_ai_output "$ai_output" "$model")
-      echo "[WORKER-$$] $model succeeded" >&2
-      # Output the cleaned result for the worker to use
-      echo "$ai_output"
-      return 0
-    fi
-    
-    echo "[WORKER-$$] $model failed (exit code $ai_exit_code), trying next model..." >&2
-    if [[ -n "$ai_output" ]]; then
-      echo "[WORKER-$$] $model error: $(echo "$ai_output" | head -5)" >&2
-    fi
-  done
-  
-  # All models have been tried
-  echo "[WORKER-$$] All AI models in rotation have been tried" >&2
-  
-  # Only exit with code 3 if ALL TRIED models hit usage limits
-  if [[ ${#limited_models[@]} -gt 0 ]] && [[ ${#limited_models[@]} -eq ${#tried_models[@]} ]]; then
-    echo "[WORKER-$$] All tried models hit usage limits: ${limited_models[*]}" >&2
+  # Handle special exit codes
+  if [[ $ai_exit_code -eq 3 ]]; then
+    echo "[WORKER-$$] All models hit usage limits" >&2
     echo "[WORKER-$$] Unable to complete evolution due to API limits" >&2
     exit 3
   fi
   
-  echo "[WORKER-$$] Models that failed: ${tried_models[*]}" >&2
-  if [[ ${#limited_models[@]} -gt 0 ]]; then
-    echo "[WORKER-$$] Models that hit limits: ${limited_models[*]}" >&2
+  if [[ $ai_exit_code -eq 0 ]]; then
+    echo "[WORKER-$$] AI succeeded" >&2
+    # Output the result for the worker to use
+    echo "$ai_output"
+    return 0
   fi
   
+  echo "[WORKER-$$] All AI models failed" >&2
   return 1
 }
 

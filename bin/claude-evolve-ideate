@@ -8,6 +8,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../lib/config.sh"
 # shellcheck source=../lib/csv-lock.sh
 source "$SCRIPT_DIR/../lib/csv-lock.sh"
+# shellcheck source=../lib/ai-cli.sh
+source "$SCRIPT_DIR/../lib/ai-cli.sh"
 
 # Use CLAUDE_EVOLVE_CONFIG if set, otherwise default
 if [[ -n ${CLAUDE_EVOLVE_CONFIG:-} ]]; then
@@ -16,144 +18,43 @@ else
   load_config
 fi
 
-# Function to determine which model to use based on generation
-get_model_for_generation() {
-  local generation="$1"
-  local gen_num
-  
-  # Extract numeric part of generation (e.g., "05" from gen05)
-  if [[ $generation =~ ^0*([0-9]+)$ ]]; then
-    gen_num=$((10#${BASH_REMATCH[1]}))
-  else
-    gen_num=1  # Default for malformed input
-  fi
-  
-  # Check which AI tools are available
-  local has_o3=false
-  local has_gemini=false
-  
-  if command -v codex >/dev/null 2>&1; then
-    has_o3=true
-  fi
-  
-  if command -v gemini >/dev/null 2>&1; then
-    has_gemini=true
-  fi
-  
-  # Determine rotation based on what's available
-  if [[ "$has_o3" == "true" && "$has_gemini" == "true" ]]; then
-    # All three available: opus -> o3 -> gemini rotation
-    case $((gen_num % 3)) in
-      1) echo "opus" ;;     # 1, 4, 7, 10...
-      2) echo "o3" ;;       # 2, 5, 8, 11...
-      0) echo "gemini" ;;   # 3, 6, 9, 12...
-    esac
-  elif [[ "$has_o3" == "true" ]]; then
-    # Only opus and o3: alternate between them
-    if (( gen_num % 2 == 1 )); then
-      echo "opus"    # Odd generations
-    else
-      echo "o3"      # Even generations
-    fi
-  elif [[ "$has_gemini" == "true" ]]; then
-    # Only opus and gemini: alternate between them
-    if (( gen_num % 2 == 1 )); then
-      echo "opus"    # Odd generations
-    else
-      echo "gemini" # Even generations
-    fi
-  else
-    # Only opus available
-    echo "opus"
-  fi
-}
-
-# Helper function to call AI model (alternating based on generation)
+# Helper function to call AI with limit check
 call_ai_with_limit_check() {
   local prompt="$1"
   local generation="${2:-01}"  # Default to generation 01 if not provided
   
-  # Determine which model to use for this generation
-  local preferred_model
-  preferred_model=$(get_model_for_generation "$generation")
-  
-  echo "[INFO] Generation $generation: Using $preferred_model" >&2
-  
-  # Try preferred model first
-  if [[ "$preferred_model" == "o3" ]] && command -v codex >/dev/null 2>&1; then
-    echo "[INFO] Using codex o3 for ideation" >&2
-    
-    # Call codex with o3 model using exec subcommand
-    local ai_output
-    # Pass prompt as argument, not via stdin
-    ai_output=$(timeout 300 codex exec -m o3 --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
-    local ai_exit_code=$?
-    
-    if [[ $ai_exit_code -eq 0 ]]; then
-      # For ideation, AI modifies files directly - just return success
-      echo "[INFO] Codex o3 succeeded" >&2
-      return 0
-    else
-      echo "[WARN] Codex o3 failed with exit code $ai_exit_code, falling back to Claude Opus" >&2
-      preferred_model="opus"
-    fi
-  elif [[ "$preferred_model" == "gemini" ]] && command -v gemini >/dev/null 2>&1; then
-    echo "[INFO] Using gemini 2.5 pro for ideation" >&2
-    
-    # Call gemini with -y and -p flags
-    local ai_output
-    # Pass prompt as argument, not via stdin
-    ai_output=$(timeout 300 gemini -y -p "$prompt" 2>&1)
-    local ai_exit_code=$?
-    
-    if [[ $ai_exit_code -eq 0 ]]; then
-      # For ideation, AI modifies files directly - just return success
-      echo "[INFO] Gemini succeeded" >&2
-      return 0
-    else
-      echo "[WARN] Gemini failed with exit code $ai_exit_code, falling back to Claude Opus" >&2
-      preferred_model="opus"
-    fi
+  # Calculate hash value for round-robin based on generation
+  local gen_num
+  if [[ $generation =~ ^0*([0-9]+)$ ]]; then
+    gen_num=$((10#${BASH_REMATCH[1]}))
+  else
+    gen_num=1
   fi
   
-  # Use Claude with preferred model (or fallback)
-  echo "[INFO] Using Claude $preferred_model for ideation" >&2
+  # Use centralized AI library for ideation
+  local ai_output
+  ai_output=$(call_ai_with_round_robin "$prompt" "ideate" "$gen_num")
+  local ai_exit_code=$?
   
-  # Call Claude and capture output
-  local claude_output
-  # Pass prompt as argument, not via stdin
-  claude_output=$(timeout 300 claude --dangerously-skip-permissions --model "$preferred_model" -p "$prompt" 2>&1)
-  local claude_exit_code=$?
-  
-  # Check for usage limit
-  if echo "$claude_output" | grep -q "Claude AI usage limit reached"; then
-    # Extract timestamp if available
-    local limit_timestamp=$(echo "$claude_output" | grep -o "Claude AI usage limit reached|[0-9]*" | cut -d'|' -f2)
-    
-    # Print red error message
-    echo -e "\033[31m[ERROR] CLAUDE AI USAGE LIMIT REACHED!\033[0m" >&2
+  # Handle special exit codes
+  if [[ $ai_exit_code -eq 3 ]]; then
+    # All models hit usage limits
+    echo -e "\033[31m[ERROR] ALL AI MODELS HIT USAGE LIMITS!\033[0m" >&2
     echo -e "\033[31m[ERROR] Ideation halted due to API rate limits.\033[0m" >&2
-    
-    if [[ -n $limit_timestamp ]]; then
-      # Convert timestamp to human-readable format
-      local limit_date=$(date -r "$limit_timestamp" "+%Y-%m-%d %H:%M:%S" 2>/dev/null || echo "Unknown time")
-      echo -e "\033[31m[ERROR] Limit will be released at: $limit_date\033[0m" >&2
-    fi
-    
-    echo -e "\033[33m[INFO] Please wait for the rate limit to reset before continuing.\033[0m" >&2
-    echo -e "\033[33m[INFO] No ideas were generated. Run ideate again when the limit resets.\033[0m" >&2
-    
+    echo -e "\033[33m[INFO] Please wait for the rate limits to reset before continuing.\033[0m" >&2
+    echo -e "\033[33m[INFO] No ideas were generated. Run ideate again when the limits reset.\033[0m" >&2
     exit 1
   fi
   
-  if [[ $claude_exit_code -eq 0 ]]; then
+  if [[ $ai_exit_code -eq 0 ]]; then
     # For ideation, AI modifies files directly - just return success
-    echo "[INFO] Claude $preferred_model succeeded" >&2
+    echo "[INFO] AI succeeded" >&2
     return 0
   else
-    return $claude_exit_code
+    return $ai_exit_code
   fi
 }
+
 
 # Backward compatibility alias
 call_claude_with_limit_check() {
@@ -166,36 +67,13 @@ call_ai_with_fallbacks() {
   local generation="${2:-01}"
   local expected_count="${3:-1}"  # Number of ideas expected to be added
   
-  # Determine which model to use based on generation (round-robin)
+  # Calculate hash value for round-robin based on generation
   local gen_num
   if [[ $generation =~ ^0*([0-9]+)$ ]]; then
     gen_num=$((10#${BASH_REMATCH[1]}))
   else
     gen_num=1
   fi
-  
-  # Check which AI tools are available
-  local available_models=()
-  if command -v codex >/dev/null 2>&1; then
-    available_models+=("o3")
-  fi
-  if command -v gemini >/dev/null 2>&1; then
-    available_models+=("gemini")
-  fi
-  available_models+=("opus")  # Claude Opus always available
-  
-  # Create ordered list based on round-robin for this generation
-  local num_models=${#available_models[@]}
-  local start_index=$((gen_num % num_models))
-  local models=()
-  
-  # Add models in round-robin order starting from the calculated index
-  for ((i=0; i<num_models; i++)); do
-    local idx=$(((start_index + i) % num_models))
-    models+=("${available_models[$idx]}")
-  done
-  
-  echo "[INFO] Model order for generation $generation (round-robin): ${models[*]}" >&2
   
   # Get the current row count before any modifications
   local original_csv_count
@@ -205,59 +83,35 @@ call_ai_with_fallbacks() {
     original_csv_count=0
   fi
   
-  # Try each model in the ordered sequence
-  for model in "${models[@]}"; do
-    echo "[INFO] Trying $model for ideation" >&2
-    
-    local ai_output
-    local ai_exit_code
-    
-    if [[ "$model" == "o3" ]] && command -v codex >/dev/null 2>&1; then
-      # Pass prompt as argument, not via stdin
-      ai_output=$(timeout 300 codex exec -m o3 --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
-      ai_exit_code=$?
+  # Use centralized AI library
+  local ai_output
+  ai_output=$(call_ai_with_round_robin "$prompt" "ideate" "$gen_num")
+  local ai_exit_code=$?
+  
+  # Handle special exit codes
+  if [[ $ai_exit_code -eq 3 ]]; then
+    echo "[ERROR] All AI models hit usage limits" >&2
+    return 1
+  fi
+  
+  if [[ $ai_exit_code -eq 0 ]]; then
+    # For ideation, we need to verify the CSV file was actually modified
+    if [[ -f temp-csv-$$.csv ]]; then
+      local new_csv_count
+      new_csv_count=$(grep -v '^[[:space:]]*$' "temp-csv-$$.csv" | tail -n +2 | wc -l)
       
-    elif [[ "$model" == "gemini" ]] && command -v gemini >/dev/null 2>&1; then
-      # Pass prompt as argument, not via stdin
-      ai_output=$(timeout 300 gemini -y -p "$prompt" 2>&1)
-      ai_exit_code=$?
-      
-    else
-      # Use Claude with the specified model
-      # Pass prompt as argument, not via stdin
-      ai_output=$(timeout 300 claude --dangerously-skip-permissions --model "$model" -p "$prompt" 2>&1)
-      ai_exit_code=$?
-      
-      # Check for usage limits first
-      if echo "$ai_output" | grep -q "Claude AI usage limit reached"; then
-        echo "[INFO] Claude hit usage limit, trying next model" >&2
-        continue
-      fi
-    fi
-    
-    # Check exit code first
-    if [[ $ai_exit_code -eq 0 ]]; then
-      # For ideation, we need to verify the CSV file was actually modified
-      if [[ -f temp-csv-$$.csv ]]; then
-        local new_csv_count
-        new_csv_count=$(grep -v '^[[:space:]]*$' "temp-csv-$$.csv" | tail -n +2 | wc -l)
-        
-        if [[ $new_csv_count -gt $original_csv_count ]]; then
-          echo "[INFO] $model completed successfully and modified CSV ($new_csv_count vs $original_csv_count rows)" >&2
-          return 0
-        else
-          echo "[WARN] $model returned exit code 0 but didn't modify CSV file, trying next model" >&2
-        fi
+      if [[ $new_csv_count -gt $original_csv_count ]]; then
+        echo "[INFO] AI completed successfully and modified CSV ($new_csv_count vs $original_csv_count rows)" >&2
+        return 0
       else
-        echo "[WARN] $model returned exit code 0 but temp CSV file not found, trying next model" >&2
+        echo "[WARN] AI returned exit code 0 but didn't modify CSV file" >&2
+        return 1
       fi
+    else
+      echo "[WARN] AI returned exit code 0 but temp CSV file not found" >&2
+      return 1
     fi
-    
-    echo "[WARN] $model failed or returned unusable output, trying next model..." >&2
-    echo "[DEBUG] $model exit code: ${ai_exit_code:-unknown}" >&2
-    echo "[DEBUG] $model output length: ${#ai_output} chars" >&2
-    echo "[DEBUG] $model output preview: $(echo "$ai_output" | head -3 | tr '\n' ' ')" >&2
-  done
+  fi
   
   echo "[ERROR] All AI models failed to generate usable output" >&2
   return 1

@@ -49,6 +49,18 @@ DEFAULT_AUTO_IDEATE=true
 # Default retry value
 DEFAULT_MAX_RETRIES=3
 
+# Default LLM CLI configuration (using eval for compatibility)
+declare -a DEFAULT_LLM_CLI_KEYS
+declare -a DEFAULT_LLM_CLI_VALUES
+DEFAULT_LLM_CLI_KEYS=(o3 codex gemini opus sonnet)
+DEFAULT_LLM_CLI_VALUES[0]='codex exec -m o3 --dangerously-bypass-approvals-and-sandbox "$PROMPT"'
+DEFAULT_LLM_CLI_VALUES[1]='codex exec --dangerously-bypass-approvals-and-sandbox "$PROMPT"'
+DEFAULT_LLM_CLI_VALUES[2]='gemini -y -p "$PROMPT"'
+DEFAULT_LLM_CLI_VALUES[3]='claude --dangerously-skip-permissions --model opus -p "$PROMPT"'
+DEFAULT_LLM_CLI_VALUES[4]='claude --dangerously-skip-permissions --model sonnet -p "$PROMPT"'
+DEFAULT_LLM_RUN="sonnet gemini codex"
+DEFAULT_LLM_IDEATE="opus gemini o3"
+
 # Load configuration from config file
 load_config() {
   # Accept config file path as parameter
@@ -84,12 +96,25 @@ load_config() {
   # Set retry default
   MAX_RETRIES="$DEFAULT_MAX_RETRIES"
   
+  # Set LLM CLI defaults (compatibility for older bash)
+  # Initialize associative array for LLM commands
+  # Use simpler approach for compatibility
+  LLM_CLI_o3='codex exec -m o3 --dangerously-bypass-approvals-and-sandbox "$PROMPT"'
+  LLM_CLI_codex='codex exec --dangerously-bypass-approvals-and-sandbox "$PROMPT"'
+  LLM_CLI_gemini='gemini -y -p "$PROMPT"'
+  LLM_CLI_opus='claude --dangerously-skip-permissions --model opus -p "$PROMPT"'
+  LLM_CLI_sonnet='claude --dangerously-skip-permissions --model sonnet -p "$PROMPT"'
+  LLM_RUN="$DEFAULT_LLM_RUN"
+  LLM_IDEATE="$DEFAULT_LLM_IDEATE"
+  
   # Load config if found
   if [[ -f "$config_file" ]]; then
     echo "[DEBUG] Loading configuration from: $config_file" >&2
     # Simple YAML parsing for key: value pairs and nested structures
     local in_ideation_section=false
     local in_parallel_section=false
+    local in_llm_cli_section=false
+    local llm_cli_subsection=""
     while IFS='' read -r line; do
       # Skip comments and empty lines
       [[ $line =~ ^[[:space:]]*# ]] || [[ -z $line ]] && continue
@@ -120,15 +145,25 @@ load_config() {
       if [[ $key == "ideation_strategies" ]]; then
         in_ideation_section=true
         in_parallel_section=false
+        in_llm_cli_section=false
         continue
       elif [[ $key == "parallel" ]]; then
         in_parallel_section=true
         in_ideation_section=false
+        in_llm_cli_section=false
         continue
-      elif [[ $is_indented == false ]] && [[ $in_ideation_section == true || $in_parallel_section == true ]]; then
+      elif [[ $key == "llm_cli" ]]; then
+        in_llm_cli_section=true
+        in_ideation_section=false
+        in_parallel_section=false
+        llm_cli_subsection=""
+        continue
+      elif [[ $is_indented == false ]] && [[ $in_ideation_section == true || $in_parallel_section == true || $in_llm_cli_section == true ]]; then
         # Non-indented key found while in a section, exit nested sections
         in_ideation_section=false
         in_parallel_section=false
+        in_llm_cli_section=false
+        llm_cli_subsection=""
       fi
       
       if [[ $in_ideation_section == true ]]; then
@@ -149,6 +184,22 @@ load_config() {
           max_workers) MAX_WORKERS="$value" ;;
           lock_timeout) LOCK_TIMEOUT="$value" ;;
         esac
+      elif [[ $in_llm_cli_section == true ]]; then
+        # Handle indented keys in llm_cli section
+        # Check if this is a model definition (o3, codex, gemini, etc.) or a command list (run, ideate)
+        if [[ $key == "run" || $key == "ideate" ]]; then
+          # Command list - value is a space-separated list of models
+          case $key in
+            run) LLM_RUN="$value" ;;
+            ideate) LLM_IDEATE="$value" ;;
+          esac
+        else
+          # Model definition - key is model name, value is command template
+          # Remove single quotes from value if present
+          value=$(echo "$value" | sed "s/^'//;s/'$//")
+          # Use dynamic variable name for compatibility
+          eval "LLM_CLI_${key}=\"$value\""
+        fi
       else
         # Handle top-level keys
         case $key in
@@ -256,4 +307,14 @@ show_config() {
   echo "  Lock timeout: $LOCK_TIMEOUT"
   echo "  Auto ideate: $AUTO_IDEATE"
   echo "  Max retries: $MAX_RETRIES"
+  echo "  LLM configuration:"
+  # Show LLM configurations using dynamic variable names
+  for model in o3 codex gemini opus sonnet; do
+    var_name="LLM_CLI_${model}"
+    if [[ -n "${!var_name}" ]]; then
+      echo "    $model: ${!var_name}"
+    fi
+  done
+  echo "  LLM for run: $LLM_RUN"
+  echo "  LLM for ideate: $LLM_IDEATE"
 }
