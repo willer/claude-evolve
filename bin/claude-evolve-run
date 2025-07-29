@@ -518,6 +518,10 @@ while true; do
       
       # Generate new ideas using the multi-strategy approach
       echo "[DISPATCHER] Calling claude-evolve-ideate to generate new candidates..."
+      # Export config path for ideate script
+      if [[ -n $WORKER_CONFIG_PATH ]]; then
+        export CLAUDE_EVOLVE_CONFIG="$WORKER_CONFIG_PATH"
+      fi
       if ! "$ideate_script"; then
         echo "[ERROR] Failed to generate new ideas" >&2
         echo "[DISPATCHER] Evolution complete - ideation failed."

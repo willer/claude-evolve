@@ -126,7 +126,8 @@ is_usage_limit_error() {
       echo "$output" | grep -q "Claude AI usage limit reached"
       ;;
     "gemini")
-      echo "$output" | grep -q "Quota exceeded.*Gemini"
+      # Check for various Gemini quota/limit messages
+      echo "$output" | grep -qE "Quota exceeded|quota limit|rate limit|usage limit|429|Too Many Requests"
       ;;
     "codex")
       # Add codex-specific limit patterns if they exist
@@ -266,14 +267,17 @@ call_ai_for_evolution() {
   done
   
   echo "[WORKER-$$] Model order for $candidate_id (round-robin): ${models[*]}" >&2
+  echo "[WORKER-$$] Available models: ${available_models[*]}" >&2
+  echo "[WORKER-$$] Number of models to try: ${#models[@]}" >&2
   
-  # Track if any model hit usage limits
-  local hit_usage_limit=false
+  # Track models that hit usage limits and models we tried
   local limited_models=()
+  local tried_models=()
   
   # Try each model in the ordered sequence
   for model in "${models[@]}"; do
     echo "[WORKER-$$] Attempting code evolution with $model" >&2
+    tried_models+=("$model")
     
     # Call the AI model
     local ai_output
@@ -283,7 +287,6 @@ call_ai_for_evolution() {
     # Check for usage limits
     if is_usage_limit_error "$ai_output" "$model"; then
       echo "[WORKER-$$] $model hit usage limit - trying next model" >&2
-      hit_usage_limit=true
       limited_models+=("$model")
       continue
     fi
@@ -305,13 +308,18 @@ call_ai_for_evolution() {
   done
   
   # All models have been tried
-  echo "[WORKER-$$] All AI models failed for code evolution" >&2
+  echo "[WORKER-$$] All AI models in rotation have been tried" >&2
   
-  # If any model hit usage limits and we couldn't complete the task
-  if [[ "$hit_usage_limit" == "true" ]]; then
-    echo "[WORKER-$$] Models hit usage limits: ${limited_models[*]}" >&2
+  # Only exit with code 3 if ALL TRIED models hit usage limits
+  if [[ ${#limited_models[@]} -gt 0 ]] && [[ ${#limited_models[@]} -eq ${#tried_models[@]} ]]; then
+    echo "[WORKER-$$] All tried models hit usage limits: ${limited_models[*]}" >&2
     echo "[WORKER-$$] Unable to complete evolution due to API limits" >&2
     exit 3
+  fi
+  
+  echo "[WORKER-$$] Models that failed: ${tried_models[*]}" >&2
+  if [[ ${#limited_models[@]} -gt 0 ]]; then
+    echo "[WORKER-$$] Models that hit limits: ${limited_models[*]}" >&2
   fi
   
   return 1
@@ -400,7 +408,9 @@ with EvolutionCSV('$FULL_CSV_PATH') as csv:
     
 The modification should be substantial and follow the description exactly. Make sure the algorithm still follows all interface requirements and can run properly.
 
-Important: Make meaningful changes that match the description. Don't just add comments or make trivial adjustments."
+Important: Make meaningful changes that match the description. Don't just add comments or make trivial adjustments.
+
+CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). Only modify the file directly."
     
     if [[ "$is_baseline" != "true" ]]; then
       # Change to evolution directory so AI can access files

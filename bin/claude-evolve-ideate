@@ -6,6 +6,8 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/config.sh
 source "$SCRIPT_DIR/../lib/config.sh"
+# shellcheck source=../lib/csv-lock.sh
+source "$SCRIPT_DIR/../lib/csv-lock.sh"
 
 # Use CLAUDE_EVOLVE_CONFIG if set, otherwise default
 if [[ -n ${CLAUDE_EVOLVE_CONFIG:-} ]]; then
@@ -162,6 +164,7 @@ call_claude_with_limit_check() {
 call_ai_with_fallbacks() {
   local prompt="$1"
   local generation="${2:-01}"
+  local expected_count="${3:-1}"  # Number of ideas expected to be added
   
   # Determine which model to use based on generation (round-robin)
   local gen_num
@@ -194,6 +197,14 @@ call_ai_with_fallbacks() {
   
   echo "[INFO] Model order for generation $generation (round-robin): ${models[*]}" >&2
   
+  # Get the current row count before any modifications
+  local original_csv_count
+  if [[ -f temp-csv-$$.csv ]]; then
+    original_csv_count=$(grep -v '^[[:space:]]*$' "temp-csv-$$.csv" | tail -n +2 | wc -l)
+  else
+    original_csv_count=0
+  fi
+  
   # Try each model in the ordered sequence
   for model in "${models[@]}"; do
     echo "[INFO] Trying $model for ideation" >&2
@@ -203,25 +214,13 @@ call_ai_with_fallbacks() {
     
     if [[ "$model" == "o3" ]] && command -v codex >/dev/null 2>&1; then
       # Pass prompt as argument, not via stdin
-    ai_output=$(timeout 300 codex exec -m o3 --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      ai_output=$(timeout 300 codex exec -m o3 --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       ai_exit_code=$?
-      
-      if [[ $ai_exit_code -eq 0 ]]; then
-        # For ideation, we don't care about output content - AI modifies files directly
-        echo "[INFO] o3 completed successfully (exit code 0)" >&2
-        return 0
-      fi
       
     elif [[ "$model" == "gemini" ]] && command -v gemini >/dev/null 2>&1; then
       # Pass prompt as argument, not via stdin
       ai_output=$(timeout 300 gemini -y -p "$prompt" 2>&1)
       ai_exit_code=$?
-      
-      if [[ $ai_exit_code -eq 0 ]]; then
-        # For ideation, we don't care about output content - AI modifies files directly
-        echo "[INFO] gemini completed successfully (exit code 0)" >&2
-        return 0
-      fi
       
     else
       # Use Claude with the specified model
@@ -229,15 +228,28 @@ call_ai_with_fallbacks() {
       ai_output=$(timeout 300 claude --dangerously-skip-permissions --model "$model" -p "$prompt" 2>&1)
       ai_exit_code=$?
       
-      if [[ $ai_exit_code -eq 0 ]]; then
-        # Check for usage limits
-        if echo "$ai_output" | grep -q "Claude AI usage limit reached"; then
-          echo "[INFO] Claude hit usage limit" >&2
-        else
-          # For ideation, we don't care about output content - AI modifies files directly
-          echo "[INFO] $model completed successfully (exit code 0)" >&2
+      # Check for usage limits first
+      if echo "$ai_output" | grep -q "Claude AI usage limit reached"; then
+        echo "[INFO] Claude hit usage limit, trying next model" >&2
+        continue
+      fi
+    fi
+    
+    # Check exit code first
+    if [[ $ai_exit_code -eq 0 ]]; then
+      # For ideation, we need to verify the CSV file was actually modified
+      if [[ -f temp-csv-$$.csv ]]; then
+        local new_csv_count
+        new_csv_count=$(grep -v '^[[:space:]]*$' "temp-csv-$$.csv" | tail -n +2 | wc -l)
+        
+        if [[ $new_csv_count -gt $original_csv_count ]]; then
+          echo "[INFO] $model completed successfully and modified CSV ($new_csv_count vs $original_csv_count rows)" >&2
           return 0
+        else
+          echo "[WARN] $model returned exit code 0 but didn't modify CSV file, trying next model" >&2
         fi
+      else
+        echo "[WARN] $model returned exit code 0 but temp CSV file not found, trying next model" >&2
       fi
     fi
     
@@ -317,16 +329,15 @@ if [[ $use_strategies == true ]]; then
   fi
 fi
 
-# Get next generation number
+# Get next generation number that doesn't have existing Python files
 get_next_generation() {
-  if [[ ! -f "$FULL_CSV_PATH" ]]; then
-    echo "01"
-    return
-  fi
+  # Start with generation 1 if no CSV exists
+  local start_gen=1
   
-  # Use Python for proper CSV parsing
-  local max_gen
-  max_gen=$("$PYTHON_CMD" -c "
+  if [[ -f "$FULL_CSV_PATH" ]]; then
+    # Use Python for proper CSV parsing to find max generation
+    local max_gen
+    max_gen=$("$PYTHON_CMD" -c "
 import csv
 max_gen = 0
 with open('$FULL_CSV_PATH', 'r') as f:
@@ -344,9 +355,36 @@ with open('$FULL_CSV_PATH', 'r') as f:
                     pass
 print(max_gen)
 ")
+    # Start checking from the next generation after max
+    start_gen=$((max_gen + 1))
+  fi
   
-  # Increment and format with leading zero
-  printf "%02d" $((max_gen + 1))
+  # Keep incrementing until we find a generation with no Python files
+  local candidate_gen=$start_gen
+  while true; do
+    local gen_formatted=$(printf "%02d" $candidate_gen)
+    
+    # Check if any Python files exist for this generation
+    local py_files_exist=false
+    if ls "$FULL_OUTPUT_DIR"/evolution_gen${gen_formatted}-*.py >/dev/null 2>&1; then
+      py_files_exist=true
+    fi
+    
+    if [[ "$py_files_exist" == "false" ]]; then
+      # This generation is safe to use
+      echo "$gen_formatted"
+      return
+    else
+      echo "[WARN] Generation $gen_formatted already has Python files, skipping to next generation" >&2
+      candidate_gen=$((candidate_gen + 1))
+      
+      # Safety check to prevent infinite loop
+      if [[ $candidate_gen -gt 999 ]]; then
+        echo "[ERROR] Could not find a safe generation number (checked up to 999)" >&2
+        exit 1
+      fi
+    fi
+  done
 }
 
 # This function is no longer used with direct CSV modification approach
@@ -381,31 +419,64 @@ validate_direct_csv_modification() {
     return 1
   fi
   
-  # Validate the modified CSV has more entries than original
-  # Count actual data rows (excluding header and empty lines)
-  local original_count
-  original_count=$(grep -v '^[[:space:]]*$' "$FULL_CSV_PATH" | tail -n +2 | wc -l)
+  # Get the count before modification from the temp CSV (which was copied from original before AI ran)
+  # We need to track this before the AI runs by reading from the beginning state
+  # First, get a fresh count from the current main CSV (which reflects any previous operations in this session)
+  local current_original_count
+  current_original_count=$(grep -v '^[[:space:]]*$' "$FULL_CSV_PATH" | tail -n +2 | wc -l)
+  
+  # Count data rows in the modified temp CSV
   local new_count
   new_count=$(grep -v '^[[:space:]]*$' "$temp_csv" | tail -n +2 | wc -l)
   
-  echo "[DEBUG] Original CSV data rows: $original_count" >&2
-  echo "[DEBUG] Modified CSV data rows: $new_count" >&2
+  echo "[DEBUG] Current main CSV data rows: $current_original_count" >&2
+  echo "[DEBUG] Modified temp CSV data rows: $new_count" >&2
   echo "[DEBUG] Expected to add: $expected_count ideas" >&2
   
-  if [[ $new_count -le $original_count ]]; then
-    echo "[ERROR] CSV file wasn't modified - same number of data rows ($new_count <= $original_count)" >&2
+  # Check if AI overwrote the file instead of appending
+  if [[ $new_count -lt $current_original_count ]]; then
+    echo "[ERROR] AI overwrote the CSV file instead of appending ($new_count < $current_original_count)" >&2
     echo "[DEBUG] First 10 lines of CSV after AI attempt:" >&2
     head -10 "$temp_csv" >&2
     return 1
   fi
   
-  local added_count=$((new_count - original_count))
+  # Check if no changes were made
+  if [[ $new_count -eq $current_original_count ]]; then
+    echo "[ERROR] CSV file wasn't modified - same number of data rows ($new_count = $current_original_count)" >&2
+    echo "[DEBUG] First 10 lines of CSV after AI attempt:" >&2
+    head -10 "$temp_csv" >&2
+    return 1
+  fi
+  
+  local added_count=$((new_count - current_original_count))
   if [[ $added_count -ne $expected_count ]]; then
     echo "[WARN] Expected to add $expected_count ideas but added $added_count" >&2
   fi
   
-  # Replace original CSV with modified version
-  mv "$temp_csv" "$FULL_CSV_PATH"
+  # Use proper locking to safely update the CSV
+  echo "[INFO] Acquiring CSV lock to apply changes..."
+  
+  # Set the lockfile path
+  CSV_LOCKFILE="$FULL_EVOLUTION_DIR/.evolution.csv.lock"
+  
+  if ! acquire_csv_lock; then
+    echo "[ERROR] Failed to acquire CSV lock for update" >&2
+    rm -f "$temp_csv"
+    return 1
+  fi
+  
+  # Get just the new entries (skip header and existing entries)
+  local original_line_count=$(wc -l < "$FULL_CSV_PATH")
+  
+  # Append only the new lines from temp CSV to the main CSV
+  tail -n +$((original_line_count + 1)) "$temp_csv" >> "$FULL_CSV_PATH"
+  
+  # Clean up temp file
+  rm -f "$temp_csv"
+  
+  # Release the lock
+  release_csv_lock
   
   echo "[INFO] Successfully added $added_count $idea_type ideas to CSV"
   return 0
@@ -476,8 +547,29 @@ validate_and_apply_csv_modification_old() {
     echo "[WARN] Expected to add $expected_count ideas but added $added_count" >&2
   fi
   
-  # Replace original CSV with modified version
-  mv "$temp_csv" "$FULL_CSV_PATH"
+  # Use proper locking to safely update the CSV
+  echo "[INFO] Acquiring CSV lock to apply changes..."
+  
+  # Set the lockfile path
+  CSV_LOCKFILE="$FULL_EVOLUTION_DIR/.evolution.csv.lock"
+  
+  if ! acquire_csv_lock; then
+    echo "[ERROR] Failed to acquire CSV lock for update" >&2
+    rm -f "$temp_csv"
+    return 1
+  fi
+  
+  # Get just the new entries (skip header and existing entries)
+  local original_line_count=$(wc -l < "$FULL_CSV_PATH")
+  
+  # Append only the new lines from temp CSV to the main CSV
+  tail -n +$((original_line_count + 1)) "$temp_csv" >> "$FULL_CSV_PATH"
+  
+  # Clean up temp file
+  rm -f "$temp_csv"
+  
+  # Release the lock
+  release_csv_lock
   
   echo "[INFO] Successfully added $added_count $idea_type ideas to CSV"
   return 0
@@ -522,7 +614,7 @@ IMPORTANT: Output the complete modified CSV file. Do not add any explanation or 
   
   # Get AI to modify the CSV with fallbacks
   local modified_csv
-  local stderr_file="/tmp/claude-evolve-stderr-$$.txt"
+  local stderr_file="$FULL_EVOLUTION_DIR/stderr-$$.txt"
   if ! modified_csv=$(call_ai_with_fallbacks "$csv_prompt" "$CURRENT_GENERATION" 2>"$stderr_file"); then
     echo "[ERROR] All AI models failed to modify CSV" >&2
     cat "$stderr_file" >&2
@@ -601,12 +693,70 @@ IMPORTANT: Output the complete modified CSV file. Do not add any explanation or 
     echo "[WARN] Expected to add $count ideas but added $added_count" >&2
   fi
   
-  # Replace original CSV with modified version
-  mv "$temp_csv" "$FULL_CSV_PATH"
+  # Use proper locking to safely update the CSV
+  echo "[INFO] Acquiring CSV lock to apply changes..."
+  
+  # Set the lockfile path
+  CSV_LOCKFILE="$FULL_EVOLUTION_DIR/.evolution.csv.lock"
+  
+  if ! acquire_csv_lock; then
+    echo "[ERROR] Failed to acquire CSV lock for update" >&2
+    rm -f "$temp_csv"
+    return 1
+  fi
+  
+  # Get just the new entries (skip header and existing entries)
+  local original_line_count=$(wc -l < "$FULL_CSV_PATH")
+  
+  # Append only the new lines from temp CSV to the main CSV
+  tail -n +$((original_line_count + 1)) "$temp_csv" >> "$FULL_CSV_PATH"
+  
+  # Clean up temp file
+  rm -f "$temp_csv"
+  
+  # Release the lock
+  release_csv_lock
   
   echo "[INFO] Successfully added $added_count $idea_type ideas to CSV"
   
   return 0
+}
+
+# Get list of existing Python files for a generation
+get_existing_py_files_for_generation() {
+  local generation="$1"
+  local py_files=""
+  
+  # List all Python files for this generation
+  for py_file in "$FULL_OUTPUT_DIR"/evolution_gen${generation}-*.py; do
+    if [[ -f "$py_file" ]]; then
+      local basename=$(basename "$py_file" .py)
+      local id="${basename#evolution_}"
+      if [[ -n "$py_files" ]]; then
+        py_files="$py_files, $id"
+      else
+        py_files="$id"
+      fi
+    fi
+  done
+  
+  echo "$py_files"
+}
+
+# Add existing Python files warning to prompt
+add_existing_files_warning() {
+  local prompt="$1"
+  local generation="$2"
+  local existing_py_files=$(get_existing_py_files_for_generation "$generation")
+  
+  if [[ -n "$existing_py_files" ]]; then
+    prompt+="
+
+WARNING: The following IDs already have Python files and MUST NOT be reused: $existing_py_files
+Skip these IDs when assigning new IDs (e.g., if gen$generation-001 and gen$generation-002 exist as Python files, start with gen$generation-003)"
+  fi
+  
+  echo "$prompt"
 }
 
 # Get next available ID for current generation
@@ -759,6 +909,9 @@ generate_novel_ideas_direct() {
   # Use relative paths and change to evolution directory so AI can access files
   local temp_csv_basename=$(basename "$temp_csv")
   
+  # Get existing Python files for this generation to avoid ID collisions
+  local existing_py_files=$(get_existing_py_files_for_generation "$CURRENT_GENERATION")
+  
   local prompt="I need you to use your file editing capabilities to APPEND exactly $count novel algorithmic ideas to the CSV file: $temp_csv_basename
 
 Current evolution context:
@@ -770,15 +923,27 @@ CRITICAL INSTRUCTIONS:
 1. Use the Read tool to examine the current CSV file
 2. DO NOT DELETE OR REPLACE ANY EXISTING ROWS - YOU MUST PRESERVE ALL EXISTING DATA
 3. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
-4. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001
-5. Use the Edit or MultiEdit tool to APPEND exactly $count new rows AT THE END of the CSV file
-6. For each idea, create a row with: id,,description,,pending (empty parent_id for novel ideas)
-7. Each description should be one clear sentence describing a novel algorithmic approach
-8. Focus on creative, ambitious ideas that haven't been tried yet
-9. Consider machine learning, new indicators, regime detection, risk management, etc.
+4. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001"
+  
+  if [[ -n "$existing_py_files" ]]; then
+    prompt+="
+5. IMPORTANT: The following IDs already have Python files and MUST NOT be reused: $existing_py_files
+6. Skip these IDs when assigning new IDs (e.g., if gen$CURRENT_GENERATION-001 and gen$CURRENT_GENERATION-002 exist as Python files, start with gen$CURRENT_GENERATION-003)"
+  else
+    prompt+="
+5. No existing Python files found for generation $CURRENT_GENERATION"
+  fi
+  
+  prompt+="
+6. Use the Edit or MultiEdit tool to APPEND exactly $count new rows AT THE END of the CSV file
+7. For each idea, create a row with: id,,description,,pending (empty parent_id for novel ideas)
+8. Each description should be one clear sentence describing a novel algorithmic approach
+9. Focus on creative, ambitious ideas that haven't been tried yet
+10. Consider machine learning, new indicators, regime detection, risk management, etc.
 
 IMPORTANT: You must APPEND new rows to the existing CSV file. DO NOT replace the file contents. All existing rows must remain unchanged.
-CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly."
+CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly.
+CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). Only modify the file directly."
 
   # Debug prompt size and context
   echo "[DEBUG] Novel ideas prompt length: ${#prompt} characters" >&2
@@ -798,7 +963,7 @@ CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CS
   # Get AI to directly edit the CSV file
   local ai_response
   local stderr_file="stderr-$$.txt"
-  if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>"$stderr_file"); then
+  if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" "$count" 2>"$stderr_file"); then
     echo "[ERROR] All AI models failed to generate novel ideas" >&2
     echo "[DEBUG] Stderr output from AI calls:" >&2
     cat "$stderr_file" >&2
@@ -838,6 +1003,9 @@ generate_hill_climbing_direct() {
   local data_rows=$(grep -v '^[[:space:]]*$' "$FULL_CSV_PATH" | tail -n +2 | wc -l)
   echo "[DEBUG] Original CSV has $data_rows data rows" >&2
   
+  # Get existing Python files for this generation to avoid ID collisions
+  local existing_py_files=$(get_existing_py_files_for_generation "$CURRENT_GENERATION")
+  
   # Extract just the IDs from top performers for clarity
   local valid_parent_ids
   valid_parent_ids=$(echo "$top_performers" | cut -d',' -f1 | paste -sd ',' -)
@@ -868,7 +1036,8 @@ CRITICAL INSTRUCTIONS:
 9. Include current and new parameter values (e.g., \"Lower rsi_entry from 21 to 18\")
 
 IMPORTANT: You must APPEND new rows to the existing CSV file. DO NOT replace the file contents. All existing rows must remain unchanged.
-CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly."
+CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly.
+CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). Only modify the file directly."
 
   # Change to evolution directory so AI can access files
   local original_pwd=$(pwd)
@@ -877,7 +1046,7 @@ CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CS
   # Get AI to directly edit the CSV file
   local ai_response
   local stderr_file="stderr-$$.txt"
-  if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>"$stderr_file"); then
+  if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" "$count" 2>"$stderr_file"); then
     echo "[ERROR] All AI models failed to generate hill climbing ideas" >&2
     cat "$stderr_file" >&2
     cd "$original_pwd"
@@ -914,6 +1083,9 @@ generate_structural_mutation_direct() {
   local data_rows=$(grep -v '^[[:space:]]*$' "$FULL_CSV_PATH" | tail -n +2 | wc -l)
   echo "[DEBUG] Original CSV has $data_rows data rows" >&2
   
+  # Get existing Python files for this generation to avoid ID collisions
+  local existing_py_files=$(get_existing_py_files_for_generation "$CURRENT_GENERATION")
+  
   # Extract just the IDs from top performers for clarity
   local valid_parent_ids
   valid_parent_ids=$(echo "$top_performers" | cut -d',' -f1 | paste -sd ',' -)
@@ -944,7 +1116,8 @@ CRITICAL INSTRUCTIONS:
 9. Reference actual components/methods found in the source code
 
 IMPORTANT: You must APPEND new rows to the existing CSV file. DO NOT replace the file contents. All existing rows must remain unchanged.
-CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly."
+CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly.
+CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). Only modify the file directly."
 
   # Change to evolution directory so AI can access files
   local original_pwd=$(pwd)
@@ -953,7 +1126,7 @@ CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CS
   # Get AI to directly edit the CSV file
   local ai_response
   local stderr_file="stderr-$$.txt"
-  if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>"$stderr_file"); then
+  if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" "$count" 2>"$stderr_file"); then
     echo "[ERROR] All AI models failed to generate structural mutation ideas" >&2
     cat "$stderr_file" >&2
     cd "$original_pwd"
@@ -990,6 +1163,9 @@ generate_crossover_direct() {
   local data_rows=$(grep -v '^[[:space:]]*$' "$FULL_CSV_PATH" | tail -n +2 | wc -l)
   echo "[DEBUG] Original CSV has $data_rows data rows" >&2
   
+  # Get existing Python files for this generation to avoid ID collisions
+  local existing_py_files=$(get_existing_py_files_for_generation "$CURRENT_GENERATION")
+  
   # Extract just the IDs from top performers for clarity
   local valid_parent_ids
   valid_parent_ids=$(echo "$top_performers" | cut -d',' -f1 | paste -sd ',' -)
@@ -1020,7 +1196,8 @@ CRITICAL INSTRUCTIONS:
 9. Reference specific components/features found in the actual source code
 
 IMPORTANT: You must APPEND new rows to the existing CSV file. DO NOT replace the file contents. All existing rows must remain unchanged.
-CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly."
+CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly.
+CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). Only modify the file directly."
 
   # Change to evolution directory so AI can access files
   local original_pwd=$(pwd)
@@ -1029,7 +1206,7 @@ CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CS
   # Get AI to directly edit the CSV file
   local ai_response
   local stderr_file="stderr-$$.txt"
-  if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>"$stderr_file"); then
+  if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" "$count" 2>"$stderr_file"); then
     echo "[ERROR] All AI models failed to generate crossover hybrid ideas" >&2
     cat "$stderr_file" >&2
     cd "$original_pwd"
@@ -1124,7 +1301,8 @@ CRITICAL INSTRUCTIONS:
 - Parameter Optimization: Entry thresholds, indicator periods, strategy weights
 
 IMPORTANT: You must APPEND new rows to the existing CSV file. DO NOT replace the file contents. All existing rows must remain unchanged.
-CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly."
+CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly.
+CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). Only modify the file directly."
 
   # Change to evolution directory so AI can access files
   local original_pwd=$(pwd)
@@ -1133,7 +1311,7 @@ CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CS
   # Get AI to directly edit the CSV file
   local ai_response
   local stderr_file="stderr-$$.txt"
-  if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" 2>"$stderr_file"); then
+  if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" "$TOTAL_IDEAS" 2>"$stderr_file"); then
     echo "[ERROR] All AI models failed to generate ideas" >&2
     cat "$stderr_file" >&2
     cd "$original_pwd"
