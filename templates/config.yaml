@@ -60,15 +60,15 @@ parallel:
 # LLM/AI CLI configuration
 llm_cli:
   # How to run each CLI for each LLM option
-  # $PROMPT will be replaced with the actual prompt text
-  o3: 'codex exec -m o3 --dangerously-bypass-approvals-and-sandbox "$PROMPT"'
-  codex: 'codex exec --dangerously-bypass-approvals-and-sandbox "$PROMPT"'
-  gemini: 'gemini -y -p "$PROMPT"'
-  opus: 'claude --dangerously-skip-permissions --model opus -p "$PROMPT"'
-  sonnet: 'claude --dangerously-skip-permissions --model sonnet -p "$PROMPT"'
+  # {{PROMPT}} will be replaced with the actual prompt text
+  o3: 'codex exec -m o3 --dangerously-bypass-approvals-and-sandbox "{{PROMPT}}"'
+  codex: 'codex exec --dangerously-bypass-approvals-and-sandbox "{{PROMPT}}"'
+  gemini: 'gemini -y -p "{{PROMPT}}"'
+  opus: 'claude --dangerously-skip-permissions --model opus -p "{{PROMPT}}"'
+  sonnet: 'claude --dangerously-skip-permissions --model sonnet -p "{{PROMPT}}"'
 
   # What to run for each sub-command
   # Models are tried in order, with round-robin distribution across candidates
   # You can repeat models for weighted selection (e.g., "sonnet sonnet gemini" for 2:1 ratio)
-  run: sonnet gemini codex
-  ideate: opus gemini o3
+  run: sonnet gemini
+  ideate: opus o3

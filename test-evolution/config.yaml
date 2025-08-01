@@ -1,0 +1,29 @@
+algorithm_file: "algorithm.py"
+evaluator_file: "evaluator.py"
+brief_file: "BRIEF.md"
+evolution_csv: "evolution.csv"
+output_dir: ""
+
+ideation_strategies:
+  total_ideas: 3
+  novel_exploration: 1
+  hill_climbing: 1
+  structural_mutation: 1
+  crossover_hybrid: 0
+  num_elites: 2
+
+python_cmd: "python3"
+auto_ideate: false
+
+parallel:
+  enabled: false
+
+llm_cli:
+  o3: 'codex exec -m o3 --dangerously-bypass-approvals-and-sandbox "{{PROMPT}}"'
+  codex: 'codex exec --dangerously-bypass-approvals-and-sandbox "{{PROMPT}}"'
+  gemini: 'gemini -y -p "{{PROMPT}}"'
+  opus: 'claude --dangerously-skip-permissions --model opus -p "{{PROMPT}}"'
+  sonnet: 'claude --dangerously-skip-permissions --model sonnet -p "{{PROMPT}}"'
+  
+  run: sonnet
+  ideate: o3 opus gemini

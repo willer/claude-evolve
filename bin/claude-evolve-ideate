@@ -62,10 +62,11 @@ call_claude_with_limit_check() {
 }
 
 # Robust AI calling with fallbacks across all available models
-call_ai_with_fallbacks() {
+call_ai_for_ideation() {
   local prompt="$1"
   local generation="${2:-01}"
   local expected_count="${3:-1}"  # Number of ideas expected to be added
+  local temp_csv_file="${4:-temp-csv-$$.csv}"  # Optional temp CSV filename
   
   # Calculate hash value for round-robin based on generation
   local gen_num
@@ -77,8 +78,8 @@ call_ai_with_fallbacks() {
   
   # Get the current row count before any modifications
   local original_csv_count
-  if [[ -f temp-csv-$$.csv ]]; then
-    original_csv_count=$(grep -v '^[[:space:]]*$' "temp-csv-$$.csv" | tail -n +2 | wc -l)
+  if [[ -f "$temp_csv_file" ]]; then
+    original_csv_count=$(grep -v '^[[:space:]]*$' "$temp_csv_file" | tail -n +2 | wc -l)
   else
     original_csv_count=0
   fi
@@ -89,31 +90,33 @@ call_ai_with_fallbacks() {
   local ai_exit_code=$?
   
   # Handle special exit codes
-  if [[ $ai_exit_code -eq 3 ]]; then
-    echo "[ERROR] All AI models hit usage limits" >&2
-    return 1
-  fi
+  # No special handling for exit codes anymore
   
   if [[ $ai_exit_code -eq 0 ]]; then
     # For ideation, we need to verify the CSV file was actually modified
-    if [[ -f temp-csv-$$.csv ]]; then
+    if [[ -f "$temp_csv_file" ]]; then
       local new_csv_count
-      new_csv_count=$(grep -v '^[[:space:]]*$' "temp-csv-$$.csv" | tail -n +2 | wc -l)
+      new_csv_count=$(grep -v '^[[:space:]]*$' "$temp_csv_file" | tail -n +2 | wc -l)
       
       if [[ $new_csv_count -gt $original_csv_count ]]; then
         echo "[INFO] AI completed successfully and modified CSV ($new_csv_count vs $original_csv_count rows)" >&2
         return 0
       else
-        echo "[WARN] AI returned exit code 0 but didn't modify CSV file" >&2
+        echo "[INFO] $model returned exit code 0 but didn't modify CSV file" >&2
+        echo "[DEBUG] Expected file: $temp_csv_file" >&2
+        echo "[DEBUG] Original count: $original_csv_count, New count: $new_csv_count" >&2
         return 1
       fi
     else
-      echo "[WARN] AI returned exit code 0 but temp CSV file not found" >&2
+      echo "[INFO] Exit code 0 but temp CSV file not found: $temp_csv_file" >&2
+      echo "[DEBUG] Current directory: $(pwd)" >&2
+      echo "[DEBUG] Files matching temp-csv-*.csv:" >&2
+      ls -la temp-csv-*.csv 2>&1 >&2
       return 1
     fi
   fi
   
-  echo "[ERROR] All AI models failed to generate usable output" >&2
+  echo "[INFO] No AI model successfully modified the CSV file" >&2
   return 1
 }
 
@@ -469,7 +472,7 @@ IMPORTANT: Output the complete modified CSV file. Do not add any explanation or 
   # Get AI to modify the CSV with fallbacks
   local modified_csv
   local stderr_file="$FULL_EVOLUTION_DIR/stderr-$$.txt"
-  if ! modified_csv=$(call_ai_with_fallbacks "$csv_prompt" "$CURRENT_GENERATION" 2>"$stderr_file"); then
+  if ! modified_csv=$(call_ai_for_ideation "$csv_prompt" "$CURRENT_GENERATION" 2>"$stderr_file"); then
     echo "[ERROR] All AI models failed to modify CSV" >&2
     cat "$stderr_file" >&2
     rm -f "$temp_csv" "$stderr_file"
@@ -742,10 +745,55 @@ ideate_ai_strategies() {
   echo "  Crossover hybrid: $CROSSOVER_HYBRID"
 
   # Generate each type of idea by having Claude directly edit the CSV
-  [[ $NOVEL_EXPLORATION -gt 0 ]] && generate_novel_ideas_direct "$NOVEL_EXPLORATION"
-  [[ $HILL_CLIMBING -gt 0 ]] && generate_hill_climbing_direct "$HILL_CLIMBING" "$top_performers"
-  [[ $STRUCTURAL_MUTATION -gt 0 ]] && generate_structural_mutation_direct "$STRUCTURAL_MUTATION" "$top_performers"
-  [[ $CROSSOVER_HYBRID -gt 0 ]] && generate_crossover_direct "$CROSSOVER_HYBRID" "$top_performers"
+  # Track successes - continue even if some strategies fail
+  local strategies_attempted=0
+  local strategies_succeeded=0
+  
+  if [[ $NOVEL_EXPLORATION -gt 0 ]]; then
+    ((strategies_attempted++))
+    if generate_novel_ideas_direct "$NOVEL_EXPLORATION"; then
+      ((strategies_succeeded++))
+    else
+      echo "[WARN] Novel exploration strategy failed, continuing with other strategies" >&2
+    fi
+  fi
+  
+  if [[ $HILL_CLIMBING -gt 0 ]]; then
+    ((strategies_attempted++))
+    if generate_hill_climbing_direct "$HILL_CLIMBING" "$top_performers"; then
+      ((strategies_succeeded++))
+    else
+      echo "[WARN] Hill climbing strategy failed, continuing with other strategies" >&2
+    fi
+  fi
+  
+  if [[ $STRUCTURAL_MUTATION -gt 0 ]]; then
+    ((strategies_attempted++))
+    if generate_structural_mutation_direct "$STRUCTURAL_MUTATION" "$top_performers"; then
+      ((strategies_succeeded++))
+    else
+      echo "[WARN] Structural mutation strategy failed, continuing with other strategies" >&2
+    fi
+  fi
+  
+  if [[ $CROSSOVER_HYBRID -gt 0 ]]; then
+    ((strategies_attempted++))
+    if generate_crossover_direct "$CROSSOVER_HYBRID" "$top_performers"; then
+      ((strategies_succeeded++))
+    else
+      echo "[WARN] Crossover strategy failed, continuing with other strategies" >&2
+    fi
+  fi
+  
+  echo "[INFO] Strategy results: $strategies_succeeded/$strategies_attempted succeeded" >&2
+  
+  # Success if at least one strategy worked
+  if [[ $strategies_succeeded -gt 0 ]]; then
+    return 0
+  else
+    echo "[ERROR] All ideation strategies failed" >&2
+    return 1
+  fi
 }
 
 # Generate novel exploration ideas using direct CSV modification
@@ -814,10 +862,15 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
   local original_pwd=$(pwd)
   cd "$FULL_EVOLUTION_DIR"
   
+  # Debug: Show files in evolution directory
+  echo "[DEBUG] Current directory: $(pwd)" >&2
+  echo "[DEBUG] Temp CSV exists: $(ls -la "$temp_csv_basename" 2>&1)" >&2
+  
   # Get AI to directly edit the CSV file
   local ai_response
   local stderr_file="stderr-$$.txt"
-  if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" "$count" 2>"$stderr_file"); then
+  # Temporarily show stderr for debugging
+  if ! ai_response=$(call_ai_for_ideation "$prompt" "$CURRENT_GENERATION" "$count" "$temp_csv_basename"); then
     echo "[ERROR] All AI models failed to generate novel ideas" >&2
     echo "[DEBUG] Stderr output from AI calls:" >&2
     cat "$stderr_file" >&2
@@ -900,7 +953,8 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
   # Get AI to directly edit the CSV file
   local ai_response
   local stderr_file="stderr-$$.txt"
-  if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" "$count" 2>"$stderr_file"); then
+  # Temporarily show stderr for debugging
+  if ! ai_response=$(call_ai_for_ideation "$prompt" "$CURRENT_GENERATION" "$count" "$temp_csv_basename"); then
     echo "[ERROR] All AI models failed to generate hill climbing ideas" >&2
     cat "$stderr_file" >&2
     cd "$original_pwd"
@@ -980,7 +1034,8 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
   # Get AI to directly edit the CSV file
   local ai_response
   local stderr_file="stderr-$$.txt"
-  if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" "$count" 2>"$stderr_file"); then
+  # Temporarily show stderr for debugging
+  if ! ai_response=$(call_ai_for_ideation "$prompt" "$CURRENT_GENERATION" "$count" "$temp_csv_basename"); then
     echo "[ERROR] All AI models failed to generate structural mutation ideas" >&2
     cat "$stderr_file" >&2
     cd "$original_pwd"
@@ -1060,7 +1115,8 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
   # Get AI to directly edit the CSV file
   local ai_response
   local stderr_file="stderr-$$.txt"
-  if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" "$count" 2>"$stderr_file"); then
+  # Temporarily show stderr for debugging
+  if ! ai_response=$(call_ai_for_ideation "$prompt" "$CURRENT_GENERATION" "$count" "$temp_csv_basename"); then
     echo "[ERROR] All AI models failed to generate crossover hybrid ideas" >&2
     cat "$stderr_file" >&2
     cd "$original_pwd"
@@ -1165,7 +1221,7 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
   # Get AI to directly edit the CSV file
   local ai_response
   local stderr_file="stderr-$$.txt"
-  if ! ai_response=$(call_ai_with_fallbacks "$prompt" "$CURRENT_GENERATION" "$TOTAL_IDEAS" 2>"$stderr_file"); then
+  if ! ai_response=$(call_ai_for_ideation "$prompt" "$CURRENT_GENERATION" "$TOTAL_IDEAS" "$temp_csv_basename" 2>"$stderr_file"); then
     echo "[ERROR] All AI models failed to generate ideas" >&2
     cat "$stderr_file" >&2
     cd "$original_pwd"

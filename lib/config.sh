@@ -53,13 +53,13 @@ DEFAULT_MAX_RETRIES=3
 declare -a DEFAULT_LLM_CLI_KEYS
 declare -a DEFAULT_LLM_CLI_VALUES
 DEFAULT_LLM_CLI_KEYS=(o3 codex gemini opus sonnet)
-DEFAULT_LLM_CLI_VALUES[0]='codex exec -m o3 --dangerously-bypass-approvals-and-sandbox "$PROMPT"'
-DEFAULT_LLM_CLI_VALUES[1]='codex exec --dangerously-bypass-approvals-and-sandbox "$PROMPT"'
-DEFAULT_LLM_CLI_VALUES[2]='gemini -y -p "$PROMPT"'
-DEFAULT_LLM_CLI_VALUES[3]='claude --dangerously-skip-permissions --model opus -p "$PROMPT"'
-DEFAULT_LLM_CLI_VALUES[4]='claude --dangerously-skip-permissions --model sonnet -p "$PROMPT"'
-DEFAULT_LLM_RUN="sonnet gemini codex"
-DEFAULT_LLM_IDEATE="opus gemini o3"
+DEFAULT_LLM_CLI_VALUES[0]='codex exec -m o3 --dangerously-bypass-approvals-and-sandbox "{{PROMPT}}"'
+DEFAULT_LLM_CLI_VALUES[1]='codex exec --dangerously-bypass-approvals-and-sandbox "{{PROMPT}}"'
+DEFAULT_LLM_CLI_VALUES[2]='gemini -y -p "{{PROMPT}}"'
+DEFAULT_LLM_CLI_VALUES[3]='claude --dangerously-skip-permissions --model opus -p "{{PROMPT}}"'
+DEFAULT_LLM_CLI_VALUES[4]='claude --dangerously-skip-permissions --model sonnet -p "{{PROMPT}}"'
+DEFAULT_LLM_RUN="sonnet gemini"
+DEFAULT_LLM_IDEATE="opus o3"
 
 # Load configuration from config file
 load_config() {
@@ -99,11 +99,11 @@ load_config() {
   # Set LLM CLI defaults (compatibility for older bash)
   # Initialize associative array for LLM commands
   # Use simpler approach for compatibility
-  LLM_CLI_o3='codex exec -m o3 --dangerously-bypass-approvals-and-sandbox "$PROMPT"'
-  LLM_CLI_codex='codex exec --dangerously-bypass-approvals-and-sandbox "$PROMPT"'
-  LLM_CLI_gemini='gemini -y -p "$PROMPT"'
-  LLM_CLI_opus='claude --dangerously-skip-permissions --model opus -p "$PROMPT"'
-  LLM_CLI_sonnet='claude --dangerously-skip-permissions --model sonnet -p "$PROMPT"'
+  LLM_CLI_o3='codex exec -m o3 --dangerously-bypass-approvals-and-sandbox "{{PROMPT}}"'
+  LLM_CLI_codex='codex exec --dangerously-bypass-approvals-and-sandbox "{{PROMPT}}"'
+  LLM_CLI_gemini='gemini -y -p "{{PROMPT}}"'
+  LLM_CLI_opus='claude --dangerously-skip-permissions --model opus -p "{{PROMPT}}"'
+  LLM_CLI_sonnet='claude --dangerously-skip-permissions --model sonnet -p "{{PROMPT}}"'
   LLM_RUN="$DEFAULT_LLM_RUN"
   LLM_IDEATE="$DEFAULT_LLM_IDEATE"
   
@@ -134,6 +134,11 @@ load_config() {
       # Remove leading/trailing whitespace
       key=$(echo "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
       value=$(echo "$value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+      
+      # Debug before comment removal
+      if [[ "${DEBUG_CONFIG:-}" == "true" ]]; then
+        echo "[CONFIG DEBUG] Before comment removal: key='$key' value='$value'" >&2
+      fi
       
       # Remove inline comments from value
       value=$(echo "$value" | sed 's/[[:space:]]*#.*$//')
@@ -197,6 +202,10 @@ load_config() {
           # Model definition - key is model name, value is command template
           # Remove single quotes from value if present
           value=$(echo "$value" | sed "s/^'//;s/'$//")
+          # Debug config loading
+          if [[ "${DEBUG_CONFIG:-}" == "true" ]]; then
+            echo "[CONFIG DEBUG] Setting LLM_CLI_${key} = '$value'" >&2
+          fi
           # Use dynamic variable name for compatibility
           eval "LLM_CLI_${key}=\"$value\""
         fi

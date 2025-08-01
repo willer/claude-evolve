@@ -523,9 +523,17 @@ while true; do
         export CLAUDE_EVOLVE_CONFIG="$WORKER_CONFIG_PATH"
       fi
       if ! "$ideate_script"; then
-        echo "[ERROR] Failed to generate new ideas" >&2
-        echo "[DISPATCHER] Evolution complete - ideation failed."
-        break
+        echo "[WARN] Ideation failed to generate new ideas" >&2
+        if [[ "${CONTINUE_ON_IDEATION_FAILURE:-false}" == "true" ]]; then
+          echo "[DISPATCHER] Continuing despite ideation failure (CONTINUE_ON_IDEATION_FAILURE=true)" >&2
+          echo "[DISPATCHER] Waiting 60 seconds before retry..." >&2
+          sleep 60
+          continue
+        else
+          echo "[DISPATCHER] Evolution complete - ideation failed."
+          echo "[DISPATCHER] Set CONTINUE_ON_IDEATION_FAILURE=true to continue despite failures"
+          break
+        fi
       fi
       
       echo "[DISPATCHER] New ideas generated successfully. Continuing evolution..."

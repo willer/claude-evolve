@@ -12,56 +12,86 @@ call_ai_model_configured() {
   local model_name="$1"
   local prompt="$2"
   
-  # Get command template using dynamic variable name for compatibility
-  local var_name="LLM_CLI_${model_name}"
-  local cmd_template="${!var_name}"
+  # Build command directly based on model
+  case "$model_name" in
+    opus|sonnet)
+      local ai_output
+      ai_output=$(timeout 300 claude --dangerously-skip-permissions --model "$model_name" -p "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    o3)
+      local ai_output
+      ai_output=$(timeout 300 codex exec -m o3 --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    codex)
+      local ai_output
+      ai_output=$(timeout 300 codex exec --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    gemini)
+      # Debug: Show exact command
+      echo "[DEBUG] Running: timeout 300 gemini -y -p <prompt>" >&2
+      echo "[DEBUG] Working directory: $(pwd)" >&2
+      echo "[DEBUG] Files in current dir:" >&2
+      ls -la temp-csv-*.csv 2>&1 | head -5 >&2
+      local ai_output
+      ai_output=$(timeout 300 gemini -y -p "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    *)
+      echo "[ERROR] Unknown model: $model_name" >&2
+      return 1
+      ;;
+  esac
   
-  # Check if model is configured
-  if [[ -z "$cmd_template" ]]; then
-    echo "[ERROR] Model '$model_name' not configured in llm_cli section" >&2
-    return 1
+  # Debug: log model and prompt size
+  echo "[DEBUG] Calling $model_name with prompt of ${#prompt} characters" >&2
+  
+  # Always log basic info
+  echo "[AI] $model_name exit code: $ai_exit_code, output length: ${#ai_output} chars" >&2
+  
+  # Show detailed output if verbose or if there was an error
+  if [[ "${VERBOSE_AI_OUTPUT:-false}" == "true" ]] || [[ $ai_exit_code -ne 0 ]]; then
+    echo "[AI] Raw output from $model_name:" >&2
+    echo "----------------------------------------" >&2
+    if [[ ${#ai_output} -gt 2000 ]]; then
+      echo "$ai_output" | head -50 >&2
+      echo "... (truncated from ${#ai_output} characters to first 50 lines) ..." >&2
+    else
+      echo "$ai_output" >&2
+    fi
+    echo "----------------------------------------" >&2
   fi
   
-  # Replace $PROMPT with actual prompt (properly escaped)
-  # Use bash variable substitution to avoid issues with special characters
-  local cmd="${cmd_template//\$PROMPT/$prompt}"
-  
-  # Execute the command with timeout
-  local ai_output
-  ai_output=$(timeout 300 bash -c "$cmd" 2>&1)
-  local ai_exit_code=$?
+  # Debug: save full output if debugging is enabled
+  if [[ "${DEBUG_AI_CALLS:-}" == "true" ]]; then
+    local debug_file="/tmp/claude-evolve-ai-${model_name}-$$.log"
+    echo "Model: $model_name" > "$debug_file"
+    echo "Exit code: $ai_exit_code" >> "$debug_file"
+    echo "Prompt length: ${#prompt}" >> "$debug_file"
+    echo "Output:" >> "$debug_file"
+    echo "$ai_output" >> "$debug_file"
+    echo "[DEBUG] Full output saved to: $debug_file" >&2
+  fi
   
   # Output the result
   echo "$ai_output"
   return $ai_exit_code
 }
 
-# Check if AI output indicates a usage limit was hit
+# DEPRECATED - Keep for compatibility but always return false
 is_usage_limit_error() {
-  local output="$1"
-  local model_name="$2"
-  
-  # Generic patterns that work across models
-  echo "$output" | grep -qE "usage limit|rate limit|quota|429|Too Many Requests|Claude AI usage limit reached"
+  return 1
 }
 
-# Validate if AI output is successful
+# DEPRECATED - Just check exit code now
 is_valid_ai_output() {
   local output="$1"
   local exit_code="$2"
   
-  # First check exit code
-  [[ $exit_code -ne 0 ]] && return 1
-  
-  # Check for minimal output
-  [[ -z "$output" ]] && return 1
-  
-  # Check for common error patterns
-  if echo "$output" | grep -qi "error\|failed\|exception" && ! echo "$output" | grep -qi "error handling\|error recovery"; then
-    return 1
-  fi
-  
-  return 0
+  # Only check exit code - let the caller verify file changes
+  return $exit_code
 }
 
 # Clean AI output if needed (e.g., extract from JSON)
@@ -161,35 +191,27 @@ call_ai_with_round_robin() {
     ai_output=$(call_ai_model_configured "$model" "$prompt")
     local ai_exit_code=$?
     
-    # Check for usage limits
-    if is_usage_limit_error "$ai_output" "$model"; then
-      echo "[AI] $model hit usage limit - trying next model" >&2
-      limited_models+=("$model")
-      continue
-    fi
-    
-    # Validate output
-    if is_valid_ai_output "$ai_output" "$ai_exit_code"; then
+    # Just check exit code - no interpretation
+    if [[ $ai_exit_code -eq 0 ]]; then
       # Clean output if needed
       ai_output=$(clean_ai_output "$ai_output" "$model")
-      echo "[AI] $model succeeded" >&2
+      echo "[AI] $model returned exit code 0" >&2
+      # Debug: log what AI returned on success
+      if [[ "${DEBUG_AI_SUCCESS:-}" == "true" ]]; then
+        echo "[AI] $model success output preview:" >&2
+        echo "$ai_output" | head -10 >&2
+        echo "[AI] (truncated to first 10 lines)" >&2
+      fi
       # Output the cleaned result
       echo "$ai_output"
       return 0
     fi
     
-    echo "[AI] $model failed (exit code $ai_exit_code), trying next model..." >&2
+    echo "[AI] $model returned exit code $ai_exit_code, trying next model..." >&2
   done
   
   # All models have been tried
-  echo "[AI] All models in rotation have been tried" >&2
-  
-  # Check if all models hit limits
-  if [[ ${#limited_models[@]} -gt 0 ]] && [[ ${#limited_models[@]} -eq ${#tried_models[@]} ]]; then
-    echo "[AI] All models hit usage limits: ${limited_models[*]}" >&2
-    return 3  # Special exit code for all models hitting limits
-  fi
-  
+  echo "[AI] All models have been tried without success" >&2
   return 1
 }
 
