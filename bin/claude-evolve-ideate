@@ -90,34 +90,26 @@ call_ai_for_ideation() {
   local ai_exit_code=$?
   
   # Handle special exit codes
-  # No special handling for exit codes anymore
+  # Always check if the file was modified, regardless of exit code
+  # This is the only test that matters - did the CSV change?
   
-  if [[ $ai_exit_code -eq 0 ]]; then
-    # For ideation, we need to verify the CSV file was actually modified
-    if [[ -f "$temp_csv_file" ]]; then
-      local new_csv_count
-      new_csv_count=$(grep -v '^[[:space:]]*$' "$temp_csv_file" | tail -n +2 | wc -l)
-      
-      if [[ $new_csv_count -gt $original_csv_count ]]; then
-        echo "[INFO] AI completed successfully and modified CSV ($new_csv_count vs $original_csv_count rows)" >&2
-        return 0
-      else
-        echo "[INFO] $model returned exit code 0 but didn't modify CSV file" >&2
-        echo "[DEBUG] Expected file: $temp_csv_file" >&2
-        echo "[DEBUG] Original count: $original_csv_count, New count: $new_csv_count" >&2
-        return 1
-      fi
+  if [[ -f "$temp_csv_file" ]]; then
+    local new_csv_count
+    new_csv_count=$(grep -v '^[[:space:]]*$' "$temp_csv_file" | tail -n +2 | wc -l)
+    
+    if [[ $new_csv_count -gt $original_csv_count ]]; then
+      echo "[INFO] CSV was modified ($new_csv_count vs $original_csv_count rows) - success!" >&2
+      return 0
     else
-      echo "[INFO] Exit code 0 but temp CSV file not found: $temp_csv_file" >&2
-      echo "[DEBUG] Current directory: $(pwd)" >&2
-      echo "[DEBUG] Files matching temp-csv-*.csv:" >&2
-      ls -la temp-csv-*.csv 2>&1 >&2
+      echo "[INFO] CSV unchanged after AI call (exit code: $ai_exit_code)" >&2
+      echo "[DEBUG] Original count: $original_csv_count, New count: $new_csv_count" >&2
       return 1
     fi
+  else
+    echo "[INFO] Temp CSV file not found after AI call: $temp_csv_file" >&2
+    echo "[DEBUG] Exit code was: $ai_exit_code" >&2
+    return 1
   fi
-  
-  echo "[INFO] No AI model successfully modified the CSV file" >&2
-  return 1
 }
 
 # Parse arguments

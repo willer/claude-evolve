@@ -58,8 +58,8 @@ DEFAULT_LLM_CLI_VALUES[1]='codex exec --dangerously-bypass-approvals-and-sandbox
 DEFAULT_LLM_CLI_VALUES[2]='gemini -y -p "{{PROMPT}}"'
 DEFAULT_LLM_CLI_VALUES[3]='claude --dangerously-skip-permissions --model opus -p "{{PROMPT}}"'
 DEFAULT_LLM_CLI_VALUES[4]='claude --dangerously-skip-permissions --model sonnet -p "{{PROMPT}}"'
-DEFAULT_LLM_RUN="sonnet gemini"
-DEFAULT_LLM_IDEATE="opus o3"
+DEFAULT_LLM_RUN="sonnet"
+DEFAULT_LLM_IDEATE="gemini o3 opus"
 
 # Load configuration from config file
 load_config() {

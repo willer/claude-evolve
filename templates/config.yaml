@@ -70,5 +70,5 @@ llm_cli:
   # What to run for each sub-command
   # Models are tried in order, with round-robin distribution across candidates
   # You can repeat models for weighted selection (e.g., "sonnet sonnet gemini" for 2:1 ratio)
-  run: sonnet gemini
-  ideate: opus o3
+  run: sonnet
+  ideate: gemini o3 opus
