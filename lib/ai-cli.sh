@@ -12,31 +12,50 @@ call_ai_model_configured() {
   local model_name="$1"
   local prompt="$2"
   
+  # Record start time
+  local start_time=$(date +%s)
+  
   # Build command directly based on model
   case "$model_name" in
     opus|sonnet)
       local ai_output
-      ai_output=$(timeout 300 claude --dangerously-skip-permissions --model "$model_name" -p "$prompt" 2>&1)
+      ai_output=$(timeout 180 claude --dangerously-skip-permissions --model "$model_name" -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
-    o3)
+    gpt5high)
       local ai_output
-      ai_output=$(timeout 300 codex exec -m o3 --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      ai_output=$(timeout 420 codex exec --profile gpt5high --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    o3high)
+      local ai_output
+      ai_output=$(timeout 500 codex exec --profile o3high --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     codex)
       local ai_output
-      ai_output=$(timeout 300 codex exec --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      ai_output=$(timeout 420 codex exec --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     gemini)
       # Debug: Show exact command
-      echo "[DEBUG] Running: timeout 300 gemini -y -p <prompt>" >&2
+      echo "[DEBUG] Running: timeout 1200 gemini -y -p <prompt>" >&2
       echo "[DEBUG] Working directory: $(pwd)" >&2
       echo "[DEBUG] Files in current dir:" >&2
       ls -la temp-csv-*.csv 2>&1 | head -5 >&2
       local ai_output
-      ai_output=$(timeout 300 gemini -y -p "$prompt" 2>&1)
+      # Gemini needs longer timeout as it streams output while working (20 minutes)
+      ai_output=$(timeout 1200 gemini -y -p "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    cursor-sonnet)
+      local ai_output
+      ai_output=$(timeout 180 cursor-agent sonnet -p "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    cursor-opus)
+      local ai_output
+      ai_output=$(timeout 300 cursor-agent opus -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     *)
@@ -48,8 +67,12 @@ call_ai_model_configured() {
   # Debug: log model and prompt size
   echo "[DEBUG] Calling $model_name with prompt of ${#prompt} characters" >&2
   
-  # Always log basic info
-  echo "[AI] $model_name exit code: $ai_exit_code, output length: ${#ai_output} chars" >&2
+  # Calculate duration
+  local end_time=$(date +%s)
+  local duration=$((end_time - start_time))
+  
+  # Always log basic info with timing
+  echo "[AI] $model_name exit code: $ai_exit_code, output length: ${#ai_output} chars, duration: ${duration}s" >&2
   
   # Show detailed output if verbose or if there was an error
   if [[ "${VERBOSE_AI_OUTPUT:-false}" == "true" ]] || [[ $ai_exit_code -ne 0 ]]; then
@@ -100,7 +123,7 @@ clean_ai_output() {
   local model_name="$2"
   
   # Handle codex-specific output format
-  if [[ "$model_name" == "codex" || "$model_name" == "o3" ]]; then
+  if [[ "$model_name" == "codex" || "$model_name" == "o3high" || "$model_name" == "gpt5high" ]]; then
     # Clean codex output - extract content between "codex" marker and "tokens used"
     if echo "$output" | grep -q "^\[.*\] codex$"; then
       # Extract content between "codex" line and "tokens used" line
@@ -191,11 +214,19 @@ call_ai_with_round_robin() {
     ai_output=$(call_ai_model_configured "$model" "$prompt")
     local ai_exit_code=$?
     
-    # Just check exit code - no interpretation
-    if [[ $ai_exit_code -eq 0 ]]; then
-      # Clean output if needed
-      ai_output=$(clean_ai_output "$ai_output" "$model")
-      echo "[AI] $model returned exit code 0" >&2
+    # Clean output if needed
+    ai_output=$(clean_ai_output "$ai_output" "$model")
+    
+    # Success if exit code is 0, or if it's just a timeout (124)
+    # Timeout doesn't mean the AI failed - it may have completed the task
+    if [[ $ai_exit_code -eq 0 ]] || [[ $ai_exit_code -eq 124 ]]; then
+      if [[ $ai_exit_code -eq 124 ]]; then
+        echo "[AI] $model timed out but continuing (exit code: 124)" >&2
+      else
+        echo "[AI] $model returned exit code 0" >&2
+      fi
+      # Export the successful model for tracking (used by worker)
+      export SUCCESSFUL_RUN_MODEL="$model"
       # Debug: log what AI returned on success
       if [[ "${DEBUG_AI_SUCCESS:-}" == "true" ]]; then
         echo "[AI] $model success output preview:" >&2

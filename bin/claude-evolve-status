@@ -137,9 +137,25 @@ try:
     # Collect all candidates with scores and statuses
     all_candidates = []
     stats_by_gen = {}
+    winners_by_gen = {}
     total_stats = {'pending': 0, 'complete': 0, 'failed': 0, 'running': 0}
     retry_count = 0
     
+    def parse_candidate_id(cid):
+        try:
+            left, right = cid.split('-', 1)
+            gen_num = int(left[3:]) if left.startswith('gen') else 10**9
+            seq_num = int(right)
+            return gen_num, seq_num
+        except Exception:
+            return 10**9, 10**9
+
+    def is_earlier(a, b):
+        ga, sa = parse_candidate_id(a)
+        gb, sb = parse_candidate_id(b)
+        return (ga, sa) < (gb, sb)
+
+
     for row in rows[1:]:
         if len(row) >= 1 and row[0]:  # Must have an ID
             candidate_id = row[0]
@@ -176,13 +192,26 @@ try:
                         score = float(performance)
                         description = row[2] if len(row) > 2 else 'No description'
                         all_candidates.append((candidate_id, description, score))
+
+                        # Track per-generation best with raw score; ties -> earlier ID
+                        if gen not in winners_by_gen:
+                            winners_by_gen[gen] = (candidate_id, description, score)
+                        else:
+                            cid, _, best_score = winners_by_gen[gen]
+                            if score > best_score or (score == best_score and is_earlier(candidate_id, cid)):
+                                winners_by_gen[gen] = (candidate_id, description, score)
                     except ValueError:
                         pass
     
-    # Find the winner
+    # Find the winner using raw score; ties -> earliest ID
     winner = None
-    if all_candidates:
-        winner = max(all_candidates, key=lambda x: x[2])
+    for cid, desc, sc in all_candidates:
+        if winner is None:
+            winner = (cid, desc, sc)
+        else:
+            wc = winner[2]
+            if sc > wc or (sc == wc and is_earlier(cid, winner[0])):
+                winner = (cid, desc, sc)
     
     
     # Show winner only
@@ -244,13 +273,14 @@ try:
     # Show per-generation breakdown (unless brief mode)
     if not show_brief and stats_by_gen:
         print('📈 BY GENERATION:')
-        for gen in sorted(stats_by_gen.keys()):
+        # Sort generations numerically by extracting the number after 'gen'
+        sorted_gens = sorted(stats_by_gen.keys(), key=lambda g: int(g[3:]) if g.startswith('gen') and g[3:].isdigit() else 0)
+        for gen in sorted_gens:
             data = stats_by_gen[gen]
             total = sum(data.values())
             
-            # Find best performer in this generation
-            gen_candidates = [c for c in all_candidates if c[0].startswith(gen + '-')]
-            gen_best = max(gen_candidates, key=lambda x: x[2]) if gen_candidates else None
+            # Find best performer in this generation (using precomputed winners_by_gen)
+            gen_best = winners_by_gen.get(gen)
             
             status_str = f'{data[\"pending\"]}p {data[\"complete\"]}c {data[\"failed\"]}f {data[\"running\"]}r'
             

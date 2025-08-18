@@ -246,7 +246,8 @@ with open('$csv_file', 'r') as f:
 "
 
 # Process generation stats
-for gen in $(cut -d' ' -f1 "$gen_stats_file" | sort -u || echo ""); do
+# Sort generations numerically
+for gen in $(cut -d' ' -f1 "$gen_stats_file" | sort -u | awk '{print substr($0,4), $0}' | sort -n | cut -d' ' -f2 || echo ""); do
   [[ -z "$gen" ]] && continue
   total_in_gen=$(grep -c "^$gen " "$gen_stats_file" 2>/dev/null || echo "0")
   completed_in_gen=$(grep -c "^$gen completed" "$gen_stats_file" 2>/dev/null || echo "0")
@@ -461,7 +462,8 @@ print(f'max_desc=\"{desc_escaped}\"')
   # Create generation averages file and track max generation
   gen_index=1
   max_gen_num=0
-  for gen in $(cut -d' ' -f1 "$gen_data_temp" | sort -u); do
+  # Sort generations numerically for graph  
+  for gen in $(cut -d' ' -f1 "$gen_data_temp" | sort -u | awk '{print substr($0,4), $0}' | sort -n | cut -d' ' -f2); do
     if grep -q "^$gen " "$gen_data_temp"; then
       # Calculate median for this generation
       # AIDEV-NOTE: Changed from mean to median to be more robust to outliers
@@ -511,6 +513,9 @@ print(f'max_desc=\"{desc_escaped}\"')
     # Calculate total data points for dynamic sizing
     total_data_points=$(awk 'END {print NR-1}' "$data_file")  # Subtract header row
     
+    # Count unique generations
+    unique_generations=$(awk '{if(NR>1) print $4}' "$data_file" | sort -nu | wc -l)
+    
     # AIDEV-NOTE: Dynamic dot sizing based on data point count
     # Use significantly larger dots when there are fewer data points for better visibility
     if [[ $total_data_points -lt 35 ]]; then
@@ -528,16 +533,24 @@ print(f'max_desc=\"{desc_escaped}\"')
     # Find all generations that have data
     generations=($(awk '{if(NR>1) print $4}' "$data_file" | sort -n | uniq))
     
-    for gen_num in "${generations[@]}"; do
-      if [[ -n $gen_num ]]; then
-        color=$(get_gen_color "$gen_num")
-        if [[ $gen_plots_added -gt 0 ]]; then
-          plot_cmd="$plot_cmd, \\"$'\n'
+    # If too many generations (>10), use a simplified plot without individual generation legends
+    if [[ $unique_generations -gt 10 ]]; then
+      # Single plot with color gradient based on generation number
+      plot_cmd="\"$data_file\" using 1:3:(\$4) with points palette pointsize $regular_dot_size notitle"
+      gen_plots_added=1
+    else
+      # Original plotting with individual generation legends
+      for gen_num in "${generations[@]}"; do
+        if [[ -n $gen_num ]]; then
+          color=$(get_gen_color "$gen_num")
+          if [[ $gen_plots_added -gt 0 ]]; then
+            plot_cmd="$plot_cmd, \\"$'\n'
+          fi
+          plot_cmd="${plot_cmd}     \"$data_file\" using (\$4==$gen_num?\$1:1/0):3 with points linecolor rgb \"$color\" pointsize $regular_dot_size title \"Gen $gen_num\""
+          ((gen_plots_added++))
         fi
-        plot_cmd="${plot_cmd}     \"$data_file\" using (\$4==$gen_num?\$1:1/0):3 with points linecolor rgb \"$color\" pointsize $regular_dot_size title \"Gen $gen_num\""
-        ((gen_plots_added++))
-      fi
-    done
+      done
+    fi
     
     # Add novel candidates
     if [[ -s "$novel_file" ]] && [[ $(wc -l < "$novel_file") -gt 1 ]]; then
@@ -568,7 +581,8 @@ print(f'max_desc=\"{desc_escaped}\"')
     # Build x-axis labels for generation chart (include all generations from data)
     xtics_labels=""
     label_index=1
-    for gen in $(cut -d' ' -f1 "$gen_data_temp" | sort -u); do
+    # Sort generations numerically for graph  
+  for gen in $(cut -d' ' -f1 "$gen_data_temp" | sort -u | awk '{print substr($0,4), $0}' | sort -n | cut -d' ' -f2); do
       if [[ -n $gen ]]; then
         gen_display=$(echo "$gen" | sed 's/gen0*//')
         if [[ -n $xtics_labels ]]; then
@@ -583,6 +597,9 @@ print(f'max_desc=\"{desc_escaped}\"')
 set terminal png size 1200,800
 set output "$output_file"
 
+# Define unique generations count
+unique_gens = $unique_generations
+
 # Set up multiplot with proper spacing
 set multiplot layout 2,1 margins 0.08,0.82,0.15,0.95 spacing 0.1,0.15
 
@@ -592,7 +609,9 @@ set title "$EVOLUTION_CONTEXT Algorithm Evolution Performance Over Time" font ",
 unset xlabel
 set ylabel "Performance Score"
 set grid y  # Only show horizontal grid lines
-set key outside right
+
+# Show legend only if 10 or fewer generations
+if (unique_gens <= 10) set key outside right; else unset key
 
 # AIDEV-NOTE: Remove x-axis entirely to avoid tick problems with large datasets
 unset xtics
@@ -600,6 +619,9 @@ set autoscale
 set yrange [*:*]  # Auto-scale y-axis only
 
 # Define colors for generations
+# Use palette for many generations
+if (unique_gens > 10) set palette model RGB defined (0 "#1f77b4", 1 "#ff7f0e", 2 "#2ca02c", 3 "#d62728", 4 "#9467bd", 5 "#8c564b", 6 "#e377c2")
+
 plot $plot_cmd
 
 #=================== BOTTOM PLOT: Generation Medians ===================
@@ -611,8 +633,13 @@ set boxwidth 0.6
 unset key
 set grid y
 
-# Set custom x-axis labels
-set xtics ($xtics_labels)
+# Set custom x-axis labels (but hide if too many generations)
+if (unique_gens > 10) {
+    set xtics auto
+    set xtics rotate by -45
+} else {
+    set xtics ($xtics_labels)
+}
 
 # Auto-scale for generation plot too
 set autoscale

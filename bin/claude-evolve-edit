@@ -20,7 +20,10 @@ show_help() {
 claude-evolve edit - Manage evolution candidate statuses by generation or status
 
 USAGE:
-  claude-evolve edit <selector> <action>
+  claude-evolve edit [--recent-generations=N] <selector> <action>
+
+OPTIONS:
+  --recent-generations=N  Limit operations to the most recent N generations only
 
 SELECTORS:
   gen01, gen02, etc.  Target specific generation
@@ -41,29 +44,56 @@ ACTIONS:
   delete           Delete candidates from CSV and remove .py files (asks confirmation)
 
 EXAMPLES:
-  claude-evolve edit gen03 failed        # Mark all gen03 as failed
-  claude-evolve edit failed pending      # Reset all failed candidates to pending
-  claude-evolve edit failed failed-retry1 # Convert failed to retry status (bug fixing)
-  claude-evolve edit complete failed     # Mark all complete as failed for re-run
-  claude-evolve edit all pending         # Mark everything as pending for re-run
-  claude-evolve edit gen02 reboot        # Full reset of gen02 (delete files + clear data)
-  claude-evolve edit gen02 delete        # Delete gen02 from CSV and remove .py files
+  claude-evolve edit gen03 failed                    # Mark all gen03 as failed
+  claude-evolve edit failed pending                  # Reset all failed candidates to pending
+  claude-evolve edit --recent-generations=15 failed pending  # Reset only recent 15 gen failures
+  claude-evolve edit --recent-generations=5 complete failed  # Re-run recent 5 gen completions
+  claude-evolve edit failed failed-retry1            # Convert failed to retry status (bug fixing)
+  claude-evolve edit complete failed                 # Mark all complete as failed for re-run
+  claude-evolve edit all pending                     # Mark everything as pending for re-run
+  claude-evolve edit gen02 reboot                    # Full reset of gen02 (delete files + clear data)
+  claude-evolve edit gen02 delete                    # Delete gen02 from CSV and remove .py files
 
 DESCRIPTION:
   This command helps manage evolution runs when you need to re-evaluate candidates.
   Use status selectors (failed, complete, etc.) to bulk-change candidates by status.
   Use 'reboot' for complete reset including file deletion.
+  Use --recent-generations to limit operations to recent work only, useful for large systems.
 EOF
 }
 
 # Parse arguments
-if [[ $# -ne 2 ]]; then
+recent_generations=""
+args=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --recent-generations=*)
+      recent_generations="${1#*=}"
+      if [[ ! "$recent_generations" =~ ^[1-9][0-9]*$ ]]; then
+        echo "[ERROR] --recent-generations must be a positive integer" >&2
+        exit 1
+      fi
+      shift
+      ;;
+    --help|-h)
+      show_help
+      exit 0
+      ;;
+    *)
+      args+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [[ ${#args[@]} -ne 2 ]]; then
   show_help
   exit 1
 fi
 
-SELECTOR="$1"
-ACTION="$2"
+SELECTOR="${args[0]}"
+ACTION="${args[1]}"
 
 # Validate configuration
 if ! validate_config; then
@@ -99,7 +129,11 @@ update_candidates_status() {
   local new_status="$2"
   local clear_scores="$3"
   
-  echo "[INFO] Updating candidates matching '$selector' to status: $new_status"
+  local filter_msg=""
+  if [[ -n "$recent_generations" ]]; then
+    filter_msg=" (limited to recent $recent_generations generations)"
+  fi
+  echo "[INFO] Updating candidates matching '$selector' to status: $new_status${filter_msg}"
   
   # Use Python to safely edit the CSV
   "$PYTHON_CMD" -c "
@@ -112,6 +146,7 @@ csv_file = '$FULL_CSV_PATH'
 selector = '$selector'
 new_status = '$new_status'
 clear_scores = '$clear_scores' == 'true'
+recent_generations = '$recent_generations'
 
 
 try:
@@ -126,6 +161,31 @@ try:
     
     header = rows[0]
     updated_count = 0
+    
+    # If recent_generations is specified, determine which generations to include
+    recent_gen_set = set()
+    if recent_generations and recent_generations.isdigit():
+        n_recent = int(recent_generations)
+        
+        # Find all generation numbers from candidate IDs
+        all_generations = set()
+        for i in range(1, len(rows)):
+            row = rows[i]
+            if len(row) < 1:
+                continue
+            candidate_id = row[0]
+            
+            # Extract generation number from candidate_id (e.g., gen01-001 -> 1)
+            match = re.match(r'^gen(\d+)-', candidate_id)
+            if match:
+                gen_num = int(match.group(1))
+                all_generations.add(gen_num)
+        
+        # Get the most recent N generations
+        if all_generations:
+            sorted_generations = sorted(all_generations, reverse=True)
+            recent_gen_set = set(sorted_generations[:n_recent])
+            print(f'[INFO] Filtering to recent generations: {sorted(recent_gen_set)}', file=sys.stderr)
     
     # Update matching rows
     for i in range(1, len(rows)):
@@ -151,6 +211,18 @@ try:
                 matches = current_status.startswith('failed')
             else:
                 matches = current_status == selector
+        
+        # Apply recent generations filter if specified
+        if matches and recent_gen_set:
+            # Extract generation number from candidate_id
+            gen_match = re.match(r'^gen(\d+)-', candidate_id)
+            if gen_match:
+                candidate_gen = int(gen_match.group(1))
+                if candidate_gen not in recent_gen_set:
+                    matches = False  # Filter out this candidate
+            else:
+                # Non-generation candidates (like baseline) - exclude when filtering by recent generations
+                matches = False
         
         if matches:
             if clear_scores:
@@ -192,6 +264,12 @@ delete_evolution_files() {
     return
   fi
   
+  local filter_msg=""
+  if [[ -n "$recent_generations" ]]; then
+    filter_msg=" (limited to recent $recent_generations generations)"
+  fi
+  echo "[INFO] Deleting evolution files for '$selector'${filter_msg}..."
+  
   local deleted_count=0
   
   if [[ "$selector" == "all" ]]; then
@@ -225,15 +303,46 @@ import re
 
 csv_file = '$FULL_CSV_PATH'
 selector = '$selector'
+recent_generations = '$recent_generations'
 
 
 try:
     with open(csv_file, 'r') as f:
         reader = csv.reader(f)
-        next(reader)  # Skip header
+        rows = list(reader)
+        
+        if not rows:
+            print('')
+            sys.exit(0)
+        
+        # Skip header if present
+        start_idx = 1 if rows and rows[0] and rows[0][0].lower() == 'id' else 0
+        
+        # Determine recent generations if filtering is requested
+        recent_gen_set = set()
+        if recent_generations and recent_generations.isdigit():
+            n_recent = int(recent_generations)
+            
+            # Find all generation numbers from candidate IDs
+            all_generations = set()
+            for row in rows[start_idx:]:
+                if len(row) < 1:
+                    continue
+                candidate_id = row[0]
+                
+                # Extract generation number from candidate_id (e.g., gen01-001 -> 1)
+                match = re.match(r'^gen(\d+)-', candidate_id)
+                if match:
+                    gen_num = int(match.group(1))
+                    all_generations.add(gen_num)
+            
+            # Get the most recent N generations
+            if all_generations:
+                sorted_generations = sorted(all_generations, reverse=True)
+                recent_gen_set = set(sorted_generations[:n_recent])
         
         candidates = []
-        for row in reader:
+        for row in rows[start_idx:]:
             if len(row) < 1:
                 continue
             
@@ -248,6 +357,18 @@ try:
                 matches = current_status.startswith('failed')
             else:
                 matches = current_status == selector
+            
+            # Apply recent generations filter if specified
+            if matches and recent_gen_set:
+                # Extract generation number from candidate_id
+                gen_match = re.match(r'^gen(\d+)-', candidate_id)
+                if gen_match:
+                    candidate_gen = int(gen_match.group(1))
+                    if candidate_gen not in recent_gen_set:
+                        matches = False  # Filter out this candidate
+                else:
+                    # Non-generation candidates (like baseline) - exclude when filtering by recent generations
+                    matches = False
             
             if matches:
                 candidates.append(candidate_id)
@@ -284,7 +405,11 @@ except Exception as e:
 delete_candidates_from_csv() {
   local selector="$1"
   
-  echo "[INFO] Deleting candidates matching '$selector' from CSV..."
+  local filter_msg=""
+  if [[ -n "$recent_generations" ]]; then
+    filter_msg=" (limited to recent $recent_generations generations)"
+  fi
+  echo "[INFO] Deleting candidates matching '$selector' from CSV${filter_msg}..."
   
   "$PYTHON_CMD" -c "
 import sys
@@ -293,6 +418,7 @@ from lib.evolution_csv import EvolutionCSV
 import re
 
 selector = '$selector'
+recent_generations = '$recent_generations'
 deleted_count = 0
 
 with EvolutionCSV('$FULL_CSV_PATH') as csv:
@@ -305,6 +431,29 @@ with EvolutionCSV('$FULL_CSV_PATH') as csv:
         rows = list(reader)
         has_header = rows and rows[0] and rows[0][0].lower() == 'id'
         start_idx = 1 if has_header else 0
+        
+        # Determine recent generations if filtering is requested
+        recent_gen_set = set()
+        if recent_generations and recent_generations.isdigit():
+            n_recent = int(recent_generations)
+            
+            # Find all generation numbers from candidate IDs
+            all_generations = set()
+            for row in rows[start_idx:]:
+                if not row or not row[0].strip():
+                    continue
+                candidate_id = row[0].strip()
+                
+                # Extract generation number from candidate_id (e.g., gen01-001 -> 1)
+                match = re.match(r'^gen(\d+)-', candidate_id)
+                if match:
+                    gen_num = int(match.group(1))
+                    all_generations.add(gen_num)
+            
+            # Get the most recent N generations
+            if all_generations:
+                sorted_generations = sorted(all_generations, reverse=True)
+                recent_gen_set = set(sorted_generations[:n_recent])
         
         for row in rows[start_idx:]:
             if not row or not row[0].strip():
@@ -327,6 +476,18 @@ with EvolutionCSV('$FULL_CSV_PATH') as csv:
             else:
                 matches = current_status == selector
             
+            # Apply recent generations filter if specified
+            if matches and recent_gen_set:
+                # Extract generation number from candidate_id
+                gen_match = re.match(r'^gen(\d+)-', candidate_id)
+                if gen_match:
+                    candidate_gen = int(gen_match.group(1))
+                    if candidate_gen not in recent_gen_set:
+                        matches = False  # Filter out this candidate
+                else:
+                    # Non-generation candidates (like baseline) - exclude when filtering by recent generations
+                    matches = False
+            
             if matches:
                 candidates_to_delete.append(candidate_id)
     
@@ -341,7 +502,11 @@ with EvolutionCSV('$FULL_CSV_PATH') as csv:
 }
 
 # Main execution
-echo "[INFO] Processing '$SELECTOR' with action: $ACTION"
+info_msg="Processing '$SELECTOR' with action: $ACTION"
+if [[ -n "$recent_generations" ]]; then
+  info_msg="$info_msg (limited to recent $recent_generations generations)"
+fi
+echo "[INFO] $info_msg"
 
 case "$ACTION" in
   failed)

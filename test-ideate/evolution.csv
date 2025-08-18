@@ -1,4 +1,3 @@
-id,basedOnId,description,performance,status
-gen01-001,,Implement a dual-timeframe momentum strategy combining 5-minute RSI divergence detection with hourly VWAP bands for entry timing and dynamic position sizing based on ATR volatility.,,pending
-gen01-002,,Create an ensemble approach using gradient boosting to weight signals from multiple indicators including Bollinger Band squeeze detection, volume profile analysis, and options flow sentiment extracted from put-call ratios.,,pending
-gen01-003,,Implement a multi-timeframe momentum strategy that uses wavelet decomposition to identify trend strength across different frequencies, allocating capital proportionally to the coherence between price movements and volume-weighted momentum signals.,,pending
+id,basedOnId,description,performance,status,idea-LLM,run-LLM
+gen01-001,,Implement a dual-timeframe momentum strategy combining 5-minute RSI divergence detection with hourly VWAP bands for entry timing and dynamic position sizing based on ATR volatility.,,pending,,
+gen01-002,,Create an ensemble approach using gradient boosting to weight signals from multiple indicators including Bollinger Band squeeze detection, volume profile analysis, and options flow sentiment extracted from put-call ratios.,,pending,,

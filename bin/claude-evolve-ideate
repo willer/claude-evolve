@@ -18,6 +18,17 @@ else
   load_config
 fi
 
+# Setup logging to file
+if [[ -n "${FULL_EVOLUTION_DIR:-}" ]]; then
+  LOG_DIR="$FULL_EVOLUTION_DIR/logs"
+  mkdir -p "$LOG_DIR"
+  LOG_FILE="$LOG_DIR/ideate-$$-$(date +%Y%m%d-%H%M%S).log"
+  
+  # Log to both terminal and file with timestamps
+  exec > >(while IFS= read -r line; do echo "$(date '+%Y-%m-%d %H:%M:%S'): $line"; done | tee -a "$LOG_FILE") 2>&1
+  echo "[IDEATE-$$] Logging to: $LOG_FILE"
+fi
+
 # Helper function to call AI with limit check
 call_ai_with_limit_check() {
   local prompt="$1"
@@ -62,6 +73,7 @@ call_claude_with_limit_check() {
 }
 
 # Robust AI calling with fallbacks across all available models
+# Returns 0 on success and echoes the successful model name to stdout
 call_ai_for_ideation() {
   local prompt="$1"
   local generation="${2:-01}"
@@ -84,32 +96,77 @@ call_ai_for_ideation() {
     original_csv_count=0
   fi
   
-  # Use centralized AI library
-  local ai_output
-  ai_output=$(call_ai_with_round_robin "$prompt" "ideate" "$gen_num")
-  local ai_exit_code=$?
+  echo "[DEBUG] Original CSV has $original_csv_count data rows" >&2
   
-  # Handle special exit codes
-  # Always check if the file was modified, regardless of exit code
-  # This is the only test that matters - did the CSV change?
+  # Get models for ideation
+  local model_list
+  model_list=$(get_models_for_command "ideate")
+  local models=()
+  read -ra models <<< "$model_list"
   
-  if [[ -f "$temp_csv_file" ]]; then
-    local new_csv_count
-    new_csv_count=$(grep -v '^[[:space:]]*$' "$temp_csv_file" | tail -n +2 | wc -l)
-    
-    if [[ $new_csv_count -gt $original_csv_count ]]; then
-      echo "[INFO] CSV was modified ($new_csv_count vs $original_csv_count rows) - success!" >&2
-      return 0
-    else
-      echo "[INFO] CSV unchanged after AI call (exit code: $ai_exit_code)" >&2
-      echo "[DEBUG] Original count: $original_csv_count, New count: $new_csv_count" >&2
-      return 1
-    fi
-  else
-    echo "[INFO] Temp CSV file not found after AI call: $temp_csv_file" >&2
-    echo "[DEBUG] Exit code was: $ai_exit_code" >&2
+  if [[ ${#models[@]} -eq 0 ]]; then
+    echo "[ERROR] No models configured for ideation" >&2
     return 1
   fi
+  
+  # Calculate starting index for round-robin
+  local num_models=${#models[@]}
+  local start_index=$((gen_num % num_models))
+  
+  # Create ordered list based on round-robin
+  local ordered_models=()
+  for ((i=0; i<num_models; i++)); do
+    local idx=$(((start_index + i) % num_models))
+    ordered_models+=("${models[$idx]}")
+  done
+  
+  echo "[AI] Model order for ideate (round-robin): ${ordered_models[*]}" >&2
+  
+  # Try each model until CSV changes
+  for model in "${ordered_models[@]}"; do
+    echo "[AI] Attempting ideate with $model" >&2
+    
+    # Call the model directly
+    local ai_output
+    ai_output=$(call_ai_model_configured "$model" "$prompt")
+    local ai_exit_code=$?
+    
+    # Check if the file was modified - this is ALL that matters
+    if [[ -f "$temp_csv_file" ]]; then
+      local new_csv_count
+      new_csv_count=$(grep -v '^[[:space:]]*$' "$temp_csv_file" | tail -n +2 | wc -l)
+      
+      if [[ $new_csv_count -gt $original_csv_count ]]; then
+        echo "[INFO] CSV was modified by $model ($new_csv_count vs $original_csv_count rows) - validating format..." >&2
+        
+        # Post-process to ensure all description fields are quoted
+        local fixed_csv_file="${temp_csv_file}.fixed"
+        
+        # Use the CSV fixer script
+        if "$PYTHON_CMD" "$SCRIPT_DIR/../lib/csv_fixer.py" "$temp_csv_file" "$fixed_csv_file"; then
+          mv "$fixed_csv_file" "$temp_csv_file"
+          echo "[INFO] CSV format validated and fixed if needed" >&2
+        else
+          echo "[WARN] CSV format validation failed, using original" >&2
+        fi
+        
+        # Echo the successful model name for caller to capture
+        echo "$model"
+        return 0
+      else
+        echo "[INFO] CSV unchanged after $model (exit code: $ai_exit_code)" >&2
+        echo "[DEBUG] Original count: $original_csv_count, New count: $new_csv_count" >&2
+        # Continue to next model
+      fi
+    else
+      echo "[INFO] Temp CSV file not found after $model: $temp_csv_file" >&2
+      # Continue to next model
+    fi
+  done
+  
+  # All models tried, none changed the file
+  echo "[ERROR] All AI models failed to generate ideas" >&2
+  return 1
 }
 
 # Parse arguments
@@ -165,7 +222,7 @@ fi
 
 # Ensure CSV exists
 if [[ ! -f "$FULL_CSV_PATH" ]]; then
-  echo "id,basedOnId,description,performance,status" >"$FULL_CSV_PATH"
+  echo "id,basedOnId,description,performance,status,idea-LLM,run-LLM" >"$FULL_CSV_PATH"
 fi
 
 # Validate strategy configuration
@@ -261,6 +318,7 @@ validate_direct_csv_modification() {
   local temp_csv="$1"
   local expected_count="$2"
   local idea_type="$3"
+  local ai_model="${4:-}"  # AI model that generated the ideas
   
   # Check if the file was actually modified
   if [[ ! -f "$temp_csv" ]]; then
@@ -323,6 +381,22 @@ validate_direct_csv_modification() {
   
   # Clean up temp file
   rm -f "$temp_csv"
+  
+  # Update idea-LLM field for newly added rows if model is known
+  if [[ -n "$ai_model" ]]; then
+    echo "[INFO] Recording that $ai_model generated the ideas" >&2
+    # Get the IDs of the newly added rows (skip header line and strip quotes)
+    local new_ids
+    new_ids=$(tail -n $added_count "$FULL_CSV_PATH" | grep -v "^id," | cut -d',' -f1 | tr -d '"')
+    
+    # Update each new row with the model that generated it
+    for id in $new_ids; do
+      if [[ -n "$id" && "$id" != "id" ]]; then
+        echo "[DEBUG] Updating $id with idea-LLM = $ai_model" >&2
+        "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" field "$id" "idea-LLM" "$ai_model" || echo "[WARN] Failed to update $id" >&2
+      fi
+    done
+  fi
   
   # Release the lock
   release_csv_lock
@@ -417,6 +491,22 @@ validate_and_apply_csv_modification_old() {
   # Clean up temp file
   rm -f "$temp_csv"
   
+  # Update idea-LLM field for newly added rows if model is known
+  if [[ -n "$ai_model" ]]; then
+    echo "[INFO] Recording that $ai_model generated the ideas" >&2
+    # Get the IDs of the newly added rows (skip header line and strip quotes)
+    local new_ids
+    new_ids=$(tail -n $added_count "$FULL_CSV_PATH" | grep -v "^id," | cut -d',' -f1 | tr -d '"')
+    
+    # Update each new row with the model that generated it
+    for id in $new_ids; do
+      if [[ -n "$id" && "$id" != "id" ]]; then
+        echo "[DEBUG] Updating $id with idea-LLM = $ai_model" >&2
+        "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" field "$id" "idea-LLM" "$ai_model" || echo "[WARN] Failed to update $id" >&2
+      fi
+    done
+  fi
+  
   # Release the lock
   release_csv_lock
   
@@ -453,8 +543,14 @@ Instructions:
 1. Add exactly $count new rows to the CSV
 2. Use the next available generation numbers (gen$CURRENT_GENERATION-XXX format)
 3. For each idea, create a row with: id,parent_id,description,,pending
-4. For novel ideas: leave parent_id empty
-5. For other idea types: use appropriate parent IDs from these top performers:
+4. CRITICAL CSV FORMATTING RULES:
+   - ALWAYS wrap the description field in double quotes
+   - If the description contains quotes, escape them by doubling them (\" becomes \"\")
+   - Example: gen01-001,gen00-000,\"Implement adaptive RSI thresholds\",,pending
+   - BAD: gen01-001,gen00-000,Implement adaptive RSI thresholds,,pending
+   - NEVER omit quotes - unquoted descriptions cause CSV corruption
+5. For novel ideas: leave parent_id empty
+6. For other idea types: use appropriate parent IDs from these top performers:
 $top_performers
 
 IMPORTANT: Output the complete modified CSV file. Do not add any explanation or other text - just output the CSV."
@@ -831,9 +927,15 @@ CRITICAL INSTRUCTIONS:
   prompt+="
 6. Use the Edit or MultiEdit tool to APPEND exactly $count new rows AT THE END of the CSV file
 7. For each idea, create a row with: id,,description,,pending (empty parent_id for novel ideas)
-8. Each description should be one clear sentence describing a novel algorithmic approach
-9. Focus on creative, ambitious ideas that haven't been tried yet
-10. Consider machine learning, new indicators, regime detection, risk management, etc.
+8. CRITICAL CSV FORMATTING RULES:
+   - ALWAYS wrap the description field in double quotes
+   - If the description contains quotes, escape them by doubling them (\" becomes \"\")
+   - Example: gen01-001,,\"Implement adaptive RSI thresholds based on volatility\",,pending
+   - BAD: gen01-001,,Implement adaptive RSI thresholds based on volatility,,pending
+   - NEVER omit quotes around descriptions - this causes CSV parsing errors
+9. Each description should be one clear sentence describing a novel algorithmic approach
+10. Focus on creative, ambitious ideas that haven't been tried yet
+11. Consider machine learning, new indicators, regime detection, risk management, etc.
 
 IMPORTANT: You must APPEND new rows to the existing CSV file. DO NOT replace the file contents. All existing rows must remain unchanged.
 CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly.
@@ -880,7 +982,7 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
   echo "[DEBUG] AI response: $ai_response" >&2
   
   # Validate that the CSV file was actually modified
-  if ! validate_direct_csv_modification "$temp_csv" "$count" "novel"; then
+  if ! validate_direct_csv_modification "$temp_csv" "$count" "novel" "$ai_response"; then
     rm -f "$temp_csv"
     return 1
   fi
@@ -931,8 +1033,14 @@ CRITICAL INSTRUCTIONS:
 5. Use the Edit or MultiEdit tool to APPEND exactly $count new rows AT THE END of the CSV file
 6. For each idea, create a row with: id,parent_id,description,,pending
 7. Each parent_id MUST be one of: $valid_parent_ids
-8. Each description should focus on adjusting specific parameters that exist in the parent's source code
-9. Include current and new parameter values (e.g., \"Lower rsi_entry from 21 to 18\")
+8. CRITICAL CSV FORMATTING RULES:
+   - ALWAYS wrap the description field in double quotes
+   - If the description contains quotes, escape them by doubling them (\" becomes \"\")
+   - Example: gen01-001,gen00-000,\"Lower rsi_entry from 21 to 18\",,pending
+   - BAD: gen01-001,gen00-000,Lower rsi_entry from 21 to 18,,pending
+   - NEVER omit quotes around descriptions - this causes CSV parsing errors
+9. Each description should focus on adjusting specific parameters that exist in the parent's source code
+10. Include current and new parameter values - for example: \"Lower rsi_entry from 21 to 18\"
 
 IMPORTANT: You must APPEND new rows to the existing CSV file. DO NOT replace the file contents. All existing rows must remain unchanged.
 CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly.
@@ -961,7 +1069,7 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
   echo "[DEBUG] AI response: $ai_response" >&2
   
   # Validate that the CSV file was actually modified
-  if ! validate_direct_csv_modification "$temp_csv" "$count" "hill-climbing"; then
+  if ! validate_direct_csv_modification "$temp_csv" "$count" "hill-climbing" "$ai_response"; then
     rm -f "$temp_csv"
     return 1
   fi
@@ -1012,8 +1120,14 @@ CRITICAL INSTRUCTIONS:
 5. Use the Edit or MultiEdit tool to APPEND exactly $count new rows AT THE END of the CSV file
 6. For each idea, create a row with: id,parent_id,description,,pending
 7. Each parent_id MUST be one of: $valid_parent_ids
-8. Each description should focus on architectural/structural changes based on the parent's actual code
-9. Reference actual components/methods found in the source code
+8. CRITICAL CSV FORMATTING RULES:
+   - ALWAYS wrap the description field in double quotes
+   - If the description contains quotes, escape them by doubling them (\" becomes \"\")
+   - Example: gen01-001,gen00-000,\"Add ML-based regime detection using LSTM\",,pending
+   - BAD: gen01-001,gen00-000,Add ML-based regime detection using LSTM,,pending
+   - NEVER omit quotes around descriptions - this causes CSV parsing errors
+9. Each description should focus on architectural/structural changes based on the parent's actual code
+10. Reference actual components/methods found in the source code
 
 IMPORTANT: You must APPEND new rows to the existing CSV file. DO NOT replace the file contents. All existing rows must remain unchanged.
 CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly.
@@ -1042,7 +1156,7 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
   echo "[DEBUG] AI response: $ai_response" >&2
   
   # Validate that the CSV file was actually modified
-  if ! validate_direct_csv_modification "$temp_csv" "$count" "structural"; then
+  if ! validate_direct_csv_modification "$temp_csv" "$count" "structural" "$ai_response"; then
     rm -f "$temp_csv"
     return 1
   fi
@@ -1093,8 +1207,14 @@ CRITICAL INSTRUCTIONS:
 5. Use the Edit or MultiEdit tool to APPEND exactly $count new rows AT THE END of the CSV file
 6. For each idea, create a row with: id,parent_id,description,,pending
 7. Each parent_id MUST be one of: $valid_parent_ids (choose the primary parent)
-8. Each description should combine actual elements from 2+ algorithms based on their source code
-9. Reference specific components/features found in the actual source code
+8. CRITICAL CSV FORMATTING RULES:
+   - ALWAYS wrap the description field in double quotes
+   - If the description contains quotes, escape them by doubling them (\" becomes \"\")
+   - Example: gen01-001,gen00-000,\"Combine gen01-123's RSI logic with gen01-456's volatility scaling\",,pending
+   - BAD: gen01-001,gen00-000,Combine gen01-123's RSI logic with gen01-456's volatility scaling,,pending
+   - NEVER omit quotes around descriptions - this causes CSV parsing errors
+9. Each description should combine actual elements from 2+ algorithms based on their source code
+10. Reference specific components/features found in the actual source code
 
 IMPORTANT: You must APPEND new rows to the existing CSV file. DO NOT replace the file contents. All existing rows must remain unchanged.
 CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly.
@@ -1123,7 +1243,7 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
   echo "[DEBUG] AI response: $ai_response" >&2
   
   # Validate that the CSV file was actually modified
-  if ! validate_direct_csv_modification "$temp_csv" "$count" "crossover"; then
+  if ! validate_direct_csv_modification "$temp_csv" "$count" "crossover" "$ai_response"; then
     rm -f "$temp_csv"
     return 1
   fi
@@ -1187,8 +1307,14 @@ CRITICAL INSTRUCTIONS:
 4. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001
 5. Use the Edit or MultiEdit tool to APPEND exactly $TOTAL_IDEAS new rows AT THE END of the CSV file
 6. For each idea, create a row with: id,parent_id,description,,pending
-7. Mix both parameter tuning and structural changes
-8. If building on existing algorithms, use their ID as parent_id, otherwise leave parent_id empty
+7. CRITICAL CSV FORMATTING RULES:
+   - ALWAYS wrap the description field in double quotes
+   - If the description contains quotes, escape them by doubling them (\" becomes \"\")
+   - Example: gen01-001,gen00-000,\"Implement adaptive RSI thresholds based on volatility\",,pending
+   - BAD: gen01-001,gen00-000,Implement adaptive RSI thresholds based on volatility,,pending
+   - NEVER omit quotes around descriptions - this causes CSV parsing errors that corrupt the data
+8. Mix both parameter tuning and structural changes
+9. If building on existing algorithms, use their ID as parent_id, otherwise leave parent_id empty
 
 ⚠️ AVOID ONLY: Kelly floor/cap adjustments that assume leverage > 1.0 (these get clamped and have no effect)
 
@@ -1228,7 +1354,7 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
   echo "[DEBUG] AI response: $ai_response" >&2
   
   # Validate that the CSV file was actually modified
-  if ! validate_direct_csv_modification "$temp_csv" "$TOTAL_IDEAS" "mixed"; then
+  if ! validate_direct_csv_modification "$temp_csv" "$TOTAL_IDEAS" "mixed" "$ai_response"; then
     rm -f "$temp_csv"
     return 1
   fi

@@ -478,6 +478,66 @@ ensure_baseline_entry
 # Flag to track API limit status
 api_limit_reached=false
 
+# Check if previous generation has at least one completed item
+check_previous_generation_has_completed() {
+  local csv_path="$1"
+  
+  if [[ ! -f "$csv_path" ]]; then
+    # No CSV file yet - allow first ideation
+    return 0
+  fi
+  
+  # Use Python to find the maximum generation and check if it has completed items
+  "$PYTHON_CMD" -c "
+import csv
+import sys
+
+max_gen = 0
+gen_completed = {}
+
+try:
+    with open('$csv_path', 'r') as f:
+        reader = csv.reader(f)
+        next(reader, None)  # Skip header
+        for row in reader:
+            if row and len(row) >= 5:
+                id_field = row[0].strip()
+                status = row[4].strip() if len(row) > 4 else 'pending'
+                
+                if id_field.startswith('gen') and '-' in id_field:
+                    try:
+                        gen_part = id_field.split('-')[0]  # e.g., 'gen01'
+                        gen_num = int(gen_part[3:])  # Extract number after 'gen'
+                        max_gen = max(max_gen, gen_num)
+                        
+                        if gen_num not in gen_completed:
+                            gen_completed[gen_num] = 0
+                        
+                        if status == 'complete':
+                            gen_completed[gen_num] += 1
+                    except (ValueError, IndexError):
+                        pass
+
+    # If max_gen is 0, no generations exist yet - allow ideation
+    if max_gen == 0:
+        sys.exit(0)
+    
+    # Check if the most recent generation has at least one completed item
+    if gen_completed.get(max_gen, 0) > 0:
+        print(f'[INFO] Generation {max_gen:02d} has {gen_completed[max_gen]} completed items - allowing ideation', file=sys.stderr)
+        sys.exit(0)
+    else:
+        print(f'[INFO] Generation {max_gen:02d} has no completed items - blocking ideation to prevent endless loops', file=sys.stderr)
+        sys.exit(1)
+
+except Exception as e:
+    print(f'[ERROR] Failed to check previous generation: {e}', file=sys.stderr)
+    # On error, allow ideation to maintain backward compatibility
+    sys.exit(0)
+"
+  return $?
+}
+
 # Main dispatch loop
 while true; do
   # Clean up finished workers
@@ -506,7 +566,17 @@ while true; do
     
     # Check if auto ideation is enabled
     if [[ "$AUTO_IDEATE" == "true" || "$AUTO_IDEATE" == "1" ]]; then
-      echo "[DISPATCHER] Auto ideation is enabled. Generating new ideas..."
+      echo "[DISPATCHER] Auto ideation is enabled. Checking prerequisites..."
+      
+      # Check if previous generation has at least one completed item
+      if ! check_previous_generation_has_completed "$FULL_CSV_PATH"; then
+        echo "[DISPATCHER] Evolution complete - previous generation has no completed items."
+        echo "[DISPATCHER] This prevents endless ideation loops when API limits are hit."
+        echo "[DISPATCHER] Wait for current generation to complete, then run 'claude-evolve ideate' manually."
+        break
+      fi
+      
+      echo "[DISPATCHER] Prerequisites met. Generating new ideas..."
       
       # Check if claude-evolve-ideate exists
       ideate_script="$SCRIPT_DIR/claude-evolve-ideate"

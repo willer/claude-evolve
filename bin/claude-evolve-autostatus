@@ -38,6 +38,7 @@ else
   load_config
 fi
 
+
 # Run the Python autostatus script
 exec "$PYTHON_CMD" -c '
 import os
@@ -118,9 +119,27 @@ class AutoStatus:
                 "working_dir": os.path.dirname(self.csv_path)
             }
         
+        # Helpers
+        def parse_candidate_id(cid):
+            """Return (gen_num, seq_num) for ids like gen123-045; fall back to large numbers."""
+            try:
+                left, right = cid.split("-", 1)
+                gen_num = int(left[3:]) if left.startswith("gen") else 10**9
+                seq_num = int(right)
+                return gen_num, seq_num
+            except Exception:
+                return 10**9, 10**9
+
+        def is_earlier(cid_a, cid_b):
+            """True if cid_a is earlier than cid_b by generation, then sequence."""
+            ga, sa = parse_candidate_id(cid_a)
+            gb, sb = parse_candidate_id(cid_b)
+            return (ga, sa) < (gb, sb)
+
+
         # Process candidates by generation
-        all_candidates = []
         stats_by_gen = {}
+        leader = None  # Track overall leader with earliest-wins tie behavior
         
         for row in rows[1:]:  # Skip header
             if len(row) >= 1 and row[0]:  # Must have an ID
@@ -157,20 +176,24 @@ class AutoStatus:
                             description = row[2] if len(row) > 2 else "No description"
                             candidate_info = (candidate_id, description, score)
                             stats_by_gen[gen]["candidates"].append(candidate_info)
-                            all_candidates.append(candidate_info)
+
+                            # Update overall leader: highest raw score; ties -> earliest ID
+                            if leader is None or score > leader[2] or (score == leader[2] and is_earlier(candidate_id, leader[0])):
+                                leader = candidate_info
+
+                            # Update generation best: highest raw score; ties -> earliest ID
+                            if "best" not in stats_by_gen[gen]:
+                                stats_by_gen[gen]["best"] = candidate_info
+                            else:
+                                best_id, _, best_score = stats_by_gen[gen]["best"]
+                                if score > best_score or (score == best_score and is_earlier(candidate_id, best_id)):
+                                    stats_by_gen[gen]["best"] = candidate_info
                         except ValueError:
                             pass
         
-        # Find the overall leader
-        leader = None
-        if all_candidates:
-            leader = max(all_candidates, key=lambda x: x[2])
-        
-        # Find best performer in each generation
+        # Ensure every generation has a best field
         for gen in stats_by_gen:
-            if stats_by_gen[gen]["candidates"]:
-                stats_by_gen[gen]["best"] = max(stats_by_gen[gen]["candidates"], key=lambda x: x[2])
-            else:
+            if "best" not in stats_by_gen[gen]:
                 stats_by_gen[gen]["best"] = None
         
         return {
@@ -246,8 +269,8 @@ class AutoStatus:
             print("-" * min(self.display.cols, len(header_fmt)))
             row += 1
             
-            # Sort generations
-            sorted_gens = sorted(generations.keys())
+            # Sort generations numerically by extracting the number after 'gen'
+            sorted_gens = sorted(generations.keys(), key=lambda g: int(g[3:]) if g.startswith("gen") and g[3:].isdigit() else 0)
             
             # Calculate how many generations we can show
             available_rows = self.display.rows - row - 1  # Leave room at bottom

@@ -37,7 +37,7 @@ done
 # Create CSV with header
 if [[ ! -f evolution/evolution.csv ]]; then
   echo "[INFO] Creating evolution.csv with header..."
-  echo "id,basedOnId,description,performance,status" >evolution/evolution.csv
+  echo "id,basedOnId,description,performance,status,idea-LLM,run-LLM" >evolution/evolution.csv
 else
   echo "[INFO] evolution.csv already exists, skipping"
 fi

@@ -19,11 +19,12 @@ parallel:
   enabled: false
 
 llm_cli:
-  o3: 'codex exec -m o3 --dangerously-bypass-approvals-and-sandbox "{{PROMPT}}"'
+  o3high: 'codex exec --profile o3high --dangerously-bypass-approvals-and-sandbox "{{PROMPT}}"'
+  gpt5high: 'codex exec --profile gpt5high --dangerously-bypass-approvals-and-sandbox "{{PROMPT}}"'
   codex: 'codex exec --dangerously-bypass-approvals-and-sandbox "{{PROMPT}}"'
   gemini: 'gemini -y -p "{{PROMPT}}"'
   opus: 'claude --dangerously-skip-permissions --model opus -p "{{PROMPT}}"'
   sonnet: 'claude --dangerously-skip-permissions --model sonnet -p "{{PROMPT}}"'
   
   run: sonnet
-  ideate: o3 opus gemini
+  ideate: o3high gpt5high opus gemini
