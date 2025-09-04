@@ -1,0 +1,120 @@
+#!/bin/bash
+
+set -e
+
+echo "[INFO] Migrating existing CSVs to add LLM tracking columns"
+echo "=========================================================="
+
+# Get script directory  
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Function to add LLM columns to a CSV file
+migrate_csv() {
+  local csv_file="$1"
+  
+  echo "[INFO] Processing: $csv_file"
+  
+  # Check if file exists
+  if [[ ! -f "$csv_file" ]]; then
+    echo "[WARN] File not found: $csv_file"
+    return 1
+  fi
+  
+  # Check if it has a header
+  local header
+  header=$(head -1 "$csv_file")
+  
+  if [[ ! "$header" =~ ^id, ]]; then
+    echo "[WARN] No valid CSV header found in: $csv_file"
+    return 1
+  fi
+  
+  # Check if LLM columns already exist
+  if echo "$header" | grep -q "idea-LLM" && echo "$header" | grep -q "run-LLM"; then
+    echo "[SKIP] Already has LLM columns: $csv_file"
+    return 0
+  fi
+  
+  # Create backup
+  cp "$csv_file" "${csv_file}.bak-$(date +%Y%m%d-%H%M%S)"
+  echo "[INFO] Created backup: ${csv_file}.bak-$(date +%Y%m%d-%H%M%S)"
+  
+  # Add LLM columns to header
+  local new_header="$header,idea-LLM,run-LLM"
+  
+  # Create temporary file
+  local temp_file="${csv_file}.tmp.$$"
+  
+  # Write new header
+  echo "$new_header" > "$temp_file"
+  
+  # Copy data rows (if any) and add empty LLM columns
+  if [[ $(wc -l < "$csv_file") -gt 1 ]]; then
+    tail -n +2 "$csv_file" | while IFS= read -r line; do
+      echo "$line,," >> "$temp_file"
+    done
+  fi
+  
+  # Replace original file
+  mv "$temp_file" "$csv_file"
+  
+  echo "[SUCCESS] Added LLM columns to: $csv_file"
+  return 0
+}
+
+# Parse arguments
+if [[ $# -eq 0 ]]; then
+  echo "Usage: claude-evolve-migrate-llm-columns <csv_file> [csv_file...]"
+  echo "   OR: claude-evolve-migrate-llm-columns --all"
+  echo ""
+  echo "Adds idea-LLM and run-LLM columns to existing evolution.csv files"
+  echo ""
+  echo "Options:"
+  echo "  --all    Find and migrate all evolution.csv files in parent directories"
+  exit 1
+fi
+
+if [[ "$1" == "--all" ]]; then
+  # Find all evolution.csv files
+  echo "[INFO] Searching for evolution.csv files..."
+  
+  # Look in parent directories for evolution CSVs
+  csv_files=()
+  while IFS= read -r -d '' file; do
+    csv_files+=("$file")
+  done < <(find .. -name "evolution.csv" -type f -print0 2>/dev/null)
+  
+  if [[ ${#csv_files[@]} -eq 0 ]]; then
+    echo "[INFO] No evolution.csv files found"
+    exit 0
+  fi
+  
+  echo "[INFO] Found ${#csv_files[@]} evolution.csv files"
+  
+  # Migrate each file
+  success_count=0
+  for csv_file in "${csv_files[@]}"; do
+    if migrate_csv "$csv_file"; then
+      ((success_count++))
+    fi
+  done
+  
+  echo ""
+  echo "=========================================================="
+  echo "[INFO] Migration complete: $success_count/${#csv_files[@]} files migrated"
+  
+else
+  # Migrate specific files
+  success_count=0
+  total_count=$#
+  
+  for csv_file in "$@"; do
+    if migrate_csv "$csv_file"; then
+      ((success_count++))
+    fi
+  done
+  
+  echo ""
+  echo "=========================================================="
+  echo "[INFO] Migration complete: $success_count/$total_count files migrated"
+fi

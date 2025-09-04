@@ -199,7 +199,7 @@ class EvolutionCSV:
         for i in range(start_idx, len(rows)):
             row = rows[i]
             
-            if self.is_valid_candidate_row(row) and row[0].strip() == candidate_id:
+            if self.is_valid_candidate_row(row) and row[0].strip().strip('"') == candidate_id.strip().strip('"'):
                 # Ensure row has at least 5 columns
                 while len(row) < 5:
                     row.append('')
@@ -227,7 +227,7 @@ class EvolutionCSV:
         for i in range(start_idx, len(rows)):
             row = rows[i]
             
-            if self.is_valid_candidate_row(row) and row[0].strip() == candidate_id:
+            if self.is_valid_candidate_row(row) and row[0].strip().strip('"') == candidate_id.strip().strip('"'):
                 # Ensure row has at least 4 columns
                 while len(row) < 4:
                     row.append('')
@@ -263,10 +263,14 @@ class EvolutionCSV:
                     field_index = i
                     break
             
-            # If field doesn't exist, add it to header
+            # If field doesn't exist, add it to header and extend all rows
             if field_index is None:
                 field_index = len(header_row)
                 header_row.append(field_name)
+                # Extend all data rows with empty values for the new column
+                for i in range(1, len(rows)):
+                    while len(rows[i]) <= field_index:
+                        rows[i].append('')
         else:
             # No header - we'll use predefined positions for known fields
             field_map = {
@@ -274,7 +278,9 @@ class EvolutionCSV:
                 'basedonid': 1,
                 'description': 2,
                 'performance': 3,
-                'status': 4
+                'status': 4,
+                'idea-llm': 5,
+                'run-llm': 6
             }
             field_index = field_map.get(field_name.lower())
             if field_index is None:
@@ -287,7 +293,10 @@ class EvolutionCSV:
         
         for i in range(start_idx, len(rows)):
             row = rows[i]
-            if self.is_valid_candidate_row(row) and row[0].strip() == candidate_id:
+            # Strip quotes from both stored ID and search ID for comparison
+            stored_id = row[0].strip().strip('"') if len(row) > 0 else ''
+            search_id = candidate_id.strip().strip('"')
+            if self.is_valid_candidate_row(row) and stored_id == search_id:
                 # Ensure row has enough columns
                 while len(row) <= field_index:
                     row.append('')
@@ -311,7 +320,7 @@ class EvolutionCSV:
         start_idx = 1 if rows and rows[0] and rows[0][0].lower() == 'id' else 0
         
         for row in rows[start_idx:]:
-            if self.is_valid_candidate_row(row) and row[0].strip() == candidate_id:
+            if self.is_valid_candidate_row(row) and row[0].strip().strip('"') == candidate_id.strip().strip('"'):
                 return {
                     'id': row[0].strip() if len(row) > 0 else '',
                     'basedOnId': row[1].strip() if len(row) > 1 else '',
@@ -344,7 +353,7 @@ class EvolutionCSV:
             
         for i in range(start_idx, len(rows)):
             row = rows[i]
-            if self.is_valid_candidate_row(row) and row[0].strip() == candidate_id:
+            if self.is_valid_candidate_row(row) and row[0].strip().strip('"') == candidate_id.strip().strip('"'):
                 deleted = True
                 # Skip this row (delete it)
                 continue
@@ -371,6 +380,7 @@ def main():
         print("  update <id> <status>    - Update candidate status")
         print("  perf <id> <performance> - Update candidate performance")
         print("  info <id>               - Get candidate info")
+        print("  field <id> <field> <val>- Update specific field")
         print("  check                   - Check if has pending work")
         sys.exit(1)
         
@@ -429,6 +439,17 @@ def main():
             elif command == 'check':
                 has_work = csv_ops.has_pending_work()
                 print("yes" if has_work else "no")
+                
+            elif command == 'field' and len(sys.argv) >= 5:
+                candidate_id = sys.argv[3]
+                field_name = sys.argv[4]
+                value = sys.argv[5] if len(sys.argv) >= 6 else ''
+                success = csv_ops.update_candidate_field(candidate_id, field_name, value)
+                if success:
+                    print(f"Updated {candidate_id} field {field_name} to {value}")
+                else:
+                    print(f"Failed to update {candidate_id} field {field_name}")
+                    sys.exit(1)
                 
             else:
                 print(f"Unknown command: {command}")

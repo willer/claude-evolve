@@ -46,6 +46,13 @@ auto_ideate: true
 # Maximum number of retries for failed candidates before marking as permanently failed
 max_retries: 3
 
+# Memory protection configuration
+# Memory limit in MB for evaluation processes (0 = no limit)  
+# This prevents runaway algorithms from consuming all system memory
+# Default: 12GB (reasonable for ML workloads, adjust based on your system RAM)
+# Recommendation: Set to ~50-75% of available system RAM
+memory_limit_mb: 12288
+
 # Parallel execution configuration
 parallel:
   # Enable parallel execution of evolution candidates
@@ -59,16 +66,20 @@ parallel:
 
 # LLM/AI CLI configuration
 llm_cli:
-  # How to run each CLI for each LLM option
-  # {{PROMPT}} will be replaced with the actual prompt text
-  o3: 'codex exec -m o3 --dangerously-bypass-approvals-and-sandbox "{{PROMPT}}"'
-  codex: 'codex exec --dangerously-bypass-approvals-and-sandbox "{{PROMPT}}"'
-  gemini: 'gemini -y -p "{{PROMPT}}"'
-  opus: 'claude --dangerously-skip-permissions --model opus -p "{{PROMPT}}"'
-  sonnet: 'claude --dangerously-skip-permissions --model sonnet -p "{{PROMPT}}"'
-
   # What to run for each sub-command
   # Models are tried in order, with round-robin distribution across candidates
   # You can repeat models for weighted selection (e.g., "sonnet sonnet gemini" for 2:1 ratio)
-  run: sonnet
-  ideate: gemini o3 opus
+
+  # commented out because these change over time; if you want to fix them in a particular
+  # configuration, uncomment them and set them
+  #run: sonnet cursor-sonnet
+  #ideate: gemini opus gpt5high o3high cursor-opus
+  
+  # Available models:
+  # - sonnet: Claude 3.5 Sonnet via Claude CLI
+  # - opus: Claude 3 Opus via Claude CLI
+  # - gemini: Gemini via Gemini CLI
+  # - gpt5high: GPT-5 via Codex CLI (high reasoning)
+  # - o3high: O3 via Codex CLI (high reasoning)
+  # - cursor-sonnet: Claude 3.5 Sonnet via Cursor Agent CLI
+  # - cursor-opus: Claude 3 Opus via Cursor Agent CLI

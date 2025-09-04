@@ -7,6 +7,17 @@ source "$SCRIPT_DIR/../lib/config.sh"
 source "$SCRIPT_DIR/../lib/csv-lock.sh"
 source "$SCRIPT_DIR/../lib/ai-cli.sh"
 
+# Setup logging to file
+if [[ -n "${FULL_EVOLUTION_DIR:-}" ]]; then
+  LOG_DIR="$FULL_EVOLUTION_DIR/logs"
+  mkdir -p "$LOG_DIR"
+  LOG_FILE="$LOG_DIR/worker-$$-$(date +%Y%m%d-%H%M%S).log"
+  
+  # Log to both terminal and file with timestamps
+  exec > >(while IFS= read -r line; do echo "$(date '+%Y-%m-%d %H:%M:%S'): $line"; done | tee -a "$LOG_FILE") 2>&1
+  echo "[WORKER-$$] Logging to: $LOG_FILE"
+fi
+
 # Track current candidate for cleanup
 CURRENT_CANDIDATE_ID=""
 TERMINATION_SIGNAL=""
@@ -14,34 +25,11 @@ TERMINATION_SIGNAL=""
 # Cleanup function to handle termination
 cleanup_on_exit() {
   if [[ -n "$CURRENT_CANDIDATE_ID" ]]; then
-    # Only mark as failed if it was a timeout (SIGTERM from timeout command)
-    # For user interruption (Ctrl-C) or kill, leave it for retry
-    if [[ "$TERMINATION_SIGNAL" == "TERM" ]]; then
-      echo "[WORKER-$$] Timeout detected, marking $CURRENT_CANDIDATE_ID as failed" >&2
-      "$PYTHON_CMD" -c "
-import sys
-sys.path.insert(0, '$SCRIPT_DIR/..')
-from lib.evolution_csv import EvolutionCSV
-try:
-    with EvolutionCSV('$FULL_CSV_PATH') as csv:
-        csv.update_candidate_status('$CURRENT_CANDIDATE_ID', 'failed')
-except:
-    pass  # Best effort cleanup
-" 2>/dev/null || true
-    else
-      echo "[WORKER-$$] Interrupted, leaving $CURRENT_CANDIDATE_ID for retry" >&2
-      # Optionally reset to pending instead of leaving as running
-      "$PYTHON_CMD" -c "
-import sys
-sys.path.insert(0, '$SCRIPT_DIR/..')
-from lib.evolution_csv import EvolutionCSV
-try:
-    with EvolutionCSV('$FULL_CSV_PATH') as csv:
-        csv.update_candidate_status('$CURRENT_CANDIDATE_ID', 'pending')
-except:
-    pass  # Best effort cleanup
-" 2>/dev/null || true
-    fi
+    echo "[WORKER-$$] Worker terminated while processing $CURRENT_CANDIDATE_ID" >&2
+    # If we're interrupted while processing, leave it as "running"
+    # This prevents other workers from picking it up in the same session
+    # A human can manually reset to pending if needed
+    echo "[WORKER-$$] Leaving $CURRENT_CANDIDATE_ID in current state" >&2
   fi
 }
 
@@ -85,6 +73,17 @@ call_ai_for_evolution() {
   local prompt="$1"
   local candidate_id="$2"
   
+  # Get target file path from worker context
+  local target_file="$FULL_OUTPUT_DIR/evolution_${candidate_id}.py"
+  
+  # Capture file state before AI call
+  local file_hash_before=""
+  local file_mtime_before=""
+  if [[ -f "$target_file" ]]; then
+    file_hash_before=$(shasum -a 256 "$target_file" 2>/dev/null | cut -d' ' -f1)
+    file_mtime_before=$(stat -f %m "$target_file" 2>/dev/null || stat -c %Y "$target_file" 2>/dev/null)
+  fi
+  
   # Extract generation and ID numbers for round-robin calculation
   local gen_num=0
   local id_num=0
@@ -108,14 +107,32 @@ call_ai_for_evolution() {
     exit 3
   fi
   
-  if [[ $ai_exit_code -eq 0 ]]; then
-    echo "[WORKER-$$] AI succeeded" >&2
+  # Check if the target file was actually modified
+  local file_was_modified=false
+  if [[ -f "$target_file" ]]; then
+    local file_hash_after
+    local file_mtime_after
+    file_hash_after=$(shasum -a 256 "$target_file" 2>/dev/null | cut -d' ' -f1)
+    file_mtime_after=$(stat -f %m "$target_file" 2>/dev/null || stat -c %Y "$target_file" 2>/dev/null)
+    
+    if [[ "$file_hash_before" != "$file_hash_after" ]] || [[ "$file_mtime_before" != "$file_mtime_after" ]]; then
+      file_was_modified=true
+    fi
+  fi
+  
+  # Success if file was modified OR exit code is 0 (for cases where file validation isn't applicable)
+  if [[ "$file_was_modified" == "true" ]] || [[ $ai_exit_code -eq 0 ]]; then
+    if [[ "$file_was_modified" == "true" ]]; then
+      echo "[WORKER-$$] AI successfully modified $target_file (exit code: $ai_exit_code)" >&2
+    else
+      echo "[WORKER-$$] AI succeeded with exit code 0" >&2
+    fi
     # Output the result for the worker to use
     echo "$ai_output"
     return 0
   fi
   
-  echo "[WORKER-$$] All AI models failed" >&2
+  echo "[WORKER-$$] AI failed: exit code $ai_exit_code, no file changes detected" >&2
   return 1
 }
 
@@ -134,6 +151,12 @@ process_candidate() {
   echo "[WORKER-$$] Processing candidate ID: $candidate_id"
   echo "[WORKER-$$] Description: $description"
   echo "[WORKER-$$] Based on ID: $parent_id"
+  
+  # Treat "baseline-000" parent ID as empty/baseline
+  if [[ "$parent_id" == "baseline-000" ]]; then
+    parent_id=""
+    echo "[WORKER-$$] Parent ID 'baseline-000' treated as baseline (empty parent)"
+  fi
   
   # Determine source algorithm
   local source_file
@@ -213,16 +236,38 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
       
       # Try AI models with round-robin based on candidate ID
       if ! call_ai_for_evolution "$evolution_prompt" "$candidate_id"; then
-        echo "[WORKER-$$] ERROR: All AI models failed to generate code" >&2
+        echo "[WORKER-$$] ERROR: All AI models failed to generate code - leaving as pending for retry" >&2
         cd "$original_pwd"
         rm -f "$target_file"  # Clean up on failure
-        return 1
+        # Return with special code to indicate AI failure (should remain pending)
+        return 77
       fi
       
       # Restore working directory
       cd "$original_pwd"
       
       echo "[WORKER-$$] Evolution applied successfully"
+      
+      # Record which AI model generated the code (regardless of evaluation outcome)
+      if [[ -n "${SUCCESSFUL_RUN_MODEL:-}" ]]; then
+        echo "[WORKER-$$] Recording that $SUCCESSFUL_RUN_MODEL generated the code" >&2
+        "$PYTHON_CMD" -c "
+import sys
+sys.path.insert(0, '$SCRIPT_DIR/..')
+from lib.evolution_csv import EvolutionCSV
+with EvolutionCSV('$FULL_CSV_PATH') as csv:
+    csv.update_candidate_field('$candidate_id', 'run-LLM', '$SUCCESSFUL_RUN_MODEL')
+" || echo "[WORKER-$$] Warning: Failed to record run-LLM field" >&2
+      fi
+      
+      # Check if the generated Python file has syntax errors
+      echo "[WORKER-$$] Checking Python syntax..." >&2
+      if ! "$PYTHON_CMD" -m py_compile "$target_file" 2>&1; then
+        echo "[WORKER-$$] ERROR: Generated Python file has syntax errors!" >&2
+        echo "[WORKER-$$] File: $target_file" >&2
+        # This is still an evaluation failure, not an AI failure
+        return 1
+      fi
     fi
   fi
   
@@ -239,11 +284,22 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
     eval_arg=""
   fi
   local eval_cmd=("$PYTHON_CMD" "$FULL_EVALUATOR_PATH" "$eval_arg")
+  
+  # Add memory limiting if configured
+  if [[ -n "$MEMORY_LIMIT_MB" ]] && [[ "$MEMORY_LIMIT_MB" -gt 0 ]]; then
+    eval_cmd=("$PYTHON_CMD" "$SCRIPT_DIR/../lib/memory_limit_wrapper.py" "$MEMORY_LIMIT_MB" "${eval_cmd[@]}")
+  fi
+  
+  # Add timeout if configured
   [[ -n "$timeout_seconds" ]] && eval_cmd=(timeout "$timeout_seconds" "${eval_cmd[@]}")
   
   # Run evaluation with tee to both display and capture output
   # Use stdbuf to disable buffering for real-time output
-  if stdbuf -o0 -e0 "${eval_cmd[@]}" 2>&1 | tee "$eval_output_file" >&2; then
+  # IMPORTANT: Use PIPESTATUS to get the exit code of the evaluation command, not tee
+  stdbuf -o0 -e0 "${eval_cmd[@]}" 2>&1 | tee "$eval_output_file" >&2
+  local eval_exit_code=${PIPESTATUS[0]}  # Get exit code of first command in pipe
+  
+  if [[ $eval_exit_code -eq 0 ]]; then
     local eval_end=$(date +%s)
     local eval_duration=$((eval_end - eval_start))
     
@@ -353,14 +409,19 @@ with EvolutionCSV('$FULL_CSV_PATH') as csv:
       echo "[WORKER-$$] Output: $eval_output" >&2
       # rm -f "$eval_output_file"  # Keep for debugging
       echo "[WORKER-$$] Evaluation output saved to: $eval_output_file" >&2
+      # Clear CURRENT_CANDIDATE_ID before returning
+      CURRENT_CANDIDATE_ID=""
       return 1
     fi
     
     # Clean up temp file (comment out to keep for debugging)
     # rm -f "$eval_output_file"
     echo "[WORKER-$$] Evaluation output saved to: $eval_output_file" >&2
+    
+    # Clear CURRENT_CANDIDATE_ID on successful completion
+    CURRENT_CANDIDATE_ID=""
   else
-    local exit_code=$?
+    local exit_code=$eval_exit_code
     # Read any output that was captured before failure
     eval_output=$(<"$eval_output_file")
     # rm -f "$eval_output_file"  # Keep for debugging
@@ -370,22 +431,56 @@ with EvolutionCSV('$FULL_CSV_PATH') as csv:
     echo "[WORKER-$$] Output: $eval_output" >&2
     
     # Mark as failed in CSV
-    "$PYTHON_CMD" -c "
+    echo "[WORKER-$$] Marking $candidate_id as failed in CSV" >&2
+    if ! "$PYTHON_CMD" -c "
 import sys
 sys.path.insert(0, '$SCRIPT_DIR/..')
 from lib.evolution_csv import EvolutionCSV
-with EvolutionCSV('$FULL_CSV_PATH') as csv:
-    csv.update_candidate_status('$candidate_id', 'failed')
-"
+try:
+    with EvolutionCSV('$FULL_CSV_PATH') as csv:
+        success = csv.update_candidate_status('$candidate_id', 'failed')
+        if not success:
+            print(f'ERROR: Failed to update status for {candidate_id}', file=sys.stderr)
+            sys.exit(1)
+except Exception as e:
+    print(f'ERROR: Exception updating status: {e}', file=sys.stderr)
+    sys.exit(1)
+" 2>&1; then
+      echo "[WORKER-$$] ERROR: Failed to update CSV status to failed" >&2
+    else
+      echo "[WORKER-$$] Successfully marked $candidate_id as failed" >&2
+    fi
     
+    # Clear CURRENT_CANDIDATE_ID before returning to prevent cleanup handler from resetting it
+    CURRENT_CANDIDATE_ID=""
     return $exit_code
   fi
 }
+
+# Don't reset running candidates on startup - they might be legitimately being processed by another worker
 
 # Main worker loop
 echo "[WORKER-$$] Worker started"
 
 while true; do
+  # Debug: Show current status of all candidates
+  echo "[WORKER-$$] Current candidate statuses:" >&2
+  "$PYTHON_CMD" -c "
+import sys
+sys.path.insert(0, '$SCRIPT_DIR/..')
+from lib.evolution_csv import EvolutionCSV
+with EvolutionCSV('$FULL_CSV_PATH') as csv:
+    rows = csv._read_csv()
+    if rows:
+        start_idx = 1 if rows and rows[0] and rows[0][0].lower() == 'id' else 0
+        status_count = {}
+        for row in rows[start_idx:]:
+            if len(row) > 4:
+                status = row[4].strip() or 'pending'
+                status_count[status] = status_count.get(status, 0) + 1
+        print(f'Status counts: {status_count}', file=sys.stderr)
+" 2>&1 || true
+
   # Try to claim a pending candidate
   candidate_info=$("$PYTHON_CMD" -c "
 import sys
@@ -412,12 +507,26 @@ with EvolutionCSV('$FULL_CSV_PATH') as csv:
   # Set current candidate for cleanup
   CURRENT_CANDIDATE_ID="$candidate_id"
   
-  # Process the candidate
-  if process_candidate "$candidate_id" "$parent_id" "$description"; then
+  # Process the candidate and capture exit code
+  process_candidate "$candidate_id" "$parent_id" "$description"
+  process_exit_code=$?
+  
+  if [[ $process_exit_code -eq 0 ]]; then
     echo "[WORKER-$$] Successfully processed $candidate_id"
+  elif [[ $process_exit_code -eq 77 ]]; then
+    # Special exit code 77 means AI failed to generate code
+    echo "[WORKER-$$] AI generation failed for $candidate_id - marking as failed-ai-retry"
+    # Mark with special status that indicates AI generation failed (not evaluation)
+    "$PYTHON_CMD" -c "
+import sys
+sys.path.insert(0, '$SCRIPT_DIR/..')
+from lib.evolution_csv import EvolutionCSV
+with EvolutionCSV('$FULL_CSV_PATH') as csv:
+    csv.update_candidate_status('$candidate_id', 'failed-ai-retry')
+" 2>/dev/null || true
   else
     echo "[WORKER-$$] Failed to process $candidate_id"
-    # Ensure status is set to failed (might already be done in process_candidate)
+    # Other failures (evaluation errors, etc) mark as failed
     "$PYTHON_CMD" -c "
 import sys
 sys.path.insert(0, '$SCRIPT_DIR/..')

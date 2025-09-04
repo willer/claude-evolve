@@ -30,14 +30,29 @@ Evolution runs indefinitely until you stop it. Perfect for overnight optimizatio
 
 ## Commands
 
+### Core Commands
 ```bash
 claude-evolve           # Interactive menu
 claude-evolve setup     # Initialize workspace
 claude-evolve ideate    # Generate new algorithm ideas
 claude-evolve run       # Start evolution loop (runs forever)
-claude-evolve analyze   # View results and progress
+claude-evolve analyze   # View results and progress with charts
 claude-evolve status    # Quick progress overview
+claude-evolve autostatus # Live auto-updating status display
+```
+
+### Management Commands
+```bash
 claude-evolve edit      # Manage candidate statuses
+claude-evolve config    # View/edit configuration
+claude-evolve cleanup   # Clean up old lock files
+```
+
+### Maintenance Commands
+```bash
+claude-evolve clean-invalid      # Remove invalid candidates
+claude-evolve cleanup-duplicates # Remove duplicate entries
+claude-evolve csv-fix           # Fix CSV formatting issues
 ```
 
 ## Working with Multiple Projects
