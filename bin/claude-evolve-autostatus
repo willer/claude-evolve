@@ -246,8 +246,17 @@ class AutoStatus:
             print("-" * min(self.display.cols, len(header_fmt)))
             row += 1
             
-            # Sort generations
-            sorted_gens = sorted(generations.keys())
+            # Sort generations numerically by extracting the number after "gen"
+            def gen_sort_key(gen_str):
+                """Extract numeric value from generation string for sorting."""
+                if gen_str.startswith("gen"):
+                    try:
+                        return int(gen_str[3:])
+                    except ValueError:
+                        return 999999  # Put non-numeric at end
+                return 999999
+            
+            sorted_gens = sorted(generations.keys(), key=gen_sort_key)
             
             # Calculate how many generations we can show
             available_rows = self.display.rows - row - 1  # Leave room at bottom
