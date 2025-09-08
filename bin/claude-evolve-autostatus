@@ -269,8 +269,12 @@ class AutoStatus:
             print("-" * min(self.display.cols, len(header_fmt)))
             row += 1
             # Sort generations numerically by extracting the number after "gen"
+            # Put baseline first, then sort numerically
             def gen_sort_key(gen_str):
                 """Extract numeric value from generation string for sorting."""
+                # Baseline goes first (return -1 for sorting)
+                if gen_str == "baseline" or gen_str == "gen00":
+                    return -1
                 if gen_str.startswith("gen"):
                     try:
                         return int(gen_str[3:])

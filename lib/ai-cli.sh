@@ -19,7 +19,7 @@ call_ai_model_configured() {
   case "$model_name" in
     opus|sonnet)
       local ai_output
-      ai_output=$(timeout 180 claude --dangerously-skip-permissions --model "$model_name" -p "$prompt" 2>&1)
+      ai_output=$(timeout 300 claude --dangerously-skip-permissions --model "$model_name" -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     gpt5high)
@@ -50,7 +50,7 @@ call_ai_model_configured() {
       ;;
     cursor-sonnet)
       local ai_output
-      ai_output=$(timeout 180 cursor-agent sonnet -p "$prompt" 2>&1)
+      ai_output=$(timeout 300 cursor-agent sonnet -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     cursor-opus)
