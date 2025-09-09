@@ -134,6 +134,11 @@ while [[ $# -gt 0 ]] && [[ "$1" =~ ^-- ]]; do
   esac
 done
 
+# Auto-detect config.yaml in current directory if --working-dir not specified
+if [[ -z $WORKING_DIR ]] && [[ -f "config.yaml" ]]; then
+  WORKING_DIR="."
+fi
+
 # Export config file path for subcommands
 if [[ -n $WORKING_DIR ]]; then
   # Remove trailing slash if present
