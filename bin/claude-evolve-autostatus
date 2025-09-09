@@ -275,9 +275,21 @@ class AutoStatus:
             self.display.move_cursor(row, 1)
             print("-" * min(self.display.cols, len(header_fmt)))
             row += 1
+            # Sort generations numerically by extracting the number after "gen"
+            # Put baseline first, then sort numerically
+            def gen_sort_key(gen_str):
+                """Extract numeric value from generation string for sorting."""
+                # Baseline goes first (return -1 for sorting)
+                if gen_str == "baseline" or gen_str == "gen00":
+                    return -1
+                if gen_str.startswith("gen"):
+                    try:
+                        return int(gen_str[3:])
+                    except ValueError:
+                        return 999999  # Put non-numeric at end
+                return 999999
             
-            # Sort generations numerically by extracting the number after 'gen'
-            sorted_gens = sorted(generations.keys(), key=lambda g: int(g[3:]) if g.startswith("gen") and g[3:].isdigit() else 0)
+            sorted_gens = sorted(generations.keys(), key=gen_sort_key)
             
             # Calculate how many generations we can show
             available_rows = self.display.rows - row - 1  # Leave room at bottom
