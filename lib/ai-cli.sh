@@ -27,6 +27,11 @@ call_ai_model_configured() {
       ai_output=$(timeout 420 codex exec --profile gpt5high --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
+    gpt5)
+      local ai_output
+      ai_output=$(timeout 420 codex exec --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
     o3high)
       local ai_output
       ai_output=$(timeout 500 codex exec --profile o3high --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)

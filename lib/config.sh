@@ -54,7 +54,7 @@ DEFAULT_MAX_RETRIES=3
 DEFAULT_MEMORY_LIMIT_MB=12288
 
 # Default LLM CLI configuration - use simple variables instead of arrays
-DEFAULT_LLM_RUN="sonnet cursor-sonnet"
+DEFAULT_LLM_RUN="sonnet gpt5 cursor-sonnet"
 DEFAULT_LLM_IDEATE="gemini opus gpt5high o3high cursor-opus"
 
 # Load configuration from config file

@@ -134,6 +134,17 @@ while [[ $# -gt 0 ]] && [[ "$1" =~ ^-- ]]; do
   esac
 done
 
+# Auto-detect evolution workspace if no working dir specified
+if [[ -z $WORKING_DIR ]]; then
+  # Check if we're already in an evolution workspace directory
+  # Look for key files that indicate this is an evolution workspace
+  if [[ -f "evolution.csv" && (-f "algorithm.py" || -f "evaluator.py" || -f "BRIEF.md" || -f "config.yaml") ]]; then
+    # We're in an evolution workspace, use current directory
+    WORKING_DIR="."
+    echo -e "${GREEN}✓ Detected evolution workspace in current directory${NC}"
+  fi
+fi
+
 # Export config file path for subcommands
 if [[ -n $WORKING_DIR ]]; then
   # Remove trailing slash if present
