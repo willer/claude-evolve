@@ -11,7 +11,14 @@ source "$SCRIPT_DIR/../lib/config.sh"
 if [[ -n ${CLAUDE_EVOLVE_CONFIG:-} ]]; then
   load_config "$CLAUDE_EVOLVE_CONFIG"
 else
-  load_config
+  # Check if config.yaml exists in current directory
+  if [[ -f "config.yaml" ]]; then
+    # Don't export to avoid collision with parallel runs
+    CONFIG_FILE="$(pwd)/config.yaml"
+    load_config "$CONFIG_FILE"
+  else
+    load_config
+  fi
 fi
 
 # Parse arguments

@@ -238,7 +238,8 @@ load_config() {
   if [[ "$config_file" != "evolution/config.yaml" ]]; then
     # Extract directory from config file path
     local config_dir=$(dirname "$config_file")
-    if [[ "$config_dir" != "." && "$config_dir" != "" ]]; then
+    # Use the config directory as evolution directory (including "." for current dir)
+    if [[ "$config_dir" != "" ]]; then
       EVOLUTION_DIR="$config_dir"
       echo "[DEBUG] Using evolution directory from config path: $EVOLUTION_DIR" >&2
     fi
