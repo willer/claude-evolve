@@ -133,19 +133,21 @@ class EvolutionCSV:
         return False
         
     def get_pending_candidates(self) -> List[Tuple[str, str]]:
-        """Get list of pending candidate IDs and their current status."""
+        """Get list of pending candidate IDs and their current status (in reverse order)."""
         rows = self._read_csv()
         pending = []
-        
+
         # Skip header row if it exists
         start_idx = 1 if rows and rows[0] and rows[0][0].lower() == 'id' else 0
-        
-        for row in rows[start_idx:]:
+
+        # Process in reverse order to match get_next_pending_candidate
+        for i in range(len(rows) - 1, start_idx - 1, -1):
+            row = rows[i]
             if self.is_pending_candidate(row):
                 candidate_id = row[0].strip()
                 current_status = row[4].strip() if len(row) > 4 else ''
                 pending.append((candidate_id, current_status))
-                
+
         return pending
         
     def count_pending_candidates(self) -> int:
@@ -156,33 +158,35 @@ class EvolutionCSV:
         """
         Get the next pending candidate and mark it as 'running'.
         Returns (candidate_id, original_status) or None if no pending work.
+        Processes candidates in REVERSE order (from end to beginning).
         """
         rows = self._read_csv()
         if not rows:
             return None
-            
+
         # Skip header row if it exists
         start_idx = 1 if rows and rows[0] and rows[0][0].lower() == 'id' else 0
-        
-        for i in range(start_idx, len(rows)):
+
+        # Process in reverse order - from last row to first data row
+        for i in range(len(rows) - 1, start_idx - 1, -1):
             row = rows[i]
-            
+
             if self.is_pending_candidate(row):
                 candidate_id = row[0].strip()
                 original_status = row[4].strip() if len(row) > 4 else ''
-                
+
                 # Ensure row has at least 5 columns
                 while len(row) < 5:
                     row.append('')
-                    
+
                 # Mark as running
                 row[4] = 'running'
-                
+
                 # Write back to CSV
                 self._write_csv(rows)
-                
+
                 return (candidate_id, original_status)
-                
+
         return None
         
     def update_candidate_status(self, candidate_id: str, new_status: str) -> bool:

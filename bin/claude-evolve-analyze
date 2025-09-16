@@ -7,9 +7,44 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/config.sh
 source "$SCRIPT_DIR/../lib/config.sh"
 
-# Use CLAUDE_EVOLVE_CONFIG if set, otherwise default
+# Parse working directory before other arguments
+WORKING_DIR=""
+args=()
+while [[ $# -gt 0 ]]; do
+  case $1 in
+  --working-dir)
+    if [[ -z ${2:-} ]]; then
+      echo "[ERROR] --working-dir requires a directory path" >&2
+      exit 1
+    fi
+    WORKING_DIR="$2"
+    shift 2
+    ;;
+  --working-dir=*)
+    WORKING_DIR="${1#*=}"
+    shift
+    ;;
+  *)
+    args+=("$1")
+    shift
+    ;;
+  esac
+done
+set -- "${args[@]}"
+
+# Auto-detect config.yaml in current directory if --working-dir not specified
+if [[ -z $WORKING_DIR ]] && [[ -f "config.yaml" ]]; then
+  WORKING_DIR="."
+fi
+
+# Use CLAUDE_EVOLVE_CONFIG if set, otherwise use working dir or default
 if [[ -n ${CLAUDE_EVOLVE_CONFIG:-} ]]; then
   load_config "$CLAUDE_EVOLVE_CONFIG"
+elif [[ -n $WORKING_DIR ]]; then
+  # Remove trailing slash if present
+  WORKING_DIR="${WORKING_DIR%/}"
+  CONFIG_FILE="$WORKING_DIR/config.yaml"
+  load_config "$CONFIG_FILE"
 else
   # Check if config.yaml exists in current directory
   if [[ -f "config.yaml" ]]; then
@@ -33,13 +68,14 @@ while [[ $# -gt 0 ]]; do
 claude-evolve analyze - Analyze evolution results
 
 USAGE:
-  claude-evolve analyze [--open] [--csv <path>] [--output <path>]
+  claude-evolve analyze [--working-dir <path>] [--open] [--csv <path>] [--output <path>]
 
 OPTIONS:
-  --open            Open the generated chart automatically
-  --csv <path>      Path to evolution.csv (default: ./evolution/evolution.csv)
-  --output <path>   Output path for chart PNG (default: ./evolution/performance.png)
-  --help            Show this help message
+  --working-dir <path>  Use alternate working directory (default: current or evolution/)
+  --open               Open the generated chart automatically
+  --csv <path>         Path to evolution.csv (default: <working-dir>/evolution.csv)
+  --output <path>      Output path for chart PNG (default: <working-dir>/performance.png)
+  --help               Show this help message
 
 DESCRIPTION:
   Analyzes the evolution.csv file and generates a performance chart.
@@ -559,14 +595,14 @@ print(f'max_desc=\"{desc_escaped}\"')
       done
     fi
     
-    # Add novel candidates
-    if [[ -s "$novel_file" ]] && [[ $(wc -l < "$novel_file") -gt 1 ]]; then
-      if [[ $gen_plots_added -gt 0 ]]; then
-        plot_cmd="$plot_cmd, \\"$'\n'
-      fi
-      plot_cmd="${plot_cmd}     \"$novel_file\" using 1:3 with points pointtype 8 pointsize $winner_dot_size linecolor rgb \"#ff1493\" title \"Novel Candidates\""
-      ((gen_plots_added++))
-    fi
+    # Add novel candidates - DISABLED to reduce chart clutter
+    # if [[ -s "$novel_file" ]] && [[ $(wc -l < "$novel_file") -gt 1 ]]; then
+    #   if [[ $gen_plots_added -gt 0 ]]; then
+    #     plot_cmd="$plot_cmd, \\"$'\n'
+    #   fi
+    #   plot_cmd="${plot_cmd}     \"$novel_file\" using 1:3 with points pointtype 8 pointsize $winner_dot_size linecolor rgb \"#cccccc\" title \"Novel Candidates\""
+    #   ((gen_plots_added++))
+    # fi
     
     # Add winner point
     if [[ -n $max_id && -s "$winner_file" ]]; then
