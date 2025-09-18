@@ -39,11 +39,13 @@ SELECTORS:
   complete            Target all candidates with complete status
   pending             Target all candidates with pending status
   running             Target all candidates with running status
+  skipped             Target all candidates with skipped status
 
 ACTIONS:
   failed           Mark candidates as failed (keeps scores)
-  complete         Mark candidates as complete (keeps scores)  
+  complete         Mark candidates as complete (keeps scores)
   pending          Mark candidates as pending (clears all data)
+  skipped          Mark candidates as skipped (keeps scores)
   failed-retry1    Mark candidates for retry attempt 1 (bug fixing)
   failed-retry2    Mark candidates for retry attempt 2 (bug fixing)
   failed-retry3    Mark candidates for retry attempt 3 (bug fixing)
@@ -53,6 +55,7 @@ ACTIONS:
 EXAMPLES:
   claude-evolve edit gen03 failed                    # Mark all gen03 as failed
   claude-evolve edit failed pending                  # Reset all failed candidates to pending
+  claude-evolve edit pending skipped                 # Skip all pending candidates
   claude-evolve edit --recent-generations=15 failed pending  # Reset only recent 15 gen failures
   claude-evolve edit --recent-generations=5 complete failed  # Re-run recent 5 gen completions
   claude-evolve edit failed failed-retry1            # Convert failed to retry status (bug fixing)
@@ -109,16 +112,16 @@ if ! validate_config; then
 fi
 
 # Validate selector format
-if [[ "$SELECTOR" != "all" && ! "$SELECTOR" =~ ^gen[0-9]+$ && "$SELECTOR" != "failed" && "$SELECTOR" != "complete" && "$SELECTOR" != "pending" && "$SELECTOR" != "running" ]]; then
-  echo "[ERROR] Selector must be 'all', 'genXX' (e.g., gen01), or status ('failed', 'complete', 'pending', 'running')" >&2
+if [[ "$SELECTOR" != "all" && ! "$SELECTOR" =~ ^gen[0-9]+$ && "$SELECTOR" != "failed" && "$SELECTOR" != "complete" && "$SELECTOR" != "pending" && "$SELECTOR" != "running" && "$SELECTOR" != "skipped" ]]; then
+  echo "[ERROR] Selector must be 'all', 'genXX' (e.g., gen01), or status ('failed', 'complete', 'pending', 'running', 'skipped')" >&2
   exit 1
 fi
 
 # Validate action
 case "$ACTION" in
-  failed|complete|pending|failed-retry1|failed-retry2|failed-retry3|reboot|delete) ;;
+  failed|complete|pending|skipped|failed-retry1|failed-retry2|failed-retry3|reboot|delete) ;;
   *)
-    echo "[ERROR] Action must be one of: failed, complete, pending, failed-retry1, failed-retry2, failed-retry3, reboot, delete" >&2
+    echo "[ERROR] Action must be one of: failed, complete, pending, skipped, failed-retry1, failed-retry2, failed-retry3, reboot, delete" >&2
     exit 1
     ;;
 esac
@@ -210,7 +213,7 @@ try:
         elif selector.startswith('gen') and '-' in candidate_id:
             # Generation selector (e.g., gen01, gen02)
             matches = candidate_id.startswith(selector + '-')
-        elif selector in ['failed', 'complete', 'pending', 'running']:
+        elif selector in ['failed', 'complete', 'pending', 'running', 'skipped']:
             # Status selector
             if selector == 'pending':
                 matches = current_status == '' or current_status == 'pending'
@@ -362,6 +365,8 @@ try:
                 matches = current_status == '' or current_status == 'pending'
             elif selector == 'failed':
                 matches = current_status.startswith('failed')
+            elif selector == 'skipped':
+                matches = current_status == 'skipped'
             else:
                 matches = current_status == selector
             
@@ -480,6 +485,8 @@ with EvolutionCSV('$FULL_CSV_PATH') as csv:
                 matches = current_status == '' or current_status == 'pending'
             elif selector == 'failed':
                 matches = current_status.startswith('failed')
+            elif selector == 'skipped':
+                matches = current_status == 'skipped'
             else:
                 matches = current_status == selector
             
@@ -524,6 +531,9 @@ case "$ACTION" in
     ;;
   pending)
     update_candidates_status "$SELECTOR" "pending" "true"  # Clear all data and set to pending
+    ;;
+  skipped)
+    update_candidates_status "$SELECTOR" "skipped" "false"  # Keep scores and set to skipped
     ;;
   failed-retry1)
     update_candidates_status "$SELECTOR" "failed-retry1" "false"

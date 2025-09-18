@@ -167,7 +167,7 @@ class AutoStatus:
                     # Track by generation
                     if gen not in stats_by_gen:
                         stats_by_gen[gen] = {
-                            "pending": 0, "complete": 0, "failed": 0, "running": 0,
+                            "pending": 0, "complete": 0, "failed": 0, "running": 0, "skipped": 0,
                             "candidates": []
                         }
                     
@@ -266,8 +266,8 @@ class AutoStatus:
         if generations:
             # Table header
             self.display.move_cursor(row, 1)
-            header_fmt = "{:<10} | {:^20} | {:>10} | {:>8} | {}".format(
-                "Generation", "Stats (p/c/f/r)", "Top ID", "Score", "Description"
+            header_fmt = "{:<10} | {:^25} | {:>10} | {:>8} | {}".format(
+                "Generation", "Stats (p/c/f/r/s)", "Top ID", "Score", "Description"
             )
             print("\033[1m" + header_fmt[:self.display.cols] + "\033[0m")
             row += 1
@@ -302,6 +302,8 @@ class AutoStatus:
                 
                 gen_data = generations[gen]
                 stats_str = f"{gen_data['\''pending'\'']}/{gen_data['\''complete'\'']}/{gen_data['\''failed'\'']}/{gen_data['\''running'\'']}"
+                if gen_data['\''skipped'\''] > 0:
+                    stats_str += f"/{gen_data['\''skipped'\'']}"
                 
                 self.display.move_cursor(row, 1)
                 
@@ -314,15 +316,15 @@ class AutoStatus:
                     
                     # Highlight if this is the overall leader
                     if data["leader"] and best_id == data["leader"][0]:
-                        line = "{:<10} | {:^20} | \033[32m{:>10}\033[0m | {:>8.4f} | {}".format(
+                        line = "{:<10} | {:^25} | \033[32m{:>10}\033[0m | {:>8.4f} | {}".format(
                             gen, stats_str, best_id, best_score, best_desc
                         )
                     else:
-                        line = "{:<10} | {:^20} | {:>10} | {:>8.4f} | {}".format(
+                        line = "{:<10} | {:^25} | {:>10} | {:>8.4f} | {}".format(
                             gen, stats_str, best_id, best_score, best_desc
                         )
                 else:
-                    line = "{:<10} | {:^20} | {:>10} | {:>8} | {}".format(
+                    line = "{:<10} | {:^25} | {:>10} | {:>8} | {}".format(
                         gen, stats_str, "-", "-", "No completed candidates"
                     )
                 

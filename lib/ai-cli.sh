@@ -24,22 +24,17 @@ call_ai_model_configured() {
       ;;
     gpt5high)
       local ai_output
-      ai_output=$(timeout 420 codex exec --profile gpt5high --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      ai_output=$(timeout 420 codex exec -m gpt-5 -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     gpt5)
       local ai_output
-      ai_output=$(timeout 420 codex exec --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      ai_output=$(timeout 420 codex exec -m gpt-5 --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     o3high)
       local ai_output
-      ai_output=$(timeout 500 codex exec --profile o3high --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
-      local ai_exit_code=$?
-      ;;
-    codex)
-      local ai_output
-      ai_output=$(timeout 420 codex exec --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      ai_output=$(timeout 500 codex exec -m o3-mini -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     gemini)

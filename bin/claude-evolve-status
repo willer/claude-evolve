@@ -145,7 +145,7 @@ try:
     all_candidates = []
     stats_by_gen = {}
     winners_by_gen = {}
-    total_stats = {'pending': 0, 'complete': 0, 'failed': 0, 'running': 0}
+    total_stats = {'pending': 0, 'complete': 0, 'failed': 0, 'running': 0, 'skipped': 0}
     retry_count = 0
     
     def parse_candidate_id(cid):
@@ -184,7 +184,7 @@ try:
                 
                 # Track by generation
                 if gen not in stats_by_gen:
-                    stats_by_gen[gen] = {'pending': 0, 'complete': 0, 'failed': 0, 'running': 0}
+                    stats_by_gen[gen] = {'pending': 0, 'complete': 0, 'failed': 0, 'running': 0, 'skipped': 0}
                 
                 if normalized_status in stats_by_gen[gen]:
                     stats_by_gen[gen][normalized_status] += 1
@@ -244,7 +244,10 @@ try:
         if retry_count > 0:
             failed_display += f' ({retry_count} retries)'
         print(f'   • {failed_display}')
-        print(f'   • {total_stats[\"running\"]} running')
+        if total_stats['running'] > 0:
+            print(f'   • {total_stats[\"running\"]} running')
+        if total_stats['skipped'] > 0:
+            print(f'   • {total_stats[\"skipped\"]} skipped')
         print()
     
     # Show current winner
@@ -290,6 +293,8 @@ try:
             gen_best = winners_by_gen.get(gen)
             
             status_str = f'{data[\"pending\"]}p {data[\"complete\"]}c {data[\"failed\"]}f {data[\"running\"]}r'
+            if data['skipped'] > 0:
+                status_str += f' {data[\"skipped\"]}s'
             
             if gen_best:
                 # Check if this generation's best is the overall winner
