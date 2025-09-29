@@ -22,6 +22,24 @@ call_ai_model_configured() {
       ai_output=$(timeout 300 claude --dangerously-skip-permissions --model "$model_name" -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
+    sonnet-think)
+      local ai_output
+      # Use extended thinking with sonnet 4.5 - prepend ultrathink instruction
+      local think_prompt="ultrathink
+
+$prompt"
+      ai_output=$(timeout 600 claude --dangerously-skip-permissions --model sonnet --extended-thinking -p "$think_prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    opus-think)
+      local ai_output
+      # Use extended thinking with opus - prepend ultrathink instruction
+      local think_prompt="ultrathink
+
+$prompt"
+      ai_output=$(timeout 600 claude --dangerously-skip-permissions --model opus --extended-thinking -p "$think_prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
     gpt5high)
       local ai_output
       ai_output=$(timeout 420 codex exec -m gpt-5 -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
