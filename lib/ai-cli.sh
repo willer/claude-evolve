@@ -28,7 +28,7 @@ call_ai_model_configured() {
       local think_prompt="ultrathink
 
 $prompt"
-      ai_output=$(timeout 600 claude --dangerously-skip-permissions --model sonnet --extended-thinking -p "$think_prompt" 2>&1)
+      ai_output=$(timeout 600 claude --dangerously-skip-permissions --model sonnet -p "$think_prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     opus-think)
@@ -37,7 +37,7 @@ $prompt"
       local think_prompt="ultrathink
 
 $prompt"
-      ai_output=$(timeout 600 claude --dangerously-skip-permissions --model opus --extended-thinking -p "$think_prompt" 2>&1)
+      ai_output=$(timeout 600 claude --dangerously-skip-permissions --model opus -p "$think_prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     gpt5high)

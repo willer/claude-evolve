@@ -1028,9 +1028,8 @@ IMPORTANT: You MUST use one of these exact parent IDs: $valid_parent_ids
 Successful algorithms to tune:
 $top_performers
 
-CRITICAL INSTRUCTION: Before generating parameter tuning ideas, you MUST read the source code of the parent algorithms.
-Algorithm source files are located at: evolution_<PARENT_ID>.py
-For example: evolution_gen01-251.py
+OPTIONAL: If needed for context, you may read parent algorithm source files at: evolution_<PARENT_ID>.py
+However, you can often generate good parameter tuning ideas just from the descriptions and performance scores above.
 
 CRITICAL INSTRUCTIONS:
 1. Use the Read tool to examine the current CSV file
@@ -1115,9 +1114,8 @@ IMPORTANT: You MUST use one of these exact parent IDs: $valid_parent_ids
 Successful algorithms to modify structurally:
 $top_performers
 
-CRITICAL INSTRUCTION: Before generating structural modification ideas, you MUST read the source code of the parent algorithms.
-Algorithm source files are located at: evolution_<PARENT_ID>.py
-For example: evolution_gen01-251.py
+OPTIONAL: If needed for context, you may read parent algorithm source files at: evolution_<PARENT_ID>.py
+However, you can often generate good structural ideas just from the descriptions and performance scores above.
 
 CRITICAL INSTRUCTIONS:
 1. Use the Read tool to examine the current CSV file
@@ -1202,9 +1200,8 @@ IMPORTANT: You MUST use ONLY these exact parent IDs: $valid_parent_ids
 Top performers to combine (reference at least 2 in each idea):
 $top_performers
 
-CRITICAL INSTRUCTION: Before generating hybrid combination ideas, you MUST read the source code of the parent algorithms.
-Algorithm source files are located at: evolution_<PARENT_ID>.py
-For example: evolution_gen01-251.py
+OPTIONAL: If needed for context, you may read parent algorithm source files at: evolution_<PARENT_ID>.py
+However, you can often generate good hybrid ideas just from the descriptions and performance scores above.
 
 CRITICAL INSTRUCTIONS:
 1. Use the Read tool to examine the current CSV file
@@ -1286,17 +1283,12 @@ ideate_ai_legacy() {
   
   local prompt="I need you to use your file editing capabilities to add exactly $TOTAL_IDEAS algorithmic ideas to the CSV file: $temp_csv_basename
 
-Algorithm files for context:
-- Base algorithm: algorithm.py  
-- Evolved algorithms: evolution_*.py
+Current evolution context:
+- Generation: $CURRENT_GENERATION
+- Algorithm: algorithm.py (base algorithm)
+- Brief: $(head -10 "$FULL_BRIEF_PATH" 2>/dev/null | head -c 1000 || echo "No brief file found")
 
-IMPORTANT: Before generating ideas, you should:
-1. Use the Read tool to examine the base algorithm to understand the codebase structure and possibilities
-2. Use the Read tool to examine ALL existing evolution_*.py files to see what modifications have been attempted
-3. Consider which approaches might work well
-
-Project Brief:
-$(cat "$FULL_BRIEF_PATH")"
+IMPORTANT: DO NOT read all evolution files - that uses too many tokens. Just generate creative ideas based on the brief."
 
   if [[ -n $top_performers ]]; then
     prompt+="
@@ -1374,13 +1366,48 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
 CURRENT_GENERATION=$(get_next_generation)
 echo "[INFO] Starting ideation for generation $CURRENT_GENERATION"
 
-# Main execution
-if [[ $use_strategies == true ]]; then
-  echo "[INFO] Multi-strategy AI generation mode"
-  ideate_ai_strategies
-  echo "[INFO] Ideation complete! Check $EVOLUTION_CSV for new ideas."
-else
-  echo "[INFO] Legacy AI generation mode"
-  ideate_ai_legacy
-  echo "[INFO] Ideation complete! Check $EVOLUTION_CSV for new ideas."
-fi
+# Main execution with retry logic and exponential backoff
+retry_count=0
+wait_seconds=300  # Start with 5 minutes
+max_wait_seconds=1800  # Cap at 30 minutes
+
+while true; do
+  if [[ $use_strategies == true ]]; then
+    echo "[INFO] Multi-strategy AI generation mode"
+    if ideate_ai_strategies; then
+      echo "[INFO] Ideation complete! Check $EVOLUTION_CSV for new ideas."
+      exit 0
+    fi
+  else
+    echo "[INFO] Legacy AI generation mode"
+    if ideate_ai_legacy; then
+      echo "[INFO] Ideation complete! Check $EVOLUTION_CSV for new ideas."
+      exit 0
+    fi
+  fi
+
+  # If we reach here, ideation failed
+  ((retry_count++))
+
+  echo "[WARN] All ideation attempts failed (retry #$retry_count)" >&2
+  echo "[INFO] This could be temporary API rate limits or service issues" >&2
+  echo "[INFO] Waiting $wait_seconds seconds ($(($wait_seconds / 60)) minutes) before retrying..." >&2
+
+  # Sleep with countdown
+  remaining=$wait_seconds
+  while [[ $remaining -gt 0 ]]; do
+    if [[ $((remaining % 60)) -eq 0 ]]; then
+      echo "[INFO] Retrying in $((remaining / 60)) minutes..." >&2
+    fi
+    sleep 60
+    remaining=$((remaining - 60))
+  done
+
+  echo "[INFO] Retrying ideation (attempt #$((retry_count + 1)))..." >&2
+
+  # Exponential backoff: double the wait time, up to max
+  wait_seconds=$((wait_seconds * 2))
+  if [[ $wait_seconds -gt $max_wait_seconds ]]; then
+    wait_seconds=$max_wait_seconds
+  fi
+done

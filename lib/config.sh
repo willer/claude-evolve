@@ -55,7 +55,7 @@ DEFAULT_MEMORY_LIMIT_MB=12288
 
 # Default LLM CLI configuration - use simple variables instead of arrays
 DEFAULT_LLM_RUN="sonnet gpt5 cursor-sonnet"
-DEFAULT_LLM_IDEATE="gemini opus-think sonnet-think gpt5high o3high cursor-opus"
+DEFAULT_LLM_IDEATE="gemini sonnet-think sonnet-think gpt5high sonnet-think o3high"
 
 # Load configuration from config file
 load_config() {
@@ -103,9 +103,9 @@ load_config() {
   LLM_CLI_codex='codex exec --dangerously-bypass-approvals-and-sandbox "{{PROMPT}}"'
   LLM_CLI_gemini='gemini -y -p "{{PROMPT}}"'
   LLM_CLI_opus='claude --dangerously-skip-permissions --model opus -p "{{PROMPT}}"'
-  LLM_CLI_opus_think='claude --dangerously-skip-permissions --model opus --extended-thinking -p "ultrathink\n\n{{PROMPT}}"'
+  LLM_CLI_opus_think='claude --dangerously-skip-permissions --model opus -p "ultrathink\n\n{{PROMPT}}"'
   LLM_CLI_sonnet='claude --dangerously-skip-permissions --model sonnet -p "{{PROMPT}}"'
-  LLM_CLI_sonnet_think='claude --dangerously-skip-permissions --model sonnet --extended-thinking -p "ultrathink\n\n{{PROMPT}}"'
+  LLM_CLI_sonnet_think='claude --dangerously-skip-permissions --model sonnet -p "ultrathink\n\n{{PROMPT}}"'
   LLM_CLI_cursor_sonnet='cursor-agent sonnet -p "{{PROMPT}}"'
   LLM_CLI_cursor_opus='cursor-agent opus -p "{{PROMPT}}"'
   LLM_RUN="$DEFAULT_LLM_RUN"

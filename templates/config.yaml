@@ -73,11 +73,13 @@ llm_cli:
   # commented out because these change over time; if you want to fix them in a particular
   # configuration, uncomment them and set them
   #run: sonnet gpt5 cursor-sonnet
-  #ideate: gemini opus gpt5high o3high cursor-opus
-  
+  #ideate: gemini sonnet-think sonnet-think gpt5high sonnet-think o3high
+
   # Available models:
   # - sonnet: Claude 3.5 Sonnet via Claude CLI
+  # - sonnet-think: Claude 3.5 Sonnet with extended thinking (ultrathink prompt)
   # - opus: Claude 3 Opus via Claude CLI
+  # - opus-think: Claude 3 Opus with extended thinking (ultrathink prompt)
   # - gemini: Gemini via Gemini CLI
   # - gpt5: GPT-5 via Codex CLI (standard)
   # - gpt5high: GPT-5 via Codex CLI (high reasoning)

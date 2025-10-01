@@ -25,6 +25,7 @@ llm_cli:
   gemini: 'gemini -y -p "{{PROMPT}}"'
   opus: 'claude --dangerously-skip-permissions --model opus -p "{{PROMPT}}"'
   sonnet: 'claude --dangerously-skip-permissions --model sonnet -p "{{PROMPT}}"'
-  
+  sonnet-think: 'claude --dangerously-skip-permissions --model sonnet -p "ultrathink\n\n{{PROMPT}}"'
+
   run: sonnet
-  ideate: o3high gpt5high opus gemini
+  ideate: gemini sonnet-think sonnet-think gpt5high sonnet-think o3high
