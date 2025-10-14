@@ -414,7 +414,7 @@ try:
         print(f'[INFO] Reset {changed_count} candidates (stuck running or missing files) to pending')
     
     # Count pending candidates using UNIFIED logic
-    sys.path.append(script_dir + '/../lib')
+    sys.path.append(script_dir + '/..')
     from lib.evolution_csv import EvolutionCSV
     
     with EvolutionCSV(csv_file) as csv_ops:
