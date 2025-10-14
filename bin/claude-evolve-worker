@@ -26,10 +26,23 @@ TERMINATION_SIGNAL=""
 cleanup_on_exit() {
   if [[ -n "$CURRENT_CANDIDATE_ID" ]]; then
     echo "[WORKER-$$] Worker terminated while processing $CURRENT_CANDIDATE_ID" >&2
-    # If we're interrupted while processing, leave it as "running"
-    # This prevents other workers from picking it up in the same session
-    # A human can manually reset to pending if needed
-    echo "[WORKER-$$] Leaving $CURRENT_CANDIDATE_ID in current state" >&2
+    # Atomically reset status to pending only if it is not already complete
+    echo "[WORKER-$$] Determining status before resetting" >&2
+    "$PYTHON_CMD" -c "
+import sys
+sys.path.insert(0, '$SCRIPT_DIR/..')
+from lib.evolution_csv import EvolutionCSV
+csv = EvolutionCSV('$FULL_CSV_PATH')
+# Acquire lock and read current status safely
+info = csv.get_candidate_info('$CURRENT_CANDIDATE_ID')
+if info and info.get('status', '').lower() != 'complete':
+    csv.update_candidate_status('$CURRENT_CANDIDATE_ID', 'pending')
+    print('reset')
+    sys.exit(0)
+else:
+    # No reset needed
+    sys.exit(0)
+" 2>/dev/null || echo "[WORKER-$$] Warning: failed to reset status" >&2
   fi
 }
 
@@ -72,68 +85,108 @@ fi
 call_ai_for_evolution() {
   local prompt="$1"
   local candidate_id="$2"
-  
+
   # Get target file path from worker context
   local target_file="$FULL_OUTPUT_DIR/evolution_${candidate_id}.py"
-  
-  # Capture file state before AI call
-  local file_hash_before=""
-  local file_mtime_before=""
-  if [[ -f "$target_file" ]]; then
-    file_hash_before=$(shasum -a 256 "$target_file" 2>/dev/null | cut -d' ' -f1)
-    file_mtime_before=$(stat -f %m "$target_file" 2>/dev/null || stat -c %Y "$target_file" 2>/dev/null)
-  fi
-  
-  # Extract generation and ID numbers for round-robin calculation
-  local gen_num=0
-  local id_num=0
-  if [[ $candidate_id =~ ^gen([0-9]+)-([0-9]+)$ ]]; then
-    gen_num=$((10#${BASH_REMATCH[1]}))
-    id_num=$((10#${BASH_REMATCH[2]}))
-  fi
-  
-  # Calculate hash for round-robin (combine generation and ID)
-  local hash_value=$((gen_num * 1000 + id_num))
-  
-  # Use the centralized AI library for evolution (run command)
-  local ai_output
-  ai_output=$(call_ai_with_round_robin "$prompt" "run" "$hash_value")
-  local ai_exit_code=$?
-  
-  # Handle special exit codes
-  if [[ $ai_exit_code -eq 3 ]]; then
-    echo "[WORKER-$$] All models hit usage limits" >&2
-    echo "[WORKER-$$] Unable to complete evolution due to API limits" >&2
-    exit 3
-  fi
-  
-  # Check if the target file was actually modified
-  local file_was_modified=false
-  if [[ -f "$target_file" ]]; then
-    local file_hash_after
-    local file_mtime_after
-    file_hash_after=$(shasum -a 256 "$target_file" 2>/dev/null | cut -d' ' -f1)
-    file_mtime_after=$(stat -f %m "$target_file" 2>/dev/null || stat -c %Y "$target_file" 2>/dev/null)
+
+  # Retry configuration for API limits
+  local retry_count=0
+  local max_retries=3
+  local wait_seconds=300  # Start with 5 minutes
+  local max_wait_seconds=1800  # Cap at 30 minutes
+
+  while true; do
+    # Capture file state before AI call
+    local file_hash_before=""
+    local file_mtime_before=""
+    if [[ -f "$target_file" ]]; then
+      file_hash_before=$(shasum -a 256 "$target_file" 2>/dev/null | cut -d' ' -f1)
+      file_mtime_before=$(stat -f %m "$target_file" 2>/dev/null || stat -c %Y "$target_file" 2>/dev/null)
+    fi
+
+    # Extract generation and ID numbers for round-robin calculation
+    local gen_num=0
+    local id_num=0
+    if [[ $candidate_id =~ ^gen([0-9]+)-([0-9]+)$ ]]; then
+      gen_num=$((10#${BASH_REMATCH[1]}))
+      id_num=$((10#${BASH_REMATCH[2]}))
+    fi
+
+    # Calculate hash for round-robin (combine generation and ID)
+    local hash_value=$((gen_num * 1000 + id_num))
+
+    # Use the centralized AI library for evolution (run command)
+          local ai_output
+          ai_output=$(call_ai_with_round_robin "$prompt" "run" "$hash_value")
+          local ai_exit_code=$?
     
-    if [[ "$file_hash_before" != "$file_hash_after" ]] || [[ "$file_mtime_before" != "$file_mtime_after" ]]; then
-      file_was_modified=true
-    fi
-  fi
-  
-  # Success if file was modified OR exit code is 0 (for cases where file validation isn't applicable)
-  if [[ "$file_was_modified" == "true" ]] || [[ $ai_exit_code -eq 0 ]]; then
-    if [[ "$file_was_modified" == "true" ]]; then
-      echo "[WORKER-$$] AI successfully modified $target_file (exit code: $ai_exit_code)" >&2
-    else
-      echo "[WORKER-$$] AI succeeded with exit code 0" >&2
-    fi
-    # Output the result for the worker to use
-    echo "$ai_output"
-    return 0
-  fi
-  
-  echo "[WORKER-$$] AI failed: exit code $ai_exit_code, no file changes detected" >&2
-  return 1
+          # Handle special exit codes
+          if [[ $ai_exit_code -eq 3 ]]; then
+            # All models hit usage limits
+            if [[ $retry_count -lt $max_retries ]]; then
+              ((retry_count++))
+              echo "[WORKER-$] All models hit usage limits (retry $retry_count/$max_retries)" >&2
+              echo "[WORKER-$] Waiting $wait_seconds seconds ($(($wait_seconds / 60)) minutes) before retrying..." >&2
+    
+              # Sleep with countdown
+              local remaining=$wait_seconds
+              while [[ $remaining -gt 0 ]]; do
+                if [[ $((remaining % 60)) -eq 0 ]]; then
+                  echo "[WORKER-$] Retrying in $((remaining / 60)) minutes..." >&2
+                fi
+                sleep 60
+                remaining=$((remaining - 60))
+              done
+    
+              echo "[WORKER-$] Retrying AI call (attempt #$((retry_count + 1)))..." >&2
+    
+              # Exponential backoff: double the wait time, up to max
+              wait_seconds=$((wait_seconds * 2))
+              if [[ $wait_seconds -gt $max_wait_seconds ]]; then
+                wait_seconds=$max_wait_seconds
+              fi
+    
+              # Continue to retry
+              continue
+            else
+              # Exhausted retries
+              echo "[WORKER-$] All models hit usage limits after $max_retries retries" >&2
+              echo "[WORKER-$] Unable to complete evolution due to API limits" >&2
+              # Clean up any partial target file before exiting
+              rm -f "$target_file"
+              exit 3
+            fi
+          fi
+    
+
+    
+          # Check if the target file was actually modified
+          local file_was_modified=false
+          if [[ -f "$target_file" ]]; then
+            local file_hash_after
+            local file_mtime_after
+            file_hash_after=$(shasum -a 256 "$target_file" 2>/dev/null | cut -d' ' -f1)
+            file_mtime_after=$(stat -f %m "$target_file" 2>/dev/null || stat -c %Y "$target_file" 2>/dev/null)
+    
+            if [[ "$file_hash_before" != "$file_hash_after" ]] || [[ "$file_mtime_before" != "$file_mtime_after" ]]; then
+              file_was_modified=true
+            fi
+          fi
+    
+          # Success only if the target file was actually modified.
+          # Even if AI exited with code 0, if there were no changes, treat as failure to avoid stale copies.
+          if [[ "$file_was_modified" == "true" ]]; then
+            echo "[WORKER-$] AI successfully modified $target_file (exit code: $ai_exit_code)" >&2
+            return 0
+          fi
+    
+          # Non-limit failure - no modification detected; clean up the copied file
+          echo "[WORKER-$] AI changed nothing or failed; cleaning up temporary file" >&2
+          rm -f "$target_file"
+          echo "[WORKER-$] AI failed: exit code $ai_exit_code, no file changes detected" >&2
+          return 1
+        done
+    
 }
 
 # Validate paths
@@ -222,10 +275,12 @@ with EvolutionCSV('$FULL_CSV_PATH') as csv:
     # Use relative path for AI prompt
     local target_basename=$(basename "$target_file")
     local evolution_prompt="Modify the algorithm in $target_basename based on this description: $description
-    
+
 The modification should be substantial and follow the description exactly. Make sure the algorithm still follows all interface requirements and can run properly.
 
 Important: Make meaningful changes that match the description. Don't just add comments or make trivial adjustments.
+
+CRITICAL: If you do not know how to implement what was asked for, or if the requested change is unclear or not feasible, you MUST refuse to make any changes. DO NOT modify the code if you are uncertain about the implementation. Simply respond that you cannot implement the requested change and explain why. It is better to refuse than to make incorrect or random changes.
 
 CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). Only modify the file directly."
     
