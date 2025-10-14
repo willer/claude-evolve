@@ -320,8 +320,14 @@ with EvolutionCSV('$FULL_CSV_PATH') as csv:
       if ! "$PYTHON_CMD" -m py_compile "$target_file" 2>&1; then
         echo "[WORKER-$$] ERROR: Generated Python file has syntax errors!" >&2
         echo "[WORKER-$$] File: $target_file" >&2
-        # This is still an evaluation failure, not an AI failure
-        return 1
+        # Delete the problematic Python file
+        rm -f "$target_file"
+        echo "[WORKER-$$] Deleted corrupted algorithm file: $target_file" >&2
+        # Set status to pending for retry
+        update_candidate_status "$candidate_id" "pending"
+        # Return 0 to indicate that this specific processing step is handled,
+        # and the candidate is now pending for a future retry.
+        return 0
       fi
     fi
   fi
