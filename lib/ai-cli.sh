@@ -19,7 +19,7 @@ call_ai_model_configured() {
   case "$model_name" in
     opus|sonnet)
       local ai_output
-      ai_output=$(timeout 300 claude --dangerously-skip-permissions --model "$model_name" -p "$prompt" 2>&1)
+      ai_output=$(timeout 300 claude --dangerously-skip-permissions --mcp-config '' --model "$model_name" -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     sonnet-think)
@@ -28,7 +28,7 @@ call_ai_model_configured() {
       local think_prompt="ultrathink
 
 $prompt"
-      ai_output=$(timeout 600 claude --dangerously-skip-permissions --model sonnet -p "$think_prompt" 2>&1)
+      ai_output=$(timeout 600 claude --dangerously-skip-permissions --mcp-config '' --model sonnet -p "$think_prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     opus-think)
@@ -37,7 +37,7 @@ $prompt"
       local think_prompt="ultrathink
 
 $prompt"
-      ai_output=$(timeout 600 claude --dangerously-skip-permissions --model opus -p "$think_prompt" 2>&1)
+      ai_output=$(timeout 600 claude --dangerously-skip-permissions --mcp-config '' --model opus -p "$think_prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     gpt5high)
@@ -68,13 +68,97 @@ $prompt"
       ;;
     cursor-sonnet)
       local ai_output
-      ai_output=$(timeout 300 cursor-agent sonnet -p "$prompt" 2>&1)
+      ai_output=$(timeout 300 cursor-agent sonnet-4.5 -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     cursor-opus)
       local ai_output
       ai_output=$(timeout 300 cursor-agent opus -p "$prompt" 2>&1)
       local ai_exit_code=$?
+      ;;
+    glm)
+      local ai_output
+      ai_output=$(timeout 300 opencode -m openrouter/z-ai/glm-4.6 run "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    deepseek)
+      local ai_output
+      ai_output=$(timeout 300 opencode -m openrouter/deepseek/deepseek-v3.1-terminus run "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    grok-code-fast)
+      local ai_output
+      ai_output=$(timeout 300 opencode -m openrouter/x-ai/grok-code-fast-1 run "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    grok-4)
+      local ai_output
+      ai_output=$(timeout 300 opencode -m openrouter/x-ai/grok-4 run "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    codex-qwen3)
+      # Qwen3-Coder via Codex CLI with Ollama backend (only mildly agentic)
+      local ai_output
+      ai_output=$(timeout 1200 codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss --model qwen3-coder:30b "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    codex-oss)
+      # Codex-OSS via Codex CLI with Ollama backend (longer timeout)
+      local ai_output
+      ai_output=$(timeout 1200 codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    aider-qwen3|qwen3)
+      # Qwen3-Coder via Aider + Ollama
+      # Extract the target filename from the prompt (e.g., "Modify the algorithm in evolution_gen01-001.py...")
+      local target_file
+      target_file=$(echo "$prompt" | sed -n 's/.*algorithm in \([^ ]*\.py\).*/\1/p' | head -1)
+
+      if [[ -z "$target_file" ]]; then
+        echo "[ERROR] Could not extract target filename from prompt" >&2
+        return 1
+      fi
+
+      # Check if file exists in current directory
+      if [[ ! -f "$target_file" ]]; then
+        echo "[ERROR] Target file not found: $target_file" >&2
+        return 1
+      fi
+
+      # Build context files list (read-only)
+      local context_args=""
+
+      # Add BRIEF.md if it exists
+      if [[ -f "BRIEF.md" ]]; then
+        context_args="$context_args --read BRIEF.md"
+      fi
+
+      # Add base algorithm.py as reference
+      if [[ -f "algorithm.py" ]]; then
+        context_args="$context_args --read algorithm.py"
+      fi
+
+      # IMPORTANT: Detect and add parent file for comparison
+      # Extract parent ID from target filename (e.g., evolution_gen05-013.py came from gen04-005)
+      # The file being edited is already a COPY of the parent, but we want the original
+      # parent file as read-only context so the AI can understand what it's building on
+      local target_basename=$(basename "$target_file" .py)
+      if [[ "$target_basename" =~ ^evolution_gen([0-9]+)-([0-9]+)$ ]]; then
+        local current_gen="${BASH_REMATCH[1]}"
+        # Look for parent in previous generation or same generation
+        # We can't easily determine the exact parent, so include all recent evolution files
+        # Actually, the file being edited IS the parent content already (it was copied)
+        # So we don't need to add the parent separately
+        :
+      fi
+
+      # Run aider with context files and the target file to edit
+      local ai_output
+      ai_output=$(timeout 600 aider --yes --no-git --model ollama/qwen3-coder:30b --no-show-model-warnings $context_args --message "$prompt" "$target_file" 2>&1)
+      local ai_exit_code=$?
+
+      # Aider modifies the file in place, so we don't need to output anything
+      # The file has been edited directly
       ;;
     *)
       echo "[ERROR] Unknown model: $model_name" >&2

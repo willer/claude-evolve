@@ -66,6 +66,7 @@ COMMANDS:
     status             Show evolution progress and current leader
     autostatus         Auto-updating status display (real-time)
     cleanup            Clean up unchanged algorithms and descendants
+    clean-corrupted    Remove corrupted records from evolution CSV
     cleanup-duplicates Alias for cleanup (deprecated)
     help               Show this help message
 
@@ -92,16 +93,17 @@ show_menu() {
   echo
   echo "What would you like to do?"
   echo
-  echo "  1) setup      - Initialize evolution workspace"
-  echo "  2) ideate     - Generate new algorithm ideas"
-  echo "  3) run        - Execute evolution candidates"
-  echo "  4) analyze    - Analyze evolution results"
-  echo "  5) edit       - Manage candidate statuses by generation"
-  echo "  6) status     - Show evolution progress and current leader"
-  echo "  7) autostatus - Auto-updating status display (real-time)"
-  echo "  8) config     - Manage configuration settings"
-  echo "  9) help       - Show help message"
-  echo "  0) exit       - Exit"
+  echo "  1) setup           - Initialize evolution workspace"
+  echo "  2) ideate          - Generate new algorithm ideas"
+  echo "  3) run             - Execute evolution candidates"
+  echo "  4) analyze         - Analyze evolution results"
+  echo "  5) edit            - Manage candidate statuses by generation"
+  echo "  6) status          - Show evolution progress and current leader"
+  echo "  7) autostatus      - Auto-updating status display (real-time)"
+  echo "  8) clean-corrupted - Remove corrupted records from CSV"
+  echo "  9) config          - Manage configuration settings"
+  echo "  h) help            - Show help message"
+  echo "  0) exit            - Exit"
   echo
 
   # Show workspace status
@@ -152,7 +154,7 @@ check_for_updates
 # Main logic
 if [[ $# -eq 0 ]]; then
   show_menu
-  read -r -p "Enter your choice (1-9, 0): " choice
+  read -r -p "Enter your choice (1-9, h, 0): " choice
 
   case $choice in
   1) exec "$SCRIPT_DIR/claude-evolve-setup" ;;
@@ -162,14 +164,15 @@ if [[ $# -eq 0 ]]; then
   5) exec "$SCRIPT_DIR/claude-evolve-edit" ;;
   6) exec "$SCRIPT_DIR/claude-evolve-status" ;;
   7) exec "$SCRIPT_DIR/claude-evolve-autostatus" ;;
-  8) exec "$SCRIPT_DIR/claude-evolve-config" ;;
-  9) show_help ;;
+  8) exec "$SCRIPT_DIR/claude-evolve-clean-corrupted" ;;
+  9) exec "$SCRIPT_DIR/claude-evolve-config" ;;
+  h|H) show_help ;;
   0)
     echo "Goodbye!"
     exit 0
     ;;
   *)
-    echo -e "${RED}Invalid choice. Please select 1-9 or 0.${NC}"
+    echo -e "${RED}Invalid choice. Please select 1-9, h, or 0.${NC}"
     exit 1
     ;;
   esac
@@ -213,6 +216,10 @@ autostatus)
 cleanup-duplicates|cleanup)
   shift
   exec "$SCRIPT_DIR/claude-evolve-cleanup" "$@"
+  ;;
+clean-corrupted)
+  shift
+  exec "$SCRIPT_DIR/claude-evolve-clean-corrupted" "$@"
   ;;
 config)
   shift

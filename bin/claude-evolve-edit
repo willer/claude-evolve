@@ -40,6 +40,7 @@ SELECTORS:
   pending             Target all candidates with pending status
   running             Target all candidates with running status
   skipped             Target all candidates with skipped status
+  0perf               Target all candidates with 0 performance score
 
 ACTIONS:
   failed           Mark candidates as failed (keeps scores)
@@ -50,6 +51,7 @@ ACTIONS:
   failed-retry2    Mark candidates for retry attempt 2 (bug fixing)
   failed-retry3    Mark candidates for retry attempt 3 (bug fixing)
   reboot           Reset completely (delete .py files, clear scores, set pending)
+  reset            Same as reboot (synonym)
   delete           Delete candidates from CSV and remove .py files (asks confirmation)
 
 EXAMPLES:
@@ -62,6 +64,8 @@ EXAMPLES:
   claude-evolve edit complete failed                 # Mark all complete as failed for re-run
   claude-evolve edit all pending                     # Mark everything as pending for re-run
   claude-evolve edit gen02 reboot                    # Full reset of gen02 (delete files + clear data)
+  claude-evolve edit gen02 reset                     # Same as reboot (synonym)
+  claude-evolve edit 0perf pending                   # Reset all candidates with 0 performance
   claude-evolve edit gen02 delete                    # Delete gen02 from CSV and remove .py files
 
 DESCRIPTION:
@@ -112,16 +116,16 @@ if ! validate_config; then
 fi
 
 # Validate selector format
-if [[ "$SELECTOR" != "all" && ! "$SELECTOR" =~ ^gen[0-9]+$ && "$SELECTOR" != "failed" && "$SELECTOR" != "complete" && "$SELECTOR" != "pending" && "$SELECTOR" != "running" && "$SELECTOR" != "skipped" ]]; then
-  echo "[ERROR] Selector must be 'all', 'genXX' (e.g., gen01), or status ('failed', 'complete', 'pending', 'running', 'skipped')" >&2
+if [[ "$SELECTOR" != "all" && ! "$SELECTOR" =~ ^gen[0-9]+$ && "$SELECTOR" != "failed" && "$SELECTOR" != "complete" && "$SELECTOR" != "pending" && "$SELECTOR" != "running" && "$SELECTOR" != "skipped" && "$SELECTOR" != "0perf" ]]; then
+  echo "[ERROR] Selector must be 'all', 'genXX' (e.g., gen01), or status ('failed', 'complete', 'pending', 'running', 'skipped', '0perf')" >&2
   exit 1
 fi
 
 # Validate action
 case "$ACTION" in
-  failed|complete|pending|skipped|failed-retry1|failed-retry2|failed-retry3|reboot|delete) ;;
+  failed|complete|pending|skipped|failed-retry1|failed-retry2|failed-retry3|reboot|reset|delete) ;;
   *)
-    echo "[ERROR] Action must be one of: failed, complete, pending, skipped, failed-retry1, failed-retry2, failed-retry3, reboot, delete" >&2
+    echo "[ERROR] Action must be one of: failed, complete, pending, skipped, failed-retry1, failed-retry2, failed-retry3, reboot, reset, delete" >&2
     exit 1
     ;;
 esac
@@ -213,12 +217,16 @@ try:
         elif selector.startswith('gen') and '-' in candidate_id:
             # Generation selector (e.g., gen01, gen02)
             matches = candidate_id.startswith(selector + '-')
-        elif selector in ['failed', 'complete', 'pending', 'running', 'skipped']:
+        elif selector in ['failed', 'complete', 'pending', 'running', 'skipped', '0perf']:
             # Status selector
             if selector == 'pending':
                 matches = current_status == '' or current_status == 'pending'
             elif selector == 'failed':
                 matches = current_status.startswith('failed')
+            elif selector == '0perf':
+                # Select candidates with performance == 0
+                performance = row[3] if len(row) > 3 else ''
+                matches = performance == '0' or performance == '0.0'
             else:
                 matches = current_status == selector
         
@@ -367,6 +375,10 @@ try:
                 matches = current_status.startswith('failed')
             elif selector == 'skipped':
                 matches = current_status == 'skipped'
+            elif selector == '0perf':
+                # Select candidates with performance == 0
+                performance = row[3] if len(row) > 3 else ''
+                matches = performance == '0' or performance == '0.0'
             else:
                 matches = current_status == selector
             
@@ -487,6 +499,10 @@ with EvolutionCSV('$FULL_CSV_PATH') as csv:
                 matches = current_status.startswith('failed')
             elif selector == 'skipped':
                 matches = current_status == 'skipped'
+            elif selector == '0perf':
+                # Select candidates with performance == 0
+                performance = row[3] if len(row) > 3 else ''
+                matches = performance == '0' or performance == '0.0'
             else:
                 matches = current_status == selector
             
@@ -544,7 +560,7 @@ case "$ACTION" in
   failed-retry3)
     update_candidates_status "$SELECTOR" "failed-retry3" "false"
     ;;
-  reboot)
+  reboot|reset)
     echo "[INFO] Performing full reboot of '$SELECTOR'..."
     delete_evolution_files "$SELECTOR"
     update_candidates_status "$SELECTOR" "" "true"  # Clear scores and set pending

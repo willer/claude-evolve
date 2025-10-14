@@ -1,0 +1,178 @@
+#!/bin/bash
+
+set -e
+
+# Function to show help
+show_help() {
+  cat <<EOF
+claude-evolve clean-corrupted - Remove corrupted records from evolution CSV
+
+USAGE:
+  claude-evolve clean-corrupted [OPTIONS]
+
+OPTIONS:
+  --dry-run   Show what would be removed without modifying the CSV
+  --help      Show this help message
+
+DESCRIPTION:
+  Removes corrupted records with invalid ID formats, such as:
+  - IDs with line numbers and pipe characters (e.g., "00648| gen43-001")
+  - IDs with leading digits followed by spaces
+  - Any ID containing pipe (|) characters
+
+  Creates a backup before modifying the CSV.
+
+EXAMPLES:
+  claude-evolve clean-corrupted           # Remove corrupted records
+  claude-evolve clean-corrupted --dry-run # Preview what would be removed
+EOF
+}
+
+# Parse arguments
+DRY_RUN=false
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+  --dry-run)
+    DRY_RUN=true
+    shift
+    ;;
+  --help)
+    show_help
+    exit 0
+    ;;
+  *)
+    echo "[ERROR] Unknown option: $1" >&2
+    exit 1
+    ;;
+  esac
+done
+
+# Load configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/config.sh
+source "$SCRIPT_DIR/../lib/config.sh"
+
+# Use CLAUDE_EVOLVE_CONFIG if set, otherwise default
+if [[ -n ${CLAUDE_EVOLVE_CONFIG:-} ]]; then
+  load_config "$CLAUDE_EVOLVE_CONFIG"
+else
+  # Check if config.yaml exists in current directory
+  if [[ -f "config.yaml" ]]; then
+    # Don't export to avoid collision with parallel runs
+    CONFIG_FILE="$(pwd)/config.yaml"
+    load_config "$CONFIG_FILE"
+  else
+    load_config
+  fi
+fi
+
+# Validate configuration
+if ! validate_config; then
+  echo "[ERROR] Configuration validation failed" >&2
+  exit 1
+fi
+
+# Check if CSV exists
+if [[ ! -f "$FULL_CSV_PATH" ]]; then
+  echo "[ERROR] Evolution CSV not found: $FULL_CSV_PATH" >&2
+  echo "Run 'claude-evolve setup' first or navigate to the correct directory" >&2
+  exit 1
+fi
+
+echo "Checking for corrupted records in: $FULL_CSV_PATH"
+
+# Use Python to identify and optionally remove corrupted records
+"$PYTHON_CMD" - <<EOF
+import csv
+import sys
+import re
+import shutil
+from datetime import datetime
+
+csv_path = "$FULL_CSV_PATH"
+dry_run = $DRY_RUN
+
+def is_valid_candidate_id(candidate_id):
+    """Check if a candidate ID is valid."""
+    if not candidate_id or candidate_id == "id":
+        return True  # Header row
+
+    # Reject IDs containing pipe characters (line number artifacts)
+    if '|' in candidate_id:
+        return False
+
+    # Valid ID should match: baseline-NNN or genNN-NNN format
+    # Also accept special IDs like "000", "0", etc.
+    if re.match(r'^(baseline|gen\d{2})-\d{3}$', candidate_id):
+        return True
+    if re.match(r'^(000|0|gen00-000)$', candidate_id):
+        return True
+
+    # Reject anything with leading digits followed by non-standard format
+    if re.match(r'^\d+\s', candidate_id):
+        return False
+
+    return True
+
+# Read CSV
+with open(csv_path, 'r') as f:
+    reader = csv.reader(f)
+    rows = list(reader)
+
+# Identify corrupted records
+corrupted_records = []
+valid_rows = [rows[0]]  # Keep header
+
+for i, row in enumerate(rows[1:], start=1):
+    if not row or len(row) == 0:
+        continue
+
+    candidate_id = row[0] if len(row) > 0 else ""
+
+    if not is_valid_candidate_id(candidate_id):
+        corrupted_records.append((i, candidate_id, row))
+    else:
+        valid_rows.append(row)
+
+# Report findings
+total_records = len(rows) - 1  # Exclude header
+corrupted_count = len(corrupted_records)
+
+print(f"\\nTotal records: {total_records}")
+print(f"Corrupted records: {corrupted_count}")
+print(f"Valid records: {len(valid_rows) - 1}")  # Exclude header
+
+if corrupted_count > 0:
+    print("\\n🔍 Corrupted records found:")
+    for line_num, candidate_id, row in corrupted_records[:20]:
+        status = row[4] if len(row) > 4 else "unknown"
+        print(f"  Line {line_num}: {candidate_id} (status: {status})")
+
+    if len(corrupted_records) > 20:
+        print(f"  ... and {len(corrupted_records) - 20} more")
+
+    if not dry_run:
+        # Create backup
+        backup_path = f"{csv_path}.backup.{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        shutil.copy2(csv_path, backup_path)
+        print(f"\\n✅ Created backup: {backup_path}")
+
+        # Write cleaned CSV
+        with open(csv_path, 'w', newline='') as f:
+            writer = csv.writer(f, quoting=csv.QUOTE_NONNUMERIC)
+            for row in valid_rows:
+                writer.writerow(row)
+
+        print(f"✅ Removed {corrupted_count} corrupted records from CSV")
+        print(f"✅ Cleaned CSV saved to: {csv_path}")
+    else:
+        print("\\n[DRY RUN] No changes made. Run without --dry-run to remove corrupted records.")
+else:
+    print("\\n✅ No corrupted records found!")
+
+sys.exit(0)
+EOF
+
+echo ""
+echo "Done!"

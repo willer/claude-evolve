@@ -23,9 +23,9 @@ llm_cli:
   gpt5high: 'codex exec --profile gpt5high --dangerously-bypass-approvals-and-sandbox "{{PROMPT}}"'
   codex: 'codex exec --dangerously-bypass-approvals-and-sandbox "{{PROMPT}}"'
   gemini: 'gemini -y -p "{{PROMPT}}"'
-  opus: 'claude --dangerously-skip-permissions --model opus -p "{{PROMPT}}"'
-  sonnet: 'claude --dangerously-skip-permissions --model sonnet -p "{{PROMPT}}"'
-  sonnet-think: 'claude --dangerously-skip-permissions --model sonnet -p "ultrathink\n\n{{PROMPT}}"'
+  opus: 'claude --dangerously-skip-permissions --mcp-config "" --model opus -p "{{PROMPT}}"'
+  sonnet: 'claude --dangerously-skip-permissions --mcp-config "" --model sonnet -p "{{PROMPT}}"'
+  sonnet-think: 'claude --dangerously-skip-permissions --mcp-config "" --model sonnet -p "ultrathink\n\n{{PROMPT}}"'
 
-  run: sonnet
-  ideate: gemini sonnet-think sonnet-think gpt5high sonnet-think o3high
+  run: aider-qwen3
+  ideate: gemini sonnet-think sonnet-think gpt5high sonnet-think o3high grok-4

@@ -54,13 +54,27 @@ DEFAULT_MAX_RETRIES=3
 DEFAULT_MEMORY_LIMIT_MB=12288
 
 # Default LLM CLI configuration - use simple variables instead of arrays
-DEFAULT_LLM_RUN="sonnet gpt5 cursor-sonnet"
-DEFAULT_LLM_IDEATE="gemini sonnet-think sonnet-think gpt5high sonnet-think o3high"
+# Run: 100% local with qwen3 via Codex+Ollama (more reliable than aider)
+DEFAULT_LLM_RUN="codex-qwen3 codex-oss gemini-flash"
+# Ideate: Commercial models for idea generation + local fallback
+DEFAULT_LLM_IDEATE="gemini sonnet-think gpt5high o3high glm grok-4 codex-qwen3 codex-oss gemini-flash"
 
 # Load configuration from config file
 load_config() {
-  # Accept config file path as parameter
-  local config_file="${1:-evolution/config.yaml}"
+  # Accept config file path as parameter. If not supplied, look for a user override in
+  # $HOME/.config/claude-evolve/config.yaml first, then fall back to the repo default.
+  local user_config="$1"
+
+  if [[ -n "$user_config" ]]; then
+    config_file="$user_config"
+  else
+    local home_config="$HOME/.config/claude-evolve/config.yaml"
+    if [[ -f "$home_config" ]]; then
+      config_file="$home_config"
+    else
+      config_file="evolution/config.yaml"
+    fi
+  fi
   
   # Set defaults first
   EVOLUTION_DIR="$DEFAULT_EVOLUTION_DIR"
@@ -102,12 +116,15 @@ load_config() {
   LLM_CLI_o3high='codex exec --profile o3high --dangerously-bypass-approvals-and-sandbox "{{PROMPT}}"'
   LLM_CLI_codex='codex exec --dangerously-bypass-approvals-and-sandbox "{{PROMPT}}"'
   LLM_CLI_gemini='gemini -y -p "{{PROMPT}}"'
-  LLM_CLI_opus='claude --dangerously-skip-permissions --model opus -p "{{PROMPT}}"'
-  LLM_CLI_opus_think='claude --dangerously-skip-permissions --model opus -p "ultrathink\n\n{{PROMPT}}"'
-  LLM_CLI_sonnet='claude --dangerously-skip-permissions --model sonnet -p "{{PROMPT}}"'
-  LLM_CLI_sonnet_think='claude --dangerously-skip-permissions --model sonnet -p "ultrathink\n\n{{PROMPT}}"'
+  LLM_CLI_gemini_flash='gemini -y -p "{{PROMPT}}" --model gemini-2.5-flash'
+  LLM_CLI_opus='claude --dangerously-skip-permissions --mcp-config "" --model opus -p "{{PROMPT}}"'
+  LLM_CLI_opus_think='claude --dangerously-skip-permissions --mcp-config "" --model opus -p "ultrathink\n\n{{PROMPT}}"'
+  LLM_CLI_sonnet='claude --dangerously-skip-permissions --mcp-config "" --model sonnet -p "{{PROMPT}}"'
+  LLM_CLI_sonnet_think='claude --dangerously-skip-permissions --mcp-config "" --model sonnet -p "ultrathink\n\n{{PROMPT}}"'
   LLM_CLI_cursor_sonnet='cursor-agent sonnet -p "{{PROMPT}}"'
   LLM_CLI_cursor_opus='cursor-agent opus -p "{{PROMPT}}"'
+  LLM_CLI_glm='opencode -m openrouter/z-ai/glm-4.6 run "{{PROMPT}}"'
+  LLM_CLI_deepseek='opencode -m openrouter/deepseek/deepseek-v3.1-terminus run "{{PROMPT}}"'
   LLM_RUN="$DEFAULT_LLM_RUN"
   LLM_IDEATE="$DEFAULT_LLM_IDEATE"
   
@@ -327,7 +344,7 @@ show_config() {
   echo "  Memory limit: ${MEMORY_LIMIT_MB}MB"
   echo "  LLM configuration:"
   # Show LLM configurations using dynamic variable names
-  for model in gpt5high o3high codex gemini opus opus_think sonnet sonnet_think cursor_sonnet cursor_opus; do
+  for model in gpt5high o3high codex gemini opus opus_think sonnet sonnet_think cursor_sonnet cursor_opus glm deepseek; do
     var_name="LLM_CLI_${model}"
     var_value=$(eval echo "\$$var_name")
     if [[ -n "$var_value" ]]; then

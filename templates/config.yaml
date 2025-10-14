@@ -70,10 +70,10 @@ llm_cli:
   # Models are tried in order, with round-robin distribution across candidates
   # You can repeat models for weighted selection (e.g., "sonnet sonnet gemini" for 2:1 ratio)
 
-  # commented out because these change over time; if you want to fix them in a particular
-  # configuration, uncomment them and set them
-  #run: sonnet gpt5 cursor-sonnet
-  #ideate: gemini sonnet-think sonnet-think gpt5high sonnet-think o3high
+  # Default configuration: 100% local code generation, commercial ideation + local fallback
+  # Commented out because these change over time; uncomment to override
+  #run: codex-qwen3
+  #ideate: gemini sonnet-think gpt5high o3high glm grok-4 codex-qwen3
 
   # Available models:
   # - sonnet: Claude 3.5 Sonnet via Claude CLI
@@ -86,3 +86,8 @@ llm_cli:
   # - o3high: O3 via Codex CLI (high reasoning)
   # - cursor-sonnet: Claude 3.5 Sonnet via Cursor Agent CLI
   # - cursor-opus: Claude 3 Opus via Cursor Agent CLI
+  # - glm: GLM-4.6 via OpenCode CLI
+  # - grok-code-fast: Grok Code Fast 1 via OpenRouter
+  # - grok-4: Grok 4 via OpenRouter
+  # - codex-qwen3: Qwen3-Coder via Codex + Ollama (local, free, RECOMMENDED)
+  # - aider-qwen3: Qwen3-Coder via Aider + Ollama (local, free, experimental)
