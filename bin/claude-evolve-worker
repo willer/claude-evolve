@@ -37,7 +37,6 @@ csv = EvolutionCSV('$FULL_CSV_PATH')
 info = csv.get_candidate_info('$CURRENT_CANDIDATE_ID')
 if info and info.get('status', '').lower() != 'complete':
     csv.update_candidate_status('$CURRENT_CANDIDATE_ID', 'pending')
-    print('reset')
     sys.exit(0)
 else:
     # No reset needed
