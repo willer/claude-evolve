@@ -26,21 +26,18 @@ TERMINATION_SIGNAL=""
 cleanup_on_exit() {
   if [[ -n "$CURRENT_CANDIDATE_ID" ]]; then
     echo "[WORKER-$$] Worker terminated while processing $CURRENT_CANDIDATE_ID" >&2
-    # Atomically reset status to pending only if it is not already complete
+    # Grab current status; only reset if it is not already a failure or complete
     echo "[WORKER-$$] Determining status before resetting" >&2
     "$PYTHON_CMD" -c "
 import sys
 sys.path.insert(0, '$SCRIPT_DIR/..')
 from lib.evolution_csv import EvolutionCSV
 csv = EvolutionCSV('$FULL_CSV_PATH')
-# Acquire lock and read current status safely
 info = csv.get_candidate_info('$CURRENT_CANDIDATE_ID')
-if info and info.get('status', '').lower() != 'complete':
+status = info.get('status', '').lower() if info else ''
+# Do not reset if already failed, failed-ai-retry, or complete
+    if status and status not in ('complete', 'failed', 'failed-ai-retry', 'failed-parent-missing'):
     csv.update_candidate_status('$CURRENT_CANDIDATE_ID', 'pending')
-    sys.exit(0)
-else:
-    # No reset needed
-    sys.exit(0)
 " 2>/dev/null || echo "[WORKER-$$] Warning: failed to reset status" >&2
   fi
 }
@@ -220,7 +217,7 @@ process_candidate() {
     source_file="$FULL_OUTPUT_DIR/evolution_${parent_id}.py"
     if [[ ! -f "$source_file" ]]; then
       echo "[WORKER-$$] ERROR: Parent algorithm not found: $source_file" >&2
-      return 1
+      return 78 # New exit code for missing parent
     fi
   fi
   
@@ -574,9 +571,8 @@ with EvolutionCSV('$FULL_CSV_PATH') as csv:
   if [[ $process_exit_code -eq 0 ]]; then
     echo "[WORKER-$$] Successfully processed $candidate_id"
   elif [[ $process_exit_code -eq 77 ]]; then
-    # Special exit code 77 means AI failed to generate code
+    # AI generation failed, mark for retry
     echo "[WORKER-$$] AI generation failed for $candidate_id - marking as failed-ai-retry"
-    # Mark with special status that indicates AI generation failed (not evaluation)
     "$PYTHON_CMD" -c "
 import sys
 sys.path.insert(0, '$SCRIPT_DIR/..')
@@ -584,6 +580,20 @@ from lib.evolution_csv import EvolutionCSV
 with EvolutionCSV('$FULL_CSV_PATH') as csv:
     csv.update_candidate_status('$candidate_id', 'failed-ai-retry')
 " 2>/dev/null || true
+  elif [[ $process_exit_code -eq 78 ]]; then
+    # Missing parent; mark as failed-parent-missing for clarity
+    echo "[WORKER-$$] Parent missing for $candidate_id - marking failed-parent-missing"
+    "$PYTHON_CMD" -c "
+import sys
+sys.path.insert(0, '$SCRIPT_DIR/..')
+from lib.evolution_csv import EvolutionCSV
+with EvolutionCSV('$FULL_CSV_PATH') as csv:
+    csv.update_candidate_status('$candidate_id', 'failed-parent-missing')
+" 2>/dev/null || true
+    # Clear current candidate to avoid cleanup resetting it
+    CURRENT_CANDIDATE_ID=""
+    # Stop looping so we don't keep retrying for missing dependency
+    break
   else
     echo "[WORKER-$$] Failed to process $candidate_id"
     # Other failures (evaluation errors, etc) mark as failed

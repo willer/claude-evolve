@@ -145,7 +145,7 @@ fi
 if [[ -n $WORKING_DIR ]]; then
   # Remove trailing slash if present
   WORKING_DIR="${WORKING_DIR%/}"
-  export CLAUDE_EVOLVE_CONFIG="$WORKING_DIR/config.yaml"
+  export CLAUDE_EVOLVE_WORKING_DIR="$WORKING_DIR"
 fi
 
 # Check for updates (quick, non-blocking)

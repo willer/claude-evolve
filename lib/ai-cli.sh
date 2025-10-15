@@ -56,14 +56,15 @@ $prompt"
       local ai_exit_code=$?
       ;;
     gemini)
-      # Debug: Show exact command
-      echo "[DEBUG] Running: timeout 1200 gemini -y -p <prompt>" >&2
-      echo "[DEBUG] Working directory: $(pwd)" >&2
-      echo "[DEBUG] Files in current dir:" >&2
-      ls -la temp-csv-*.csv 2>&1 | head -5 >&2
       local ai_output
       # Gemini needs longer timeout as it streams output while working (20 minutes)
-      ai_output=$(timeout 1200 gemini -y -p "$prompt" 2>&1)
+      ai_output=$(timeout 1200 gemini -y -m gemini-2.5-pro -p "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    gemini-flash)
+      local ai_output
+      # Gemini needs longer timeout as it streams output while working (20 minutes)
+      ai_output=$(timeout 1200 gemini -y -m gemini-2.5-flash -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     cursor-sonnet)
@@ -289,9 +290,12 @@ call_ai_with_round_robin() {
     return 1
   fi
   
-  # Calculate starting index for round-robin
+  # Calculate starting index for round‑robin
+  # Use a random starting point to avoid always using the same model
+  # for a given hash/value. This keeps the selection simple and
+  # avoids retrying the same model in the event of failures.
   local num_models=${#models[@]}
-  local start_index=$((hash_value % num_models))
+  local start_index=$((RANDOM % num_models))
   
   # Create ordered list based on round-robin
   local ordered_models=()

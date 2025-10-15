@@ -11,7 +11,6 @@ class Config:
     
     # Default values matching config.sh
     DEFAULTS = {
-        'evolution_dir': 'evolution',
         'algorithm_file': 'algorithm.py',
         'evaluator_file': 'evaluator.py',
         'brief_file': 'BRIEF.md',
@@ -44,31 +43,52 @@ class Config:
     
     def load(self, config_path=None, working_dir=None):
         """Load configuration from YAML file."""
-        # Determine config file path
-        if config_path:
-            # Explicit config path provided
-            self.config_path = Path(config_path)
-        elif working_dir:
-            # Look for config.yaml in working directory
+        # Initialize working_dir with a default
+        self.working_dir = Path('evolution')
+
+        # Determine self.working_dir (EVOLUTION_DIR equivalent) based on specified logic
+        if working_dir:
             self.working_dir = Path(working_dir)
-            self.config_path = self.working_dir / 'config.yaml'
+        elif os.environ.get('CLAUDE_EVOLVE_WORKING_DIR'):
+            self.working_dir = Path(os.environ.get('CLAUDE_EVOLVE_WORKING_DIR'))
+        elif (Path('evolution') / 'evolution.csv').exists():
+            self.working_dir = Path('evolution')
+        elif Path('./evolution.csv').exists():
+            self.working_dir = Path('.')
+
+        # Determine local config file path relative to self.working_dir
+        local_config_path = None
+        if config_path:
+            # Explicit config path provided, treat as local
+            local_config_path = Path(config_path)
         else:
-            # Default to evolution/config.yaml
-            self.config_path = Path('evolution/config.yaml')
-        
-        # Load config if it exists
-        if self.config_path.exists():
-            with open(self.config_path, 'r') as f:
-                yaml_data = yaml.safe_load(f) or {}
-                
-                # Merge with defaults
-                self.data.update(yaml_data)
-                
-                # Handle nested structures
-                if 'ideation' in yaml_data:
-                    self.data['ideation'] = {**self.DEFAULTS['ideation'], **yaml_data['ideation']}
-                if 'parallel' in yaml_data:
-                    self.data['parallel'] = {**self.DEFAULTS['parallel'], **yaml_data['parallel']}
+            local_config_path = self.working_dir / 'config.yaml'
+
+        # Store the resolved config_path for path resolution later
+        self.config_path = local_config_path
+
+        # Load local config if it exists
+        if local_config_path.exists():
+            with open(local_config_path, 'r') as f:
+                local_yaml_data = yaml.safe_load(f) or {}
+                self._merge_config_data(local_yaml_data)
+
+        # Load global config from ~/.config/claude-evolve/config.yaml
+        global_config_path = Path.home() / '.config' / 'claude-evolve' / 'config.yaml'
+        if global_config_path.exists():
+            with open(global_config_path, 'r') as f:
+                global_yaml_data = yaml.safe_load(f) or {}
+                self._merge_config_data(global_yaml_data)
+
+    def _merge_config_data(self, new_data):
+        """Helper to merge new data into self.data, handling nested structures."""
+        for key, value in new_data.items():
+            if key in self.data and isinstance(self.data[key], dict) and isinstance(value, dict):
+                # Recursively merge nested dictionaries
+                self.data[key].update(value)
+            else:
+                # Overwrite or add other types of values
+                self.data[key] = value
     
     def resolve_path(self, relative_path):
         """Resolve a path relative to the config directory."""

@@ -7,25 +7,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/config.sh
 source "$SCRIPT_DIR/../lib/config.sh"
 
-# Use CLAUDE_EVOLVE_CONFIG if set, otherwise default
-if [[ -n ${CLAUDE_EVOLVE_CONFIG:-} ]]; then
-  load_config "$CLAUDE_EVOLVE_CONFIG"
+# Use CLAUDE_EVOLVE_WORKING_DIR if set, otherwise default
+if [[ -n ${CLAUDE_EVOLVE_WORKING_DIR:-} ]]; then
+  load_config "$CLAUDE_EVOLVE_WORKING_DIR"
 else
-  # Check if config.yaml exists in current directory
-  if [[ -f "config.yaml" ]]; then
-    # Don't export to avoid collision with parallel runs
-    CONFIG_FILE="$(pwd)/config.yaml"
-    load_config "$CONFIG_FILE"
-  else
-    load_config
-  fi
+  load_config
 fi
 
 # Store the config path for workers (don't export to avoid collision)
-if [[ -n ${CLAUDE_EVOLVE_CONFIG:-} ]]; then
-  WORKER_CONFIG_PATH="$CLAUDE_EVOLVE_CONFIG"
-elif [[ -n ${CONFIG_FILE:-} ]]; then
-  WORKER_CONFIG_PATH="$CONFIG_FILE"
+if [[ -n ${CLAUDE_EVOLVE_WORKING_DIR:-} ]]; then
+  WORKER_CONFIG_PATH="$CLAUDE_EVOLVE_WORKING_DIR/config.yaml"
 elif [[ -f "config.yaml" ]]; then
   WORKER_CONFIG_PATH="$(pwd)/config.yaml"
 else

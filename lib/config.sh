@@ -57,27 +57,124 @@ DEFAULT_MEMORY_LIMIT_MB=12288
 # Run: 100% local with qwen3 via Codex+Ollama (more reliable than aider)
 DEFAULT_LLM_RUN="codex-qwen3 codex-oss gemini-flash"
 # Ideate: Commercial models for idea generation + local fallback
-DEFAULT_LLM_IDEATE="gemini sonnet-think gpt5high o3high glm grok-4 codex-qwen3 codex-oss gemini-flash"
+DEFAULT_LLM_IDEATE="gemini sonnet-think gpt5high glm grok-4 codex-qwen3 codex-oss"
 
-# Load configuration from config file
-load_config() {
-  # Accept config file path as parameter. If not supplied, look for a user override in
-  # $HOME/.config/claude-evolve/config.yaml first, then fall back to the repo default.
-  local user_config="$1"
-
-  if [[ -n "$user_config" ]]; then
-    config_file="$user_config"
-  else
-    local home_config="$HOME/.config/claude-evolve/config.yaml"
-    if [[ -f "$home_config" ]]; then
-      config_file="$home_config"
-    else
-      config_file="evolution/config.yaml"
-    fi
+# Load configuration from a YAML file and update variables
+_load_yaml_config() {
+  local config_file="$1"
+  if [[ ! -f "$config_file" ]]; then
+    return 0 # File does not exist, nothing to load
   fi
-  
+
+  echo "[DEBUG] Loading configuration from: $config_file" >&2
+
+  local in_ideation_section=false
+  local in_parallel_section=false
+  local in_llm_cli_section=false
+  local llm_cli_subsection=""
+
+  while IFS='' read -r line; do
+    [[ $line =~ ^[[:space:]]*# ]] || [[ -z $line ]] && continue
+
+    if [[ ! $line =~ ^([^:]+):(.*)$ ]]; then
+      continue
+    fi
+    local key="${BASH_REMATCH[1]}"
+    local value="${BASH_REMATCH[2]}"
+
+    local is_indented=false
+    [[ $key =~ ^[[:space:]]+ ]] && is_indented=true
+
+    key=$(echo "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    value=$(echo "$value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+    if [[ "${DEBUG_CONFIG:-}" == "true" ]]; then
+      echo "[CONFIG DEBUG] Before comment removal: key='$key' value='$value'" >&2
+    fi
+
+    value=$(echo "$value" | sed 's/[[:space:]]*#.*$//')
+    value=$(echo "$value" | sed 's/^"//;s/"$//')
+
+    if [[ $key == "ideation_strategies" ]]; then
+      in_ideation_section=true
+      in_parallel_section=false
+      in_llm_cli_section=false
+      continue
+    elif [[ $key == "parallel" ]]; then
+      in_parallel_section=true
+      in_ideation_section=false
+      in_llm_cli_section=false
+      continue
+    elif [[ $key == "llm_cli" ]]; then
+      in_llm_cli_section=true
+      in_ideation_section=false
+      in_parallel_section=false
+      llm_cli_subsection=""
+      continue
+    elif [[ $is_indented == false ]] && [[ $in_ideation_section == true || $in_parallel_section == true || $in_llm_cli_section == true ]]; then
+      in_ideation_section=false
+      in_parallel_section=false
+      in_llm_cli_section=false
+      llm_cli_subsection=""
+    fi
+
+    if [[ $in_ideation_section == true ]]; then
+      case $key in
+        total_ideas) TOTAL_IDEAS="$value" ;;
+        novel_exploration) NOVEL_EXPLORATION="$value" ;;
+        hill_climbing) HILL_CLIMBING="$value" ;;
+        structural_mutation) STRUCTURAL_MUTATION="$value" ;;
+        crossover_hybrid) CROSSOVER_HYBRID="$value" ;;
+        num_elites) NUM_ELITES="$value" ;;
+        num_revolution) NUM_REVOLUTION="$value" ;;
+      esac
+    elif [[ $in_parallel_section == true ]]; then
+      case $key in
+        enabled) PARALLEL_ENABLED="$value" ;;
+        max_workers) MAX_WORKERS="$value" ;;
+        lock_timeout) LOCK_TIMEOUT="$value" ;;
+      esac
+    elif [[ $in_llm_cli_section == true ]]; then
+      if [[ $key == "run" || $key == "ideate" ]]; then
+        case $key in
+          run) LLM_RUN="$value" ;;
+          ideate) LLM_IDEATE="$value" ;;
+        esac
+      else
+        value=$(echo "$value" | sed "s/^'//;s/'$//")
+        local var_key=$(echo "$key" | sed 's/-/_/g')
+        if [[ "${DEBUG_CONFIG:-}" == "true" ]]; then
+          echo "[CONFIG DEBUG] Setting LLM_CLI_${var_key} = '$value'" >&2
+        fi
+        eval "LLM_CLI_${var_key}=\"$value\""
+      fi
+    else
+      case $key in
+        algorithm_file) ALGORITHM_FILE="$value" ;;
+        evaluator_file) EVALUATOR_FILE="$value" ;;
+        brief_file) BRIEF_FILE="$value" ;;
+        evolution_csv) EVOLUTION_CSV="$value" ;;
+        output_dir) OUTPUT_DIR="$value" ;;
+        parent_selection) PARENT_SELECTION="$value" ;;
+        python_cmd) PYTHON_CMD="$value" ;;
+        auto_ideate) AUTO_IDEATE="$value" ;;
+        max_retries) MAX_RETRIES="$value" ;;
+        memory_limit_mb) MEMORY_LIMIT_MB="$value" ;;
+        evolution_dir):
+          echo "[WARN] evolution_dir in config is ignored - automatically inferred from config file location" >&2
+          ;;
+      esac
+    fi
+  done < "$config_file"
+  # Keep track of the last config file loaded to infer evolution_dir
+  LAST_CONFIG_FILE_LOADED="$config_file"
+}
+
+load_config() {
+  echo "[DEBUG] $1 at start of load_config: '$1'" >&2
+  echo "[DEBUG] DEFAULT_EVOLUTION_DIR: $DEFAULT_EVOLUTION_DIR" >&2
   # Set defaults first
-  EVOLUTION_DIR="$DEFAULT_EVOLUTION_DIR"
+  EVOLUTION_DIR="$DEFAULT_EVOLUTION_DIR" # Initialize with default
   ALGORITHM_FILE="$DEFAULT_ALGORITHM_FILE"
   EVALUATOR_FILE="$DEFAULT_EVALUATOR_FILE"
   BRIEF_FILE="$DEFAULT_BRIEF_FILE"
@@ -85,8 +182,22 @@ load_config() {
   OUTPUT_DIR="$DEFAULT_OUTPUT_DIR"
   PARENT_SELECTION="$DEFAULT_PARENT_SELECTION"
   PYTHON_CMD="$DEFAULT_PYTHON_CMD"
-  
-  # Set ideation strategy defaults
+
+  # Determine EVOLUTION_DIR based on specified logic, overriding default if found
+  if [[ -n "$CLAUDE_EVOLVE_WORKING_DIR" ]]; then
+    echo "[DEBUG] EVOLUTION_DIR set by CLAUDE_EVOLVE_WORKING_DIR: $CLAUDE_EVOLVE_WORKING_DIR" >&2
+    EVOLUTION_DIR="$CLAUDE_EVOLVE_WORKING_DIR"
+  elif [[ -f "evolution/evolution.csv" ]]; then
+    echo "[DEBUG] EVOLUTION_DIR set by evolution/evolution.csv: evolution" >&2
+    EVOLUTION_DIR="evolution"
+  elif [[ -f "./evolution.csv" ]]; then
+    echo "[DEBUG] EVOLUTION_DIR set by ./evolution.csv: ." >&2
+    EVOLUTION_DIR="."
+  else
+    echo "[DEBUG] EVOLUTION_DIR defaulting to: $DEFAULT_EVOLUTION_DIR" >&2
+  fi
+  echo "[DEBUG] EVOLUTION_DIR after initial determination: $EVOLUTION_DIR" >&2
+
   TOTAL_IDEAS="$DEFAULT_TOTAL_IDEAS"
   NOVEL_EXPLORATION="$DEFAULT_NOVEL_EXPLORATION"
   HILL_CLIMBING="$DEFAULT_HILL_CLIMBING"
@@ -95,23 +206,14 @@ load_config() {
   NUM_ELITES="$DEFAULT_NUM_ELITES"
   NUM_REVOLUTION="$DEFAULT_NUM_REVOLUTION"
   
-  # Set parallel execution defaults
   PARALLEL_ENABLED="$DEFAULT_PARALLEL_ENABLED"
   MAX_WORKERS="$DEFAULT_MAX_WORKERS"
   LOCK_TIMEOUT="$DEFAULT_LOCK_TIMEOUT"
   
-  # Set auto ideation default
   AUTO_IDEATE="$DEFAULT_AUTO_IDEATE"
-  
-  # Set retry default
   MAX_RETRIES="$DEFAULT_MAX_RETRIES"
-  
-  # Set memory limit default
   MEMORY_LIMIT_MB="$DEFAULT_MEMORY_LIMIT_MB"
   
-  # Set LLM CLI defaults (compatibility for older bash)
-  # Initialize associative array for LLM commands
-  # Use simpler approach for compatibility
   LLM_CLI_gpt5high='codex exec --profile gpt5high --dangerously-bypass-approvals-and-sandbox "{{PROMPT}}"'
   LLM_CLI_o3high='codex exec --profile o3high --dangerously-bypass-approvals-and-sandbox "{{PROMPT}}"'
   LLM_CLI_codex='codex exec --dangerously-bypass-approvals-and-sandbox "{{PROMPT}}"'
@@ -127,145 +229,21 @@ load_config() {
   LLM_CLI_deepseek='opencode -m openrouter/deepseek/deepseek-v3.1-terminus run "{{PROMPT}}"'
   LLM_RUN="$DEFAULT_LLM_RUN"
   LLM_IDEATE="$DEFAULT_LLM_IDEATE"
-  
-  # Load config if found
-  if [[ -f "$config_file" ]]; then
-    echo "[DEBUG] Loading configuration from: $config_file" >&2
-    # Simple YAML parsing for key: value pairs and nested structures
-    local in_ideation_section=false
-    local in_parallel_section=false
-    local in_llm_cli_section=false
-    local llm_cli_subsection=""
-    while IFS='' read -r line; do
-      # Skip comments and empty lines
-      [[ $line =~ ^[[:space:]]*# ]] || [[ -z $line ]] && continue
-      
-      # Parse key:value from line
-      if [[ ! $line =~ ^([^:]+):(.*)$ ]]; then
-        continue
-      fi
-      key="${BASH_REMATCH[1]}"
-      value="${BASH_REMATCH[2]}"
-      
-      # Check if key is indented (for nested sections)
-      local is_indented=false
-      [[ $key =~ ^[[:space:]]+ ]] && is_indented=true
-      
-      
-      # Remove leading/trailing whitespace
-      key=$(echo "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-      value=$(echo "$value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-      
-      # Debug before comment removal
-      if [[ "${DEBUG_CONFIG:-}" == "true" ]]; then
-        echo "[CONFIG DEBUG] Before comment removal: key='$key' value='$value'" >&2
-      fi
-      
-      # Remove inline comments from value
-      value=$(echo "$value" | sed 's/[[:space:]]*#.*$//')
-      
-      # Remove quotes from value
-      value=$(echo "$value" | sed 's/^"//;s/"$//')
-      
-      # Handle nested sections
-      if [[ $key == "ideation_strategies" ]]; then
-        in_ideation_section=true
-        in_parallel_section=false
-        in_llm_cli_section=false
-        continue
-      elif [[ $key == "parallel" ]]; then
-        in_parallel_section=true
-        in_ideation_section=false
-        in_llm_cli_section=false
-        continue
-      elif [[ $key == "llm_cli" ]]; then
-        in_llm_cli_section=true
-        in_ideation_section=false
-        in_parallel_section=false
-        llm_cli_subsection=""
-        continue
-      elif [[ $is_indented == false ]] && [[ $in_ideation_section == true || $in_parallel_section == true || $in_llm_cli_section == true ]]; then
-        # Non-indented key found while in a section, exit nested sections
-        in_ideation_section=false
-        in_parallel_section=false
-        in_llm_cli_section=false
-        llm_cli_subsection=""
-      fi
-      
-      if [[ $in_ideation_section == true ]]; then
-        # Handle indented keys in ideation_strategies
-        case $key in
-          total_ideas) TOTAL_IDEAS="$value" ;;
-          novel_exploration) NOVEL_EXPLORATION="$value" ;;
-          hill_climbing) HILL_CLIMBING="$value" ;;
-          structural_mutation) STRUCTURAL_MUTATION="$value" ;;
-          crossover_hybrid) CROSSOVER_HYBRID="$value" ;;
-          num_elites) NUM_ELITES="$value" ;;
-          num_revolution) NUM_REVOLUTION="$value" ;;
-        esac
-      elif [[ $in_parallel_section == true ]]; then
-        # Handle indented keys in parallel section
-        case $key in
-          enabled) PARALLEL_ENABLED="$value" ;;
-          max_workers) MAX_WORKERS="$value" ;;
-          lock_timeout) LOCK_TIMEOUT="$value" ;;
-        esac
-      elif [[ $in_llm_cli_section == true ]]; then
-        # Handle indented keys in llm_cli section
-        # Check if this is a model definition (o3, codex, gemini, etc.) or a command list (run, ideate)
-        if [[ $key == "run" || $key == "ideate" ]]; then
-          # Command list - value is a space-separated list of models
-          case $key in
-            run) LLM_RUN="$value" ;;
-            ideate) LLM_IDEATE="$value" ;;
-          esac
-        else
-          # Model definition - key is model name, value is command template
-          # Remove single quotes from value if present
-          value=$(echo "$value" | sed "s/^'//;s/'$//")
-          # Convert dashes to underscores for bash variable names
-          var_key=$(echo "$key" | sed 's/-/_/g')
-          # Debug config loading
-          if [[ "${DEBUG_CONFIG:-}" == "true" ]]; then
-            echo "[CONFIG DEBUG] Setting LLM_CLI_${var_key} = '$value'" >&2
-          fi
-          # Use dynamic variable name for compatibility
-          eval "LLM_CLI_${var_key}=\"$value\""
-        fi
-      else
-        # Handle top-level keys
-        case $key in
-          algorithm_file) ALGORITHM_FILE="$value" ;;
-          evaluator_file) EVALUATOR_FILE="$value" ;;
-          brief_file) BRIEF_FILE="$value" ;;
-          evolution_csv) EVOLUTION_CSV="$value" ;;
-          output_dir) OUTPUT_DIR="$value" ;;
-          parent_selection) PARENT_SELECTION="$value" ;;
-          python_cmd) PYTHON_CMD="$value" ;;
-          auto_ideate) AUTO_IDEATE="$value" ;;
-          max_retries) MAX_RETRIES="$value" ;;
-          memory_limit_mb) MEMORY_LIMIT_MB="$value" ;;
-          evolution_dir) 
-            echo "[WARN] evolution_dir in config is ignored - automatically inferred from config file location" >&2
-            ;;
-        esac
-      fi
-    done < "$config_file"
-  fi
 
-  # If config file is in a different directory, use that as the evolution dir
-  if [[ "$config_file" != "evolution/config.yaml" ]]; then
-    # Extract directory from config file path
-    local config_dir=$(dirname "$config_file")
-    # Use the config directory as evolution directory (including "." for current dir)
-    if [[ "$config_dir" != "" ]]; then
-      EVOLUTION_DIR="$config_dir"
-      echo "[DEBUG] Using evolution directory from config path: $EVOLUTION_DIR" >&2
-    fi
-  fi
+  # Determine local config file path relative to EVOLUTION_DIR
+  local local_config_file="$EVOLUTION_DIR/config.yaml"
+
+  # Load local config
+  _load_yaml_config "$local_config_file"
+
+  # Load global config (overrides local config)
+  local global_config_file="$HOME/.config/claude-evolve/config.yaml"
+  _load_yaml_config "$global_config_file"
   
-  # Create full paths - ALL paths are relative to evolution_dir
-  # Make evolution_dir absolute if it's relative
+  echo "[DEBUG] EVOLUTION_DIR before FULL_EVOLUTION_DIR calculation: $EVOLUTION_DIR" >&2
+  
+  # Create full paths - ALL paths are relative to EVOLUTION_DIR
+  # Make EVOLUTION_DIR absolute if it\'s relative
   if [[ "$EVOLUTION_DIR" = /* ]]; then
     FULL_EVOLUTION_DIR="$EVOLUTION_DIR"
   else
@@ -282,6 +260,7 @@ load_config() {
   else
     FULL_OUTPUT_DIR="$FULL_EVOLUTION_DIR"
   fi
+  echo "[DEBUG] FULL_EVOLUTION_DIR at end of load_config: $FULL_EVOLUTION_DIR" >&2
 }
 
 # Validate configuration
