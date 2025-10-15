@@ -517,7 +517,10 @@ except Exception as e:
 # Don't reset running candidates on startup - they might be legitimately being processed by another worker
 
 # Main worker loop
-echo "[WORKER-$$] Worker started"
+echo "[WORKER-$$] Worker started (will exit after $WORKER_MAX_CANDIDATES candidates)"
+
+# Track candidates processed for self-termination
+candidates_processed=0
 
 while true; do
   # Debug: Show current status of all candidates
@@ -608,6 +611,15 @@ with EvolutionCSV('$FULL_CSV_PATH') as csv:
   
   # Clear current candidate
   CURRENT_CANDIDATE_ID=""
+  
+  # Increment counter and check for self-termination
+  candidates_processed=$((candidates_processed + 1))
+  echo "[WORKER-$$] Processed $candidates_processed/$WORKER_MAX_CANDIDATES candidates"
+  
+  if [[ $candidates_processed -ge $WORKER_MAX_CANDIDATES ]]; then
+    echo "[WORKER-$$] Reached maximum candidates ($WORKER_MAX_CANDIDATES), exiting for refresh"
+    break
+  fi
 done
 
 echo "[WORKER-$$] No more pending candidates, worker exiting"

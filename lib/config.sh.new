@@ -53,14 +53,11 @@ DEFAULT_MAX_RETRIES=3
 # Set to reasonable limit for ML workloads - about half of available system RAM
 DEFAULT_MEMORY_LIMIT_MB=12288
 
-# Default worker refresh settings
-# Workers will exit after processing this many candidates to pick up library updates
-DEFAULT_WORKER_MAX_CANDIDATES=3
-
-# Default LLM CLI configuration
-DEFAULT_LLM_RUN="glm-zai glm-zai glm-zai glm-zai glm-zai codex-oss-local gemini-flash"
+# Default LLM CLI configuration - use simple variables instead of arrays
+# Run: 100% local with qwen3 via Codex+Ollama (more reliable than aider)
+DEFAULT_LLM_RUN="codex-qwen3 codex-oss gemini-flash"
 # Ideate: Commercial models for idea generation + local fallback
-DEFAULT_LLM_IDEATE="gemini-pro sonnet-think gpt5high glm-openrouter grok-4-openrouter deepseek-openrouter glm-zai codex-oss-local"
+DEFAULT_LLM_IDEATE="gemini sonnet-think gpt5high glm grok-4 codex-qwen3 codex-oss"
 
 # Load configuration from a YAML file and update variables
 _load_yaml_config() {
@@ -163,7 +160,6 @@ _load_yaml_config() {
         auto_ideate) AUTO_IDEATE="$value" ;;
         max_retries) MAX_RETRIES="$value" ;;
         memory_limit_mb) MEMORY_LIMIT_MB="$value" ;;
-        worker_max_candidates) WORKER_MAX_CANDIDATES="$value" ;;
         evolution_dir):
           echo "[WARN] evolution_dir in config is ignored - automatically inferred from config file location" >&2
           ;;
@@ -217,9 +213,21 @@ load_config() {
   AUTO_IDEATE="$DEFAULT_AUTO_IDEATE"
   MAX_RETRIES="$DEFAULT_MAX_RETRIES"
   MEMORY_LIMIT_MB="$DEFAULT_MEMORY_LIMIT_MB"
-  WORKER_MAX_CANDIDATES="$DEFAULT_WORKER_MAX_CANDIDATES"
   
-  LLM_RUN="$DEFAULT_LLM_RUN"
+  LLM_CLI_gpt5high='codex exec --profile gpt5high --dangerously-bypass-approvals-and-sandbox "{{PROMPT}}"'
+  LLM_CLI_o3high='codex exec --profile o3high --dangerously-bypass-approvals-and-sandbox "{{PROMPT}}"'
+  LLM_CLI_codex='codex exec --dangerously-bypass-approvals-and-sandbox "{{PROMPT}}"'
+  LLM_CLI_gemini='gemini -y -p "{{PROMPT}}"'
+  LLM_CLI_gemini_flash='gemini -y -p "{{PROMPT}}" --model gemini-2.5-flash'
+  LLM_CLI_opus='claude --dangerously-skip-permissions --mcp-config "" --model opus -p "{{PROMPT}}"'
+  LLM_CLI_opus_think='claude --dangerously-skip-permissions --mcp-config "" --model opus -p "ultrathink\n\n{{PROMPT}}"'
+  LLM_CLI_sonnet='claude --dangerously-skip-permissions --mcp-config "" --model sonnet -p "{{PROMPT}}"'
+  LLM_CLI_sonnet_think='claude --dangerously-skip-permissions --mcp-config "" --model sonnet -p "ultrathink\n\n{{PROMPT}}"'
+  LLM_CLI_cursor_sonnet='cursor-agent sonnet -p "{{PROMPT}}"'
+  LLM_CLI_cursor_opus='cursor-agent opus -p "{{PROMPT}}"'
+  LLM_CLI_glm='opencode -m openrouter/z-ai/glm-4.6 run "{{PROMPT}}"'
+  LLM_CLI_deepseek='opencode -m openrouter/deepseek/deepseek-v3.1-terminus run "{{PROMPT}}"'
+  LLM_CLI_ollama-cloud-gpt-oss='codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss --model gpt-oss:20b-cloud "{{PROMPT}}"'  LLM_CLI_ollama-cloud-kimi-k2='codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss --model kimi-k2:1t-cloud "{{PROMPT}}"'  LLM_RUN="$DEFAULT_LLM_RUN"
   LLM_IDEATE="$DEFAULT_LLM_IDEATE"
 
   # Determine local config file path relative to EVOLUTION_DIR
@@ -313,7 +321,6 @@ show_config() {
   echo "  Auto ideate: $AUTO_IDEATE"
   echo "  Max retries: $MAX_RETRIES"
   echo "  Memory limit: ${MEMORY_LIMIT_MB}MB"
-  echo "  Worker max candidates: $WORKER_MAX_CANDIDATES"
   echo "  LLM configuration:"
   # Show LLM configurations using dynamic variable names
   for model in gpt5high o3high codex gemini opus opus_think sonnet sonnet_think cursor_sonnet cursor_opus glm deepseek; do

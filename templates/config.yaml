@@ -53,6 +53,13 @@ max_retries: 3
 # Recommendation: Set to ~50-75% of available system RAM
 memory_limit_mb: 12288
 
+# Worker refresh configuration
+# Workers will automatically exit after processing this many candidates
+# This allows them to pick up library updates without manual restarts
+# Lower values = more frequent refreshes, higher values = less overhead
+# Recommended: 1-5 for development, 10-20 for production
+worker_max_candidates: 3
+
 # Parallel execution configuration
 parallel:
   # Enable parallel execution of evolution candidates
