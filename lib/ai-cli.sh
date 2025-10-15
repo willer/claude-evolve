@@ -45,6 +45,11 @@ $prompt"
       ai_output=$(timeout 600 claude --dangerously-skip-permissions --mcp-config '' --model opus -p "$think_prompt" 2>&1)
       local ai_exit_code=$?
       ;;
+    haiku)
+      local ai_output
+      ai_output=$(timeout 300 claude --dangerously-skip-permissions --mcp-config '' --model haiku -p "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
     gpt5high)
       local ai_output
       ai_output=$(timeout 600 codex exec -m gpt-5 -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)

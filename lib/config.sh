@@ -58,7 +58,7 @@ DEFAULT_MEMORY_LIMIT_MB=12288
 DEFAULT_WORKER_MAX_CANDIDATES=3
 
 # Default LLM CLI configuration
-DEFAULT_LLM_RUN="glm-zai glm-zai glm-zai glm-zai glm-zai codex-oss-local gemini-flash"
+DEFAULT_LLM_RUN="glm-zai glm-zai glm-zai glm-zai glm-zai codex-oss-local gemini-flash haiku"
 # Ideate: Commercial models for idea generation + local fallback
 DEFAULT_LLM_IDEATE="gemini-pro sonnet-think gpt5high glm-openrouter grok-4-openrouter deepseek-openrouter glm-zai codex-oss-local"
 
