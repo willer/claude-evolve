@@ -66,7 +66,6 @@ _load_yaml_config() {
     return 0 # File does not exist, nothing to load
   fi
 
-  echo "[DEBUG] Loading configuration from: $config_file" >&2
 
   local in_ideation_section=false
   local in_parallel_section=false
@@ -171,8 +170,6 @@ _load_yaml_config() {
 }
 
 load_config() {
-  echo "[DEBUG] $1 at start of load_config: '$1'" >&2
-  echo "[DEBUG] DEFAULT_EVOLUTION_DIR: $DEFAULT_EVOLUTION_DIR" >&2
   # Set defaults first
   EVOLUTION_DIR="$DEFAULT_EVOLUTION_DIR" # Initialize with default
   ALGORITHM_FILE="$DEFAULT_ALGORITHM_FILE"
@@ -185,18 +182,13 @@ load_config() {
 
   # Determine EVOLUTION_DIR based on specified logic, overriding default if found
   if [[ -n "$CLAUDE_EVOLVE_WORKING_DIR" ]]; then
-    echo "[DEBUG] EVOLUTION_DIR set by CLAUDE_EVOLVE_WORKING_DIR: $CLAUDE_EVOLVE_WORKING_DIR" >&2
     EVOLUTION_DIR="$CLAUDE_EVOLVE_WORKING_DIR"
   elif [[ -f "evolution/evolution.csv" ]]; then
-    echo "[DEBUG] EVOLUTION_DIR set by evolution/evolution.csv: evolution" >&2
     EVOLUTION_DIR="evolution"
   elif [[ -f "./evolution.csv" ]]; then
-    echo "[DEBUG] EVOLUTION_DIR set by ./evolution.csv: ." >&2
     EVOLUTION_DIR="."
   else
-    echo "[DEBUG] EVOLUTION_DIR defaulting to: $DEFAULT_EVOLUTION_DIR" >&2
   fi
-  echo "[DEBUG] EVOLUTION_DIR after initial determination: $EVOLUTION_DIR" >&2
 
   TOTAL_IDEAS="$DEFAULT_TOTAL_IDEAS"
   NOVEL_EXPLORATION="$DEFAULT_NOVEL_EXPLORATION"
@@ -240,7 +232,6 @@ load_config() {
   local global_config_file="$HOME/.config/claude-evolve/config.yaml"
   _load_yaml_config "$global_config_file"
   
-  echo "[DEBUG] EVOLUTION_DIR before FULL_EVOLUTION_DIR calculation: $EVOLUTION_DIR" >&2
   
   # Create full paths - ALL paths are relative to EVOLUTION_DIR
   # Make EVOLUTION_DIR absolute if it\'s relative
@@ -260,7 +251,6 @@ load_config() {
   else
     FULL_OUTPUT_DIR="$FULL_EVOLUTION_DIR"
   fi
-  echo "[DEBUG] FULL_EVOLUTION_DIR at end of load_config: $FULL_EVOLUTION_DIR" >&2
 }
 
 # Validate configuration

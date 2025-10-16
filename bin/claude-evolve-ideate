@@ -103,7 +103,6 @@ call_ai_for_ideation() {
     original_csv_count=0
   fi
   
-  echo "[DEBUG] Original CSV has $original_csv_count data rows" >&2
   
   # Get models for ideation
   local model_list
@@ -132,17 +131,25 @@ call_ai_for_ideation() {
   # Try each model until CSV changes
   for model in "${ordered_models[@]}"; do
     echo "[AI] Attempting ideate with $model" >&2
-    
+
+    # Restore temp CSV before each attempt (in case previous model corrupted it)
+    # This ensures each model starts with the original data
+    if [[ -f "$FULL_CSV_PATH" ]]; then
+      cp "$FULL_CSV_PATH" "$temp_csv_file"
+      # Recapture original count in case it changed
+      original_csv_count=$(grep -v '^[[:space:]]*$' "$temp_csv_file" | tail -n +2 | wc -l)
+    fi
+
     # Call the model directly
     local ai_output
     ai_output=$(call_ai_model_configured "$model" "$prompt")
     local ai_exit_code=$?
-    
+
     # Check if the file was modified - this is ALL that matters
     if [[ -f "$temp_csv_file" ]]; then
       local new_csv_count
       new_csv_count=$(grep -v '^[[:space:]]*$' "$temp_csv_file" | tail -n +2 | wc -l)
-      
+
       if [[ $new_csv_count -gt $original_csv_count ]]; then
         echo "[INFO] CSV was modified by $model ($new_csv_count vs $original_csv_count rows) - validating format..." >&2
         
@@ -162,7 +169,6 @@ call_ai_for_ideation() {
         return 0
       else
         echo "[INFO] CSV unchanged after $model (exit code: $ai_exit_code)" >&2
-        echo "[DEBUG] Original count: $original_csv_count, New count: $new_csv_count" >&2
         # Continue to next model
       fi
     else
@@ -343,14 +349,10 @@ validate_direct_csv_modification() {
   local new_count
   new_count=$(grep -v '^[[:space:]]*$' "$temp_csv" | tail -n +2 | wc -l)
   
-  echo "[DEBUG] Current main CSV data rows: $current_original_count" >&2
-  echo "[DEBUG] Modified temp CSV data rows: $new_count" >&2
-  echo "[DEBUG] Expected to add: $expected_count ideas" >&2
   
   # Check if AI overwrote the file instead of appending
   if [[ $new_count -lt $current_original_count ]]; then
     echo "[ERROR] AI overwrote the CSV file instead of appending ($new_count < $current_original_count)" >&2
-    echo "[DEBUG] First 10 lines of CSV after AI attempt:" >&2
     head -10 "$temp_csv" >&2
     return 1
   fi
@@ -358,7 +360,6 @@ validate_direct_csv_modification() {
   # Check if no changes were made
   if [[ $new_count -eq $current_original_count ]]; then
     echo "[ERROR] CSV file wasn't modified - same number of data rows ($new_count = $current_original_count)" >&2
-    echo "[DEBUG] First 10 lines of CSV after AI attempt:" >&2
     head -10 "$temp_csv" >&2
     return 1
   fi
@@ -399,7 +400,6 @@ validate_direct_csv_modification() {
     # Update each new row with the model that generated it
     for id in $new_ids; do
       if [[ -n "$id" && "$id" != "id" ]]; then
-        echo "[DEBUG] Updating $id with idea-LLM = $ai_model" >&2
         "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" field "$id" "idea-LLM" "$ai_model" || echo "[WARN] Failed to update $id" >&2
       fi
     done
@@ -422,7 +422,6 @@ validate_and_apply_csv_modification_old() {
   # Check if the response looks like an error message (but not if it's just CSV data containing these words)
   if echo "$modified_csv" | head -1 | grep -q "id,basedOnId,description,performance,status"; then
     # This looks like a CSV file, not an error message
-    echo "[DEBUG] AI returned what appears to be a CSV file" >&2
   elif echo "$modified_csv" | grep -qi "error\|failed\|limit\|exceeded\|sorry\|cannot\|unable"; then
     echo "[ERROR] AI failed to modify CSV and returned an error message:" >&2
     echo "$modified_csv" | head -200 >&2
@@ -443,12 +442,10 @@ validate_and_apply_csv_modification_old() {
   if [[ -n "$csv_start_line" ]]; then
     # Extract CSV starting from the header line
     modified_csv=$(echo "$modified_csv" | tail -n +$csv_start_line)
-    echo "[DEBUG] Found CSV header at line $csv_start_line, extracting from there" >&2
   elif ! echo "$modified_csv" | head -1 | grep -q "id,basedOnId,description,performance,status"; then
     echo "[ERROR] AI failed to return a valid CSV file. Expected CSV with header, but got:" >&2
     echo "$modified_csv" | head -c 500 >&2
     echo "" >&2
-    echo "[DEBUG] The AI was asked to output the complete modified CSV but didn't" >&2
     return 1
   fi
   
@@ -461,13 +458,9 @@ validate_and_apply_csv_modification_old() {
   local new_count
   new_count=$(wc -l < "$temp_csv")
   
-  echo "[DEBUG] Original CSV line count: $original_count" >&2
-  echo "[DEBUG] Modified CSV line count: $new_count" >&2
-  echo "[DEBUG] Expected to add: $expected_count ideas" >&2
   
   if [[ $new_count -le $original_count ]]; then
     echo "[ERROR] Modified CSV doesn't have more entries ($new_count <= $original_count)" >&2
-    echo "[DEBUG] First 10 lines of modified CSV:" >&2
     head -10 "$temp_csv" >&2
     return 1
   fi
@@ -508,7 +501,6 @@ validate_and_apply_csv_modification_old() {
     # Update each new row with the model that generated it
     for id in $new_ids; do
       if [[ -n "$id" && "$id" != "id" ]]; then
-        echo "[DEBUG] Updating $id with idea-LLM = $ai_model" >&2
         "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" field "$id" "idea-LLM" "$ai_model" || echo "[WARN] Failed to update $id" >&2
       fi
     done
@@ -532,10 +524,6 @@ process_ai_ideas_direct_old() {
   local temp_csv="$FULL_EVOLUTION_DIR/temp-csv-$$.csv"
   cp "$FULL_CSV_PATH" "$temp_csv"
   
-  echo "[DEBUG] Starting CSV modification for $count $idea_type ideas" >&2
-  echo "[DEBUG] Original CSV path: $FULL_CSV_PATH" >&2
-  echo "[DEBUG] Temp CSV path: $temp_csv" >&2
-  echo "[DEBUG] Original CSV size: $(wc -l < "$FULL_CSV_PATH") lines" >&2
   
   # Build prompt for AI to directly modify the CSV
   local csv_prompt="I need you to add exactly $count new $idea_type ideas to this CSV file.
@@ -598,12 +586,10 @@ IMPORTANT: Output the complete modified CSV file. Do not add any explanation or 
   if [[ -n "$csv_start_line" ]]; then
     # Extract CSV starting from the header line
     modified_csv=$(echo "$modified_csv" | tail -n +$csv_start_line)
-    echo "[DEBUG] Found CSV header at line $csv_start_line, extracting from there" >&2
   elif ! echo "$modified_csv" | head -1 | grep -q "id,basedOnId,description,performance,status"; then
     echo "[ERROR] AI failed to return a valid CSV file. Expected CSV with header, but got:" >&2
     echo "$modified_csv" | head -c 500 >&2
     echo "" >&2
-    echo "[DEBUG] The AI was asked to output the complete modified CSV but didn't" >&2
     rm -f "$temp_csv"
     return 1
   fi
@@ -612,11 +598,8 @@ IMPORTANT: Output the complete modified CSV file. Do not add any explanation or 
   echo "$modified_csv" > "$temp_csv"
   
   # Debug: Show the AI's CSV modification attempt
-  echo "[DEBUG] AI response length: ${#modified_csv} characters" >&2
-  echo "[DEBUG] First 300 chars of AI response:" >&2
   echo "$modified_csv" | head -c 300 >&2
   echo "" >&2
-  echo "[DEBUG] Last 300 chars of AI response:" >&2
   echo "$modified_csv" | tail -c 300 >&2
   echo "" >&2
   
@@ -626,15 +609,10 @@ IMPORTANT: Output the complete modified CSV file. Do not add any explanation or 
   local new_count
   new_count=$(wc -l < "$temp_csv")
   
-  echo "[DEBUG] Original CSV line count: $original_count" >&2
-  echo "[DEBUG] Modified CSV line count: $new_count" >&2
-  echo "[DEBUG] Expected to add: $count ideas" >&2
   
   if [[ $new_count -le $original_count ]]; then
     echo "[ERROR] Modified CSV doesn't have more entries ($new_count <= $original_count)" >&2
-    echo "[DEBUG] Temp CSV contents:" >&2
     cat "$temp_csv" | head -10 >&2
-    echo "[DEBUG] Original CSV contents:" >&2
     cat "$FULL_CSV_PATH" | head -10 >&2
     rm -f "$temp_csv"
     return 1
@@ -901,7 +879,6 @@ generate_novel_ideas_direct() {
   
   echo "[INFO] Generating $count novel exploration ideas..."
   local data_rows=$(grep -v '^[[:space:]]*$' "$FULL_CSV_PATH" | tail -n +2 | wc -l)
-  echo "[DEBUG] Original CSV has $data_rows data rows" >&2
   
   # Use relative paths and change to evolution directory so AI can access files
   local temp_csv_basename=$(basename "$temp_csv")
@@ -916,8 +893,12 @@ Current evolution context:
 - Algorithm: algorithm.py (base algorithm)
 - Brief: $(head -5 "$FULL_BRIEF_PATH" 2>/dev/null | head -c 500 || echo "No brief file found")
 
+IMPORTANT: DO NOT read algorithm.py or any evolution_*.py files. Focus on creative ideation based on the brief and CSV context only. Reading code files wastes tokens and time.
+
 CRITICAL INSTRUCTIONS:
 1. Use the Read tool to examine the current CSV file
+   IMPORTANT: If the CSV file is large (>200 lines), read it in chunks using the offset and limit parameters to avoid context overload
+   Example: Read(file_path='temp-csv-123.csv', offset=0, limit=100) then Read(offset=100, limit=100), etc.
 2. DO NOT DELETE OR REPLACE ANY EXISTING ROWS - YOU MUST PRESERVE ALL EXISTING DATA
 3. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
 4. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001"
@@ -949,14 +930,8 @@ CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CS
 CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). Only modify the file directly."
 
   # Debug prompt size and context
-  echo "[DEBUG] Novel ideas prompt length: ${#prompt} characters" >&2
-  echo "[DEBUG] Working dir: $(pwd)" >&2
-  echo "[DEBUG] Evolution dir: $FULL_EVOLUTION_DIR" >&2
-  echo "[DEBUG] Temp CSV: $temp_csv" >&2
   if [[ -f "$temp_csv" ]]; then
-    echo "[DEBUG] Temp CSV exists, size: $(wc -l < "$temp_csv") lines" >&2
   else
-    echo "[DEBUG] Temp CSV does not exist yet" >&2
   fi
 
   # Change to evolution directory so AI can access files
@@ -964,8 +939,6 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
   cd "$FULL_EVOLUTION_DIR"
   
   # Debug: Show files in evolution directory
-  echo "[DEBUG] Current directory: $(pwd)" >&2
-  echo "[DEBUG] Temp CSV exists: $(ls -la "$temp_csv_basename" 2>&1)" >&2
   
   # Get AI to directly edit the CSV file
   local ai_response
@@ -973,10 +946,7 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
   # Temporarily show stderr for debugging
   if ! ai_response=$(call_ai_for_ideation "$prompt" "$CURRENT_GENERATION" "$count" "$temp_csv_basename"); then
     echo "[ERROR] All AI models failed to generate novel ideas" >&2
-    echo "[DEBUG] Stderr output from AI calls:" >&2
     cat "$stderr_file" >&2
-    echo "[DEBUG] Temp CSV location: $temp_csv" >&2
-    echo "[DEBUG] Working directory: $(pwd)" >&2
     cd "$original_pwd"
     rm -f "$temp_csv" "$stderr_file"
     return 1
@@ -986,7 +956,6 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
   # Restore working directory
   cd "$original_pwd"
   
-  echo "[DEBUG] AI response: $ai_response" >&2
   
   # Validate that the CSV file was actually modified
   if ! validate_direct_csv_modification "$temp_csv" "$count" "novel" "$ai_response"; then
@@ -1009,7 +978,6 @@ generate_hill_climbing_direct() {
   
   echo "[INFO] Generating $count hill climbing ideas..."
   local data_rows=$(grep -v '^[[:space:]]*$' "$FULL_CSV_PATH" | tail -n +2 | wc -l)
-  echo "[DEBUG] Original CSV has $data_rows data rows" >&2
   
   # Get existing Python files for this generation to avoid ID collisions
   local existing_py_files=$(get_existing_py_files_for_generation "$CURRENT_GENERATION")
@@ -1028,11 +996,24 @@ IMPORTANT: You MUST use one of these exact parent IDs: $valid_parent_ids
 Successful algorithms to tune:
 $top_performers
 
-OPTIONAL: If needed for context, you may read parent algorithm source files at: evolution_<PARENT_ID>.py
-However, you can often generate good parameter tuning ideas just from the descriptions and performance scores above.
+IMPORTANT: Generate parameter tuning ideas based primarily on the descriptions and scores above.
+
+ONLY read parent source files (evolution_<PARENT_ID>.py) if:
+- The description is too vague to identify specific parameters
+- You need to verify actual parameter names/values
+- Reading is absolutely necessary for meaningful tuning
+
+If you must read source files:
+- Read in small chunks (offset/limit) to minimize token usage
+- Focus only on finding parameter definitions at the top of the file
+- Do NOT read the entire implementation
+
+Most of the time, you can infer parameters from descriptions like "RSI with threshold 30" or "MA period 20".
 
 CRITICAL INSTRUCTIONS:
 1. Use the Read tool to examine the current CSV file
+   IMPORTANT: If the CSV file is large (>200 lines), read it in chunks using the offset and limit parameters to avoid context overload
+   Example: Read(file_path='temp-csv-123.csv', offset=0, limit=100) then Read(offset=100, limit=100), etc.
 2. DO NOT DELETE OR REPLACE ANY EXISTING ROWS - YOU MUST PRESERVE ALL EXISTING DATA
 3. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
 4. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001
@@ -1072,7 +1053,6 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
   # Restore working directory
   cd "$original_pwd"
   
-  echo "[DEBUG] AI response: $ai_response" >&2
   
   # Validate that the CSV file was actually modified
   if ! validate_direct_csv_modification "$temp_csv" "$count" "hill-climbing" "$ai_response"; then
@@ -1095,7 +1075,6 @@ generate_structural_mutation_direct() {
   
   echo "[INFO] Generating $count structural mutation ideas..."
   local data_rows=$(grep -v '^[[:space:]]*$' "$FULL_CSV_PATH" | tail -n +2 | wc -l)
-  echo "[DEBUG] Original CSV has $data_rows data rows" >&2
   
   # Get existing Python files for this generation to avoid ID collisions
   local existing_py_files=$(get_existing_py_files_for_generation "$CURRENT_GENERATION")
@@ -1114,11 +1093,16 @@ IMPORTANT: You MUST use one of these exact parent IDs: $valid_parent_ids
 Successful algorithms to modify structurally:
 $top_performers
 
-OPTIONAL: If needed for context, you may read parent algorithm source files at: evolution_<PARENT_ID>.py
-However, you can often generate good structural ideas just from the descriptions and performance scores above.
+IMPORTANT: DO NOT read evolution_*.py files. Generate structural ideas based ONLY on:
+- The algorithm descriptions above
+- The performance scores
+- Your knowledge of common algorithmic structures and patterns
+Reading code files wastes tokens and time. Focus on high-level architectural ideas based on the descriptions.
 
 CRITICAL INSTRUCTIONS:
 1. Use the Read tool to examine the current CSV file
+   IMPORTANT: If the CSV file is large (>200 lines), read it in chunks using the offset and limit parameters to avoid context overload
+   Example: Read(file_path='temp-csv-123.csv', offset=0, limit=100) then Read(offset=100, limit=100), etc.
 2. DO NOT DELETE OR REPLACE ANY EXISTING ROWS - YOU MUST PRESERVE ALL EXISTING DATA
 3. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
 4. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001
@@ -1158,7 +1142,6 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
   # Restore working directory
   cd "$original_pwd"
   
-  echo "[DEBUG] AI response: $ai_response" >&2
   
   # Validate that the CSV file was actually modified
   if ! validate_direct_csv_modification "$temp_csv" "$count" "structural" "$ai_response"; then
@@ -1181,7 +1164,6 @@ generate_crossover_direct() {
   
   echo "[INFO] Generating $count crossover hybrid ideas..."
   local data_rows=$(grep -v '^[[:space:]]*$' "$FULL_CSV_PATH" | tail -n +2 | wc -l)
-  echo "[DEBUG] Original CSV has $data_rows data rows" >&2
   
   # Get existing Python files for this generation to avoid ID collisions
   local existing_py_files=$(get_existing_py_files_for_generation "$CURRENT_GENERATION")
@@ -1200,11 +1182,16 @@ IMPORTANT: You MUST use ONLY these exact parent IDs: $valid_parent_ids
 Top performers to combine (reference at least 2 in each idea):
 $top_performers
 
-OPTIONAL: If needed for context, you may read parent algorithm source files at: evolution_<PARENT_ID>.py
-However, you can often generate good hybrid ideas just from the descriptions and performance scores above.
+IMPORTANT: DO NOT read evolution_*.py files. Generate crossover ideas based ONLY on:
+- The algorithm descriptions above (which describe their key features)
+- The performance scores
+- Your knowledge of how different algorithmic approaches can be combined
+Reading code files wastes tokens and time. Focus on combining the described features creatively.
 
 CRITICAL INSTRUCTIONS:
 1. Use the Read tool to examine the current CSV file
+   IMPORTANT: If the CSV file is large (>200 lines), read it in chunks using the offset and limit parameters to avoid context overload
+   Example: Read(file_path='temp-csv-123.csv', offset=0, limit=100) then Read(offset=100, limit=100), etc.
 2. DO NOT DELETE OR REPLACE ANY EXISTING ROWS - YOU MUST PRESERVE ALL EXISTING DATA
 3. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
 4. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001
@@ -1244,7 +1231,6 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
   # Restore working directory
   cd "$original_pwd"
   
-  echo "[DEBUG] AI response: $ai_response" >&2
   
   # Validate that the CSV file was actually modified
   if ! validate_direct_csv_modification "$temp_csv" "$count" "crossover" "$ai_response"; then
@@ -1268,7 +1254,6 @@ ideate_ai_legacy() {
   cp "$FULL_CSV_PATH" "$temp_csv"
   
   echo "[INFO] Generating $TOTAL_IDEAS ideas (legacy mode)..."
-  echo "[DEBUG] Original CSV has $(wc -l < "$FULL_CSV_PATH") lines" >&2
 
   # Get top performers for context
   local top_performers=""
@@ -1288,7 +1273,7 @@ Current evolution context:
 - Algorithm: algorithm.py (base algorithm)
 - Brief: $(head -10 "$FULL_BRIEF_PATH" 2>/dev/null | head -c 1000 || echo "No brief file found")
 
-IMPORTANT: DO NOT read all evolution files - that uses too many tokens. Just generate creative ideas based on the brief."
+IMPORTANT: DO NOT read algorithm.py or any evolution_*.py files - that uses too many tokens and is unnecessary for ideation. Just generate creative ideas based on the brief and top performers listed above. Focus your creativity on the problem space, not the implementation details."
 
   if [[ -n $top_performers ]]; then
     prompt+="
@@ -1301,6 +1286,8 @@ $top_performers"
 
 CRITICAL INSTRUCTIONS:
 1. Use the Read tool to examine the current CSV file
+   IMPORTANT: If the CSV file is large (>200 lines), read it in chunks using the offset and limit parameters to avoid context overload
+   Example: Read(file_path='temp-csv-123.csv', offset=0, limit=100) then Read(offset=100, limit=100), etc.
 2. DO NOT DELETE OR REPLACE ANY EXISTING ROWS - YOU MUST PRESERVE ALL EXISTING DATA
 3. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
 4. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001
@@ -1350,7 +1337,6 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
   # Restore working directory
   cd "$original_pwd"
   
-  echo "[DEBUG] AI response: $ai_response" >&2
   
   # Validate that the CSV file was actually modified
   if ! validate_direct_csv_modification "$temp_csv" "$TOTAL_IDEAS" "mixed" "$ai_response"; then
