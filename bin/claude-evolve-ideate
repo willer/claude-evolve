@@ -421,7 +421,7 @@ validate_and_apply_csv_modification_old() {
   
   # Check if the response looks like an error message (but not if it's just CSV data containing these words)
   if echo "$modified_csv" | head -1 | grep -q "id,basedOnId,description,performance,status"; then
-    # This looks like a CSV file, not an error message
+    : # This looks like a CSV file, not an error message - continue
   elif echo "$modified_csv" | grep -qi "error\|failed\|limit\|exceeded\|sorry\|cannot\|unable"; then
     echo "[ERROR] AI failed to modify CSV and returned an error message:" >&2
     echo "$modified_csv" | head -200 >&2
