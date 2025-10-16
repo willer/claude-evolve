@@ -409,8 +409,12 @@ try:
     from lib.evolution_csv import EvolutionCSV
     
     with EvolutionCSV(csv_file) as csv_ops:
+        # Auto-fix any corrupted status fields before counting
+        fixed = csv_ops.cleanup_corrupted_status_fields()
+        if fixed > 0:
+            print(f'[INFO] Auto-fixed {fixed} corrupted status field(s)', file=sys.stderr)
         pending = csv_ops.count_pending_candidates()
-    
+
     print(f'[INFO] CSV loaded: {len(rows)-1} total candidates, {pending} pending')
     
 except csv.Error as e:

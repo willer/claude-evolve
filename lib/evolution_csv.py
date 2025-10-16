@@ -119,17 +119,26 @@ class EvolutionCSV:
             return True  # Incomplete row is pending
             
         # Check status field (5th column, index 4)
-        status = row[4].strip().lower() if row[4] else ''
-        
+        # Clean status: remove newlines and control characters, then normalize
+        status = row[4].strip() if row[4] else ''
+        # Remove any embedded newlines or control characters (CSV corruption)
+        status = status.replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+        status = ' '.join(status.split()).lower()  # Normalize whitespace and lowercase
+
         # Only blank, missing, or "pending" mean pending
         # "running" should NOT be considered pending to avoid duplicate processing
         if not status or status == 'pending':
             return True
-            
+
+        # Handle corrupted status fields that start with "pending"
+        # e.g., "pending gen08-013" from CSV corruption
+        if status.startswith('pending '):
+            return True
+
         # Check for retry statuses
         if status.startswith('failed-retry'):
             return True
-            
+
         return False
         
     def get_pending_candidates(self) -> List[Tuple[str, str]]:
@@ -367,7 +376,44 @@ class EvolutionCSV:
             self._write_csv(new_rows)
             
         return deleted
-        
+
+    def cleanup_corrupted_status_fields(self) -> int:
+        """
+        Detect and fix corrupted status fields (e.g., with embedded newlines).
+        Returns the number of corrupted fields fixed.
+        """
+        rows = self._read_csv()
+        if not rows:
+            return 0
+
+        fixed_count = 0
+        has_header = rows and rows[0] and rows[0][0].lower() == 'id'
+        start_idx = 1 if has_header else 0
+
+        for i in range(start_idx, len(rows)):
+            row = rows[i]
+            if len(row) >= 5 and row[4]:
+                original_status = row[4]
+                # Apply the same cleaning logic as is_pending_candidate
+                cleaned_status = original_status.strip()
+                cleaned_status = cleaned_status.replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+                cleaned_status = ' '.join(cleaned_status.split())
+
+                # If status starts with a known status but has garbage after it, fix it
+                for valid_status in ['pending', 'running', 'complete', 'failed', 'skipped']:
+                    if cleaned_status.lower().startswith(valid_status + ' '):
+                        # Corrupted status found - extract just the valid part
+                        row[4] = valid_status
+                        fixed_count += 1
+                        print(f"[WARN] Fixed corrupted status in row {i}: '{original_status}' -> '{valid_status}'", file=sys.stderr)
+                        break
+
+        if fixed_count > 0:
+            self._write_csv(rows)
+            print(f"[INFO] Fixed {fixed_count} corrupted status field(s)", file=sys.stderr)
+
+        return fixed_count
+
     def has_pending_work(self) -> bool:
         """Check if there are any pending candidates. Used by dispatcher."""
         return self.count_pending_candidates() > 0
