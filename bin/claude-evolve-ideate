@@ -929,10 +929,7 @@ IMPORTANT: You must APPEND new rows to the existing CSV file. DO NOT replace the
 CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly.
 CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). Only modify the file directly."
 
-  # Debug prompt size and context
-  if [[ -f "$temp_csv" ]]; then
-  else
-  fi
+  # Debug prompt size and context (removed - no longer needed)
 
   # Change to evolution directory so AI can access files
   local original_pwd=$(pwd)
