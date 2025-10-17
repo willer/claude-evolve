@@ -663,17 +663,38 @@ print(stuck)
     if [[ "$AUTO_IDEATE" == "true" || "$AUTO_IDEATE" == "1" ]]; then
       echo "[DISPATCHER] Auto ideation is enabled. Checking prerequisites..."
 
-      # Check if previous generation has at least one completed item
-      if ! check_previous_generation_has_completed "$FULL_CSV_PATH"; then
-        echo "[DISPATCHER] Evolution blocked - current generation has no completed items."
-        echo "[DISPATCHER] This prevents endless ideation loops when candidates fail/stall."
+      # Check if we have enough completed work to generate meaningful ideas
+      # Note: With bottom-up processing, highest gen might be processed first and fail
+      # So we check overall completion rate, not just the highest generation
+      total_completed=$("$PYTHON_CMD" -c "
+import csv
+completed = 0
+with open('$FULL_CSV_PATH', 'r') as f:
+    reader = csv.reader(f)
+    next(reader, None)
+    for row in reader:
+        if len(row) > 4 and row[4].strip() == 'complete':
+            completed += 1
+print(completed)
+" 2>/dev/null || echo "0")
+
+      if [[ $total_completed -lt 3 ]]; then
+        echo "[DISPATCHER] Evolution blocked - insufficient completed candidates ($total_completed < 3)."
+        echo "[DISPATCHER] This prevents ideation when there's no successful work to learn from."
         echo "[DISPATCHER] Possible causes:"
-        echo "[DISPATCHER]   - All candidates failed evaluation"
-        echo "[DISPATCHER]   - Candidates stuck in 'running' or unknown status (check CSV)"
-        echo "[DISPATCHER]   - API rate limits preventing completion"
-        echo "[DISPATCHER] Manual intervention: Check evolution.csv for stuck/failed candidates"
-        echo "[DISPATCHER] After fixing issues, run 'claude-evolve run' or 'claude-evolve ideate' manually."
+        echo "[DISPATCHER]   - Early generations failing (common with bottom-up processing)"
+        echo "[DISPATCHER]   - Algorithm bugs preventing any completions"
+        echo "[DISPATCHER]   - API rate limits or infrastructure issues"
+        echo "[DISPATCHER] Recommendation: Fix evaluation issues and run 'claude-evolve run' again"
         break
+      fi
+
+      # Also check highest generation (catches endless loop case)
+      if ! check_previous_generation_has_completed "$FULL_CSV_PATH"; then
+        echo "[DISPATCHER] WARNING: Highest generation has no completed items."
+        echo "[DISPATCHER] This can happen with bottom-up processing if early gens fail."
+        echo "[DISPATCHER] Continuing since we have $total_completed total completions..."
+        # Don't break - allow ideation if we have enough overall completions
       fi
       
       echo "[DISPATCHER] Prerequisites met. Generating new ideas..."
