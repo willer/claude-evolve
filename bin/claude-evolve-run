@@ -553,17 +553,70 @@ except Exception as e:
   return $?
 }
 
+# Track loop iterations for periodic cleanup
+loop_iteration=0
+last_stuck_check=0
+
 # Main dispatch loop
 while true; do
   # Clean up finished workers
   cleanup_workers
-  
+
   # Check if API limit was reached
   if [[ "$api_limit_reached" == "true" ]]; then
     echo "[DISPATCHER] Stopping evolution run due to API usage limits" >&2
     break
   fi
-  
+
+  # Periodic cleanup of stuck candidates (every 5 iterations, ~25 seconds)
+  ((loop_iteration++))
+  if [[ $((loop_iteration - last_stuck_check)) -ge 5 ]]; then
+    last_stuck_check=$loop_iteration
+
+    # Reset stuck 'running' candidates (no active worker) and unknown statuses
+    if [[ -f "$FULL_CSV_PATH" && ${#worker_pids[@]} -eq 0 ]]; then
+      echo "[DISPATCHER] Checking for stuck candidates (no active workers)..."
+      "$PYTHON_CMD" -c "
+import csv
+import sys
+from pathlib import Path
+
+csv_file = '$FULL_CSV_PATH'
+rows = []
+
+with open(csv_file, 'r') as f:
+    rows = list(csv.reader(f))
+
+reset_count = 0
+has_header = rows and rows[0] and rows[0][0].lower() == 'id'
+start_idx = 1 if has_header else 0
+
+for i in range(start_idx, len(rows)):
+    if len(rows[i]) > 4:
+        status = rows[i][4].strip() if rows[i][4] else ''
+        candidate_id = rows[i][0] if rows[i] else ''
+
+        # Reset 'running' when no workers are active
+        if status == 'running':
+            print(f'[INFO] Resetting stuck running candidate: {candidate_id}', file=sys.stderr)
+            rows[i][4] = 'pending'
+            reset_count += 1
+        # Reset unknown statuses like 'ready'
+        elif status not in ['', 'pending', 'complete', 'failed', 'failed-ai-retry',
+                           'failed-retry1', 'failed-retry2', 'failed-retry3', 'skipped']:
+            print(f'[WARN] Resetting unknown status \"{status}\" to pending: {candidate_id}', file=sys.stderr)
+            rows[i][4] = 'pending'
+            reset_count += 1
+
+if reset_count > 0:
+    with open(csv_file + '.tmp', 'w', newline='') as f:
+        csv.writer(f).writerows(rows)
+    Path(csv_file + '.tmp').rename(csv_file)
+    print(f'[INFO] Reset {reset_count} stuck/unknown candidates to pending', file=sys.stderr)
+" || true
+    fi
+  fi
+
   # Get current status
   csv_stats=$(get_csv_stats "$FULL_CSV_PATH")
   read -r total_rows complete_count pending_count <<< "$csv_stats"
@@ -585,9 +638,14 @@ while true; do
       
       # Check if previous generation has at least one completed item
       if ! check_previous_generation_has_completed "$FULL_CSV_PATH"; then
-        echo "[DISPATCHER] Evolution complete - previous generation has no completed items."
-        echo "[DISPATCHER] This prevents endless ideation loops when API limits are hit."
-        echo "[DISPATCHER] Wait for current generation to complete, then run 'claude-evolve ideate' manually."
+        echo "[DISPATCHER] Evolution blocked - current generation has no completed items."
+        echo "[DISPATCHER] This prevents endless ideation loops when candidates fail/stall."
+        echo "[DISPATCHER] Possible causes:"
+        echo "[DISPATCHER]   - All candidates failed evaluation"
+        echo "[DISPATCHER]   - Candidates stuck in 'running' or unknown status (check CSV)"
+        echo "[DISPATCHER]   - API rate limits preventing completion"
+        echo "[DISPATCHER] Manual intervention: Check evolution.csv for stuck/failed candidates"
+        echo "[DISPATCHER] After fixing issues, run 'claude-evolve run' or 'claude-evolve ideate' manually."
         break
       fi
       
