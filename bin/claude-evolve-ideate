@@ -366,9 +366,12 @@ validate_direct_csv_modification() {
   
   local added_count=$((new_count - current_original_count))
   if [[ $added_count -ne $expected_count ]]; then
-    echo "[WARN] Expected to add $expected_count ideas but added $added_count" >&2
+    echo "[ERROR] Expected to add $expected_count ideas but only added $added_count" >&2
+    echo "[ERROR] Ideation failed - rejecting partial results to prevent endless loops" >&2
+    rm -f "$temp_csv"
+    return 1
   fi
-  
+
   # Use proper locking to safely update the CSV
   echo "[INFO] Acquiring CSV lock to apply changes..."
   
@@ -859,12 +862,14 @@ ideate_ai_strategies() {
   fi
   
   echo "[INFO] Strategy results: $strategies_succeeded/$strategies_attempted succeeded" >&2
-  
-  # Success if at least one strategy worked
-  if [[ $strategies_succeeded -gt 0 ]]; then
+
+  # REQUIRE ALL strategies to succeed - no partial results
+  # Accepting partial results leads to endless loops with 1 idea per generation
+  if [[ $strategies_succeeded -eq $strategies_attempted ]]; then
     return 0
   else
-    echo "[ERROR] All ideation strategies failed" >&2
+    echo "[ERROR] Not all ideation strategies succeeded ($strategies_succeeded/$strategies_attempted)" >&2
+    echo "[ERROR] Rejecting partial results - will retry with exponential backoff" >&2
     return 1
   fi
 }
