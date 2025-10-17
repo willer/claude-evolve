@@ -631,11 +631,38 @@ if reset_count > 0:
   # If no pending work and no active workers, check for auto-ideation
   if [[ $pending_count -eq 0 && $active_workers -eq 0 ]]; then
     echo "[DISPATCHER] No pending candidates found."
-    
+
+    # Before blocking, do final check for stuck work (immediate, not periodic)
+    echo "[DISPATCHER] Performing final verification for stuck candidates..."
+    stuck_work_count=$("$PYTHON_CMD" -c "
+import csv
+csv_file = '$FULL_CSV_PATH'
+stuck = 0
+with open(csv_file, 'r') as f:
+    reader = csv.reader(f)
+    next(reader, None)  # Skip header
+    for row in reader:
+        if len(row) > 4:
+            status = row[4].strip() if row[4] else ''
+            # Count running, unknown, and retry statuses
+            if status in ['running'] or \
+               (status and status not in ['', 'pending', 'complete', 'failed', 'skipped',
+                                          'failed-ai-retry', 'failed-retry1', 'failed-retry2', 'failed-retry3']):
+                stuck += 1
+print(stuck)
+" 2>/dev/null || echo "0")
+
+    if [[ $stuck_work_count -gt 0 ]]; then
+      echo "[DISPATCHER] Found $stuck_work_count stuck candidates - running cleanup cycle..."
+      # Force immediate cleanup
+      loop_iteration=$((last_stuck_check + 5))
+      continue  # Go back to top of loop to trigger cleanup
+    fi
+
     # Check if auto ideation is enabled
     if [[ "$AUTO_IDEATE" == "true" || "$AUTO_IDEATE" == "1" ]]; then
       echo "[DISPATCHER] Auto ideation is enabled. Checking prerequisites..."
-      
+
       # Check if previous generation has at least one completed item
       if ! check_previous_generation_has_completed "$FULL_CSV_PATH"; then
         echo "[DISPATCHER] Evolution blocked - current generation has no completed items."
