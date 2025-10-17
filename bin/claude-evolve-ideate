@@ -145,28 +145,35 @@ call_ai_for_ideation() {
     ai_output=$(call_ai_model_configured "$model" "$prompt")
     local ai_exit_code=$?
 
-    # Check if the file was modified - this is ALL that matters
+    # Check if the file was modified AND has correct count
     if [[ -f "$temp_csv_file" ]]; then
       local new_csv_count
       new_csv_count=$(grep -v '^[[:space:]]*$' "$temp_csv_file" | tail -n +2 | wc -l)
+      local added_count=$((new_csv_count - original_csv_count))
 
-      if [[ $new_csv_count -gt $original_csv_count ]]; then
-        echo "[INFO] CSV was modified by $model ($new_csv_count vs $original_csv_count rows) - validating format..." >&2
-        
-        # Post-process to ensure all description fields are quoted
-        local fixed_csv_file="${temp_csv_file}.fixed"
-        
-        # Use the CSV fixer script
-        if "$PYTHON_CMD" "$SCRIPT_DIR/../lib/csv_fixer.py" "$temp_csv_file" "$fixed_csv_file"; then
-          mv "$fixed_csv_file" "$temp_csv_file"
-          echo "[INFO] CSV format validated and fixed if needed" >&2
+      if [[ $added_count -gt 0 ]]; then
+        # Validate count BEFORE accepting
+        if [[ $added_count -eq $expected_count ]]; then
+          echo "[INFO] CSV modified by $model: added $added_count/$expected_count rows ✓" >&2
+
+          # Post-process to ensure all description fields are quoted
+          local fixed_csv_file="${temp_csv_file}.fixed"
+
+          # Use the CSV fixer script
+          if "$PYTHON_CMD" "$SCRIPT_DIR/../lib/csv_fixer.py" "$temp_csv_file" "$fixed_csv_file"; then
+            mv "$fixed_csv_file" "$temp_csv_file"
+            echo "[INFO] CSV format validated and fixed if needed" >&2
+          else
+            echo "[WARN] CSV format validation failed, using original" >&2
+          fi
+
+          # Echo the successful model name for caller to capture
+          echo "$model"
+          return 0
         else
-          echo "[WARN] CSV format validation failed, using original" >&2
+          echo "[WARN] $model added wrong count: $added_count (expected $expected_count) - trying next model" >&2
+          # Continue to next model - maybe another will get it right
         fi
-        
-        # Echo the successful model name for caller to capture
-        echo "$model"
-        return 0
       else
         echo "[INFO] CSV unchanged after $model (exit code: $ai_exit_code)" >&2
         # Continue to next model
