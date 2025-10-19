@@ -28,17 +28,32 @@ cleanup_on_exit() {
     echo "[WORKER-$$] Worker terminated while processing $CURRENT_CANDIDATE_ID" >&2
     # Grab current status; only reset if it is not already a failure or complete
     echo "[WORKER-$$] Determining status before resetting" >&2
-    "$PYTHON_CMD" -c "
+
+    local reset_output
+    local reset_exit_code
+    reset_output=$("$PYTHON_CMD" -c "
 import sys
 sys.path.insert(0, '$SCRIPT_DIR/..')
 from lib.evolution_csv import EvolutionCSV
 csv = EvolutionCSV('$FULL_CSV_PATH')
 info = csv.get_candidate_info('$CURRENT_CANDIDATE_ID')
 status = info.get('status', '').lower() if info else ''
+print(f'Current status: {status}', file=sys.stderr)
 # Do not reset if already failed, failed-ai-retry, or complete
-    if status and status not in ('complete', 'failed', 'failed-ai-retry', 'failed-parent-missing'):
+if status and status not in ('complete', 'failed', 'failed-ai-retry', 'failed-parent-missing'):
+    print(f'Resetting {status} -> pending', file=sys.stderr)
     csv.update_candidate_status('$CURRENT_CANDIDATE_ID', 'pending')
-" 2>/dev/null || echo "[WORKER-$$] Warning: failed to reset status" >&2
+else:
+    print(f'Status {status} does not need reset', file=sys.stderr)
+" 2>&1)
+    reset_exit_code=$?
+
+    if [[ $reset_exit_code -ne 0 ]]; then
+      echo "[WORKER-$$] Warning: Failed to reset status for $CURRENT_CANDIDATE_ID (exit code $reset_exit_code)" >&2
+      echo "[WORKER-$$] Error details: $reset_output" >&2
+    else
+      echo "[WORKER-$$] Status check result: $reset_output" >&2
+    fi
   fi
 }
 
