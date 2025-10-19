@@ -107,7 +107,7 @@ call_ai_for_ideation() {
 
   # Get the current row count before any modifications (from the pre-populated file with stubs)
   local original_csv_count
-  original_csv_count=$(grep -v '^[[:space:]]*$' "$temp_csv_file" | tail -n +2 | wc -l)
+  original_csv_count=$(grep -v '^[[:space:]]*$' "$temp_csv_file" | tail -n +2 | wc -l | tr -d '[:space:]')
 
   echo "[DEBUG] Pre-populated temp CSV has $original_csv_count rows (includes stub rows with placeholders)" >&2
 
@@ -152,7 +152,7 @@ call_ai_for_ideation() {
     # Check if the file was modified correctly
     if [[ -f "$temp_csv_file" ]]; then
       local new_csv_count
-      new_csv_count=$(grep -v '^[[:space:]]*$' "$temp_csv_file" | tail -n +2 | wc -l)
+      new_csv_count=$(grep -v '^[[:space:]]*$' "$temp_csv_file" | tail -n +2 | wc -l | tr -d '[:space:]')
       local added_count=$((new_csv_count - original_csv_count))
 
       echo "[DEBUG] After $model: original=$original_csv_count, new=$new_csv_count, added=$added_count" >&2
@@ -162,6 +162,9 @@ call_ai_for_ideation() {
         # Count remaining placeholders - there should be none if AI did its job
         local placeholder_count
         placeholder_count=$(grep -c "PLACEHOLDER" "$temp_csv_file" 2>/dev/null || echo "0")
+        # Strip whitespace and ensure we have a clean integer
+        placeholder_count=$(echo "$placeholder_count" | tr -d '[:space:]')
+        placeholder_count=${placeholder_count:-0}
 
         if [[ $placeholder_count -eq 0 ]]; then
           echo "[INFO] CSV modified by $model: filled $expected_count placeholder rows ✓" >&2
