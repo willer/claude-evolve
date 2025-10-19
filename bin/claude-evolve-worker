@@ -255,6 +255,14 @@ with EvolutionCSV('$FULL_CSV_PATH') as csv:
     
     if [[ "$current_status" == "complete" ]]; then
       echo "[WORKER-$$] Already evaluated - skipping"
+      # Reset status back to complete since get_next_pending_candidate() set it to running
+      "$PYTHON_CMD" -c "
+import sys
+sys.path.insert(0, '$SCRIPT_DIR/..')
+from lib.evolution_csv import EvolutionCSV
+with EvolutionCSV('$FULL_CSV_PATH') as csv:
+    csv.update_candidate_status('$candidate_id', 'complete')
+" 2>/dev/null || true
       return 0
     fi
     
