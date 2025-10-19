@@ -380,11 +380,11 @@ validate_direct_csv_modification() {
   # We need to track this before the AI runs by reading from the beginning state
   # First, get a fresh count from the current main CSV (which reflects any previous operations in this session)
   local current_original_count
-  current_original_count=$(grep -v '^[[:space:]]*$' "$FULL_CSV_PATH" | tail -n +2 | wc -l)
+  current_original_count=$(grep -v '^[[:space:]]*$' "$FULL_CSV_PATH" | tail -n +2 | wc -l | tr -d '[:space:]')
 
   # Count data rows in the modified temp CSV
   local new_count
-  new_count=$(grep -v '^[[:space:]]*$' "$temp_csv" | tail -n +2 | wc -l)
+  new_count=$(grep -v '^[[:space:]]*$' "$temp_csv" | tail -n +2 | wc -l | tr -d '[:space:]')
 
 
   # Check if AI overwrote the file instead of appending
@@ -445,7 +445,7 @@ validate_direct_csv_modification() {
   fi
   
   # Get just the new entries (skip header and existing entries)
-  local original_line_count=$(wc -l < "$FULL_CSV_PATH")
+  local original_line_count=$(wc -l < "$FULL_CSV_PATH" | tr -d '[:space:]')
   
   # Append only the new lines from temp CSV to the main CSV
   tail -n +$((original_line_count + 1)) "$temp_csv" >> "$FULL_CSV_PATH"
@@ -517,9 +517,9 @@ validate_and_apply_csv_modification_old() {
   
   # Validate the modified CSV has more entries than original
   local original_count
-  original_count=$(wc -l < "$FULL_CSV_PATH")
+  original_count=$(wc -l < "$FULL_CSV_PATH" | tr -d '[:space:]')
   local new_count
-  new_count=$(wc -l < "$temp_csv")
+  new_count=$(wc -l < "$temp_csv" | tr -d '[:space:]')
   
   
   if [[ $new_count -le $original_count ]]; then
@@ -546,7 +546,7 @@ validate_and_apply_csv_modification_old() {
   fi
   
   # Get just the new entries (skip header and existing entries)
-  local original_line_count=$(wc -l < "$FULL_CSV_PATH")
+  local original_line_count=$(wc -l < "$FULL_CSV_PATH" | tr -d '[:space:]')
   
   # Append only the new lines from temp CSV to the main CSV
   tail -n +$((original_line_count + 1)) "$temp_csv" >> "$FULL_CSV_PATH"
@@ -668,9 +668,9 @@ IMPORTANT: Output the complete modified CSV file. Do not add any explanation or 
   
   # Validate the modified CSV has more entries than original
   local original_count
-  original_count=$(wc -l < "$FULL_CSV_PATH")
+  original_count=$(wc -l < "$FULL_CSV_PATH" | tr -d '[:space:]')
   local new_count
-  new_count=$(wc -l < "$temp_csv")
+  new_count=$(wc -l < "$temp_csv" | tr -d '[:space:]')
   
   
   if [[ $new_count -le $original_count ]]; then
@@ -699,7 +699,7 @@ IMPORTANT: Output the complete modified CSV file. Do not add any explanation or 
   fi
   
   # Get just the new entries (skip header and existing entries)
-  local original_line_count=$(wc -l < "$FULL_CSV_PATH")
+  local original_line_count=$(wc -l < "$FULL_CSV_PATH" | tr -d '[:space:]')
   
   # Append only the new lines from temp CSV to the main CSV
   tail -n +$((original_line_count + 1)) "$temp_csv" >> "$FULL_CSV_PATH"
@@ -1010,7 +1010,7 @@ generate_novel_ideas_direct() {
 
   # Count total lines in temp CSV (including header)
   local total_lines
-  total_lines=$(wc -l < "$temp_csv")
+  total_lines=$(wc -l < "$temp_csv" | tr -d '[:space:]')
   local read_offset=$((total_lines - 25))
   if [[ $read_offset -lt 1 ]]; then
     read_offset=1
@@ -1148,7 +1148,7 @@ generate_hill_climbing_direct() {
 
   # Count total lines in temp CSV (including header)
   local total_lines
-  total_lines=$(wc -l < "$temp_csv")
+  total_lines=$(wc -l < "$temp_csv" | tr -d '[:space:]')
   local read_offset=$((total_lines - 25))
   if [[ $read_offset -lt 1 ]]; then
     read_offset=1
@@ -1277,7 +1277,7 @@ generate_structural_mutation_direct() {
 
   # Count total lines in temp CSV (including header)
   local total_lines
-  total_lines=$(wc -l < "$temp_csv")
+  total_lines=$(wc -l < "$temp_csv" | tr -d '[:space:]')
   local read_offset=$((total_lines - 25))
   if [[ $read_offset -lt 1 ]]; then
     read_offset=1
@@ -1397,7 +1397,7 @@ generate_crossover_direct() {
 
   # Count total lines in temp CSV (including header)
   local total_lines
-  total_lines=$(wc -l < "$temp_csv")
+  total_lines=$(wc -l < "$temp_csv" | tr -d '[:space:]')
   local read_offset=$((total_lines - 25))
   if [[ $read_offset -lt 1 ]]; then
     read_offset=1
