@@ -339,44 +339,68 @@ validate_direct_csv_modification() {
   local expected_count="$2"
   local idea_type="$3"
   local ai_model="${4:-}"  # AI model that generated the ideas
-  
+  local expected_ids="${5:-}"  # Optional: comma or space separated list of expected IDs
+
   # Check if the file was actually modified
   if [[ ! -f "$temp_csv" ]]; then
     echo "[ERROR] CSV file was not found after AI modification" >&2
     return 1
   fi
-  
+
   # Get the count before modification from the temp CSV (which was copied from original before AI ran)
   # We need to track this before the AI runs by reading from the beginning state
   # First, get a fresh count from the current main CSV (which reflects any previous operations in this session)
   local current_original_count
   current_original_count=$(grep -v '^[[:space:]]*$' "$FULL_CSV_PATH" | tail -n +2 | wc -l)
-  
+
   # Count data rows in the modified temp CSV
   local new_count
   new_count=$(grep -v '^[[:space:]]*$' "$temp_csv" | tail -n +2 | wc -l)
-  
-  
+
+
   # Check if AI overwrote the file instead of appending
   if [[ $new_count -lt $current_original_count ]]; then
     echo "[ERROR] AI overwrote the CSV file instead of appending ($new_count < $current_original_count)" >&2
     head -10 "$temp_csv" >&2
     return 1
   fi
-  
+
   # Check if no changes were made
   if [[ $new_count -eq $current_original_count ]]; then
     echo "[ERROR] CSV file wasn't modified - same number of data rows ($new_count = $current_original_count)" >&2
     head -10 "$temp_csv" >&2
     return 1
   fi
-  
+
   local added_count=$((new_count - current_original_count))
   if [[ $added_count -ne $expected_count ]]; then
     echo "[ERROR] Expected to add $expected_count ideas but only added $added_count" >&2
     echo "[ERROR] Ideation failed - rejecting partial results to prevent endless loops" >&2
     rm -f "$temp_csv"
     return 1
+  fi
+
+  # If expected IDs were provided, validate that the AI used exactly those IDs
+  if [[ -n "$expected_ids" ]]; then
+    # Get the IDs that were actually added (last N rows of temp CSV)
+    local actual_ids
+    actual_ids=$(tail -n $added_count "$temp_csv" | cut -d',' -f1 | tr -d '"' | tr '\n' ' ' | xargs)
+
+    # Normalize expected_ids (convert commas to spaces, trim)
+    local expected_ids_normalized
+    expected_ids_normalized=$(echo "$expected_ids" | tr ',' ' ' | xargs)
+
+    # Compare
+    if [[ "$actual_ids" != "$expected_ids_normalized" ]]; then
+      echo "[ERROR] AI used wrong IDs!" >&2
+      echo "[ERROR] Expected: $expected_ids_normalized" >&2
+      echo "[ERROR] Actually used: $actual_ids" >&2
+      echo "[ERROR] Rejecting this attempt - AI must use the exact IDs specified" >&2
+      rm -f "$temp_csv"
+      return 1
+    fi
+
+    echo "[INFO] ✓ AI correctly used the specified IDs: $actual_ids" >&2
   fi
 
   # Use proper locking to safely update the CSV
@@ -706,7 +730,7 @@ get_next_id() {
     echo "gen${generation}-001"
     return
   fi
-  
+
   # Use Python for proper CSV parsing
   local max_id
   max_id=$("$PYTHON_CMD" -c "
@@ -726,9 +750,51 @@ with open('$FULL_CSV_PATH', 'r') as f:
                 max_id = max(max_id, id_num)
 print(max_id)
 ")
-  
+
   # Format next ID with generation and 3-digit number
   printf "gen%s-%03d" "$generation" $((max_id + 1))
+}
+
+# Get the next N available IDs for current generation as a comma-separated list
+get_next_ids() {
+  local generation="$1"
+  local count="$2"
+
+  # Get the starting ID number
+  local start_id
+  if [[ ! -f "$FULL_CSV_PATH" ]]; then
+    start_id=1
+  else
+    # Use Python for proper CSV parsing
+    start_id=$("$PYTHON_CMD" -c "
+import csv
+import re
+max_id = 0
+pattern = re.compile(r'^gen${generation}-(\d+)$')
+with open('$FULL_CSV_PATH', 'r') as f:
+    reader = csv.reader(f)
+    next(reader, None)  # Skip header
+    for row in reader:
+        if row and len(row) > 0:
+            id_field = row[0].strip()
+            match = pattern.match(id_field)
+            if match:
+                id_num = int(match.group(1))
+                max_id = max(max_id, id_num)
+print(max_id + 1)
+")
+  fi
+
+  # Generate the list of IDs
+  local ids=()
+  for ((i=0; i<count; i++)); do
+    local id_num=$((start_id + i))
+    ids+=("$(printf "gen%s-%03d" "$generation" "$id_num")")
+  done
+
+  # Join with commas
+  local IFS=','
+  echo "${ids[*]}"
 }
 
 
@@ -884,21 +950,52 @@ ideate_ai_strategies() {
 # Generate novel exploration ideas using direct CSV modification
 generate_novel_ideas_direct() {
   local count="$1"
-  
+
+  # Get the next available ID BEFORE creating temp CSV
+  # This ensures each strategy gets unique IDs even in parallel runs
+  local next_id
+  next_id=$(get_next_id "$CURRENT_GENERATION")
+  echo "[INFO] Next available ID for novel ideas: $next_id" >&2
+
+  # Generate the list of IDs this strategy should use
+  local next_id_num
+  next_id_num=$(echo "$next_id" | grep -o '[0-9]*$')
+  local required_ids=()
+  for ((i=0; i<count; i++)); do
+    required_ids+=("$(printf "gen%s-%03d" "$CURRENT_GENERATION" $((next_id_num + i)))")
+  done
+  local required_ids_str="${required_ids[*]}"
+
   # Create temporary CSV copy in evolution directory (so AI can access it)
   local temp_csv="$FULL_EVOLUTION_DIR/temp-csv-$$.csv"
   cp "$FULL_CSV_PATH" "$temp_csv"
-  
-  echo "[INFO] Generating $count novel exploration ideas..."
-  local data_rows=$(grep -v '^[[:space:]]*$' "$FULL_CSV_PATH" | tail -n +2 | wc -l)
-  
+
+  # Pre-populate the CSV with stub rows containing the correct IDs
+  # This ensures the AI can't possibly use wrong IDs - it just fills in descriptions
+  echo "[INFO] Pre-populating CSV with stub rows: $required_ids_str"
+  for id in "${required_ids[@]}"; do
+    echo "$id,,\"[PLACEHOLDER: Replace this with your algorithmic idea]\",,pending" >> "$temp_csv"
+  done
+
+  echo "[INFO] Generating $count novel exploration ideas with IDs: $required_ids_str"
+
+  # Count total lines in temp CSV (including header)
+  local total_lines
+  total_lines=$(wc -l < "$temp_csv")
+  local read_offset=$((total_lines - 25))
+  if [[ $read_offset -lt 1 ]]; then
+    read_offset=1
+  fi
+
   # Use relative paths and change to evolution directory so AI can access files
   local temp_csv_basename=$(basename "$temp_csv")
-  
+
   # Get existing Python files for this generation to avoid ID collisions
   local existing_py_files=$(get_existing_py_files_for_generation "$CURRENT_GENERATION")
-  
-  local prompt="I need you to use your file editing capabilities to APPEND exactly $count novel algorithmic ideas to the CSV file: $temp_csv_basename
+
+  local prompt="I need you to use your file editing capabilities to fill in PLACEHOLDER descriptions in the CSV file: $temp_csv_basename
+
+THE FILE HAS $total_lines TOTAL LINES. Read from line $read_offset to see the placeholder rows at the end.
 
 Current evolution context:
 - Generation: $CURRENT_GENERATION
@@ -907,27 +1004,33 @@ Current evolution context:
 
 IMPORTANT: DO NOT read algorithm.py or any evolution_*.py files. Focus on creative ideation based on the brief and CSV context only. Reading code files wastes tokens and time.
 
+CRITICAL TASK:
+The CSV file already contains $count stub rows with these IDs: $required_ids_str
+Each stub row has a PLACEHOLDER description like: \"[PLACEHOLDER: Replace this with your algorithmic idea]\"
+Your job is to REPLACE each PLACEHOLDER with a real algorithmic idea description.
+
+⚠️ CRITICAL FILE READING INSTRUCTIONS ⚠️
+THE CSV FILE IS VERY LARGE (OVER 100,000 TOKENS). YOU WILL RUN OUT OF CONTEXT IF YOU READ IT ALL!
+- DO NOT read the entire file or you will exceed context limits and CRASH
+- Use: Read(file_path='$temp_csv_basename', offset=$read_offset, limit=25)
+- This will read ONLY the last 25 lines where the placeholders are
+- DO NOT READ FROM OFFSET 0 - that will load the entire huge file and fail!
+
 CRITICAL INSTRUCTIONS:
-1. Use the Read tool to examine the current CSV file
-   IMPORTANT: If the CSV file is large (>200 lines), read it in chunks using the offset and limit parameters to avoid context overload
-   Example: Read(file_path='temp-csv-123.csv', offset=0, limit=100) then Read(offset=100, limit=100), etc.
-2. DO NOT DELETE OR REPLACE ANY EXISTING ROWS - YOU MUST PRESERVE ALL EXISTING DATA
-3. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
-4. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001"
-  
+1. Read ONLY the last 20-30 lines of the CSV to see the placeholder rows
+2. DO NOT ADD OR DELETE ANY ROWS - only EDIT the placeholder descriptions
+3. DO NOT CHANGE THE IDs - they are already correct ($required_ids_str)
+4. Use the Edit tool to replace EACH PLACEHOLDER text with a real algorithmic idea
+5. When editing, preserve the CSV structure: keep the ID and parent_id fields unchanged"
+
   if [[ -n "$existing_py_files" ]]; then
     prompt+="
-5. IMPORTANT: The following IDs already have Python files and MUST NOT be reused: $existing_py_files
-6. Skip these IDs when assigning new IDs (e.g., if gen$CURRENT_GENERATION-001 and gen$CURRENT_GENERATION-002 exist as Python files, start with gen$CURRENT_GENERATION-003)"
-  else
-    prompt+="
-5. No existing Python files found for generation $CURRENT_GENERATION"
+6. IMPORTANT: The following IDs already have Python files: $existing_py_files
+   (This is informational only - use the IDs specified above)"
   fi
-  
+
   prompt+="
-6. Use the Edit or MultiEdit tool to APPEND exactly $count new rows AT THE END of the CSV file
-7. For each idea, create a row with: id,,description,,pending (empty parent_id for novel ideas)
-8. CRITICAL CSV FORMATTING RULES:
+7. CRITICAL CSV FORMATTING RULES:
    - ALWAYS wrap the description field in double quotes
    - If the description contains quotes, escape them by doubling them (\" becomes \"\")
    - Example: gen01-001,,\"Implement adaptive RSI thresholds based on volatility\",,pending
@@ -965,13 +1068,13 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
   # Restore working directory
   cd "$original_pwd"
   
-  
-  # Validate that the CSV file was actually modified
-  if ! validate_direct_csv_modification "$temp_csv" "$count" "novel" "$ai_response"; then
+
+  # Validate that the CSV file was actually modified with correct IDs
+  if ! validate_direct_csv_modification "$temp_csv" "$count" "novel" "$ai_response" "$required_ids_str"; then
     rm -f "$temp_csv"
     return 1
   fi
-  
+
   echo "[INFO] Novel exploration ideas generated successfully"
   return 0
 }
@@ -980,25 +1083,57 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
 generate_hill_climbing_direct() {
   local count="$1"
   local top_performers="$2"
-  
+
+  # Get the next available ID BEFORE creating temp CSV
+  local next_id
+  next_id=$(get_next_id "$CURRENT_GENERATION")
+  echo "[INFO] Next available ID for hill climbing: $next_id" >&2
+
+  # Generate the list of IDs this strategy should use
+  local next_id_num
+  next_id_num=$(echo "$next_id" | grep -o '[0-9]*$')
+  local required_ids=()
+  for ((i=0; i<count; i++)); do
+    required_ids+=("$(printf "gen%s-%03d" "$CURRENT_GENERATION" $((next_id_num + i)))")
+  done
+  local required_ids_str="${required_ids[*]}"
+
   # Create temporary CSV copy in evolution directory (so AI can access it)
   local temp_csv="$FULL_EVOLUTION_DIR/temp-csv-$$.csv"
   cp "$FULL_CSV_PATH" "$temp_csv"
-  
-  echo "[INFO] Generating $count hill climbing ideas..."
-  local data_rows=$(grep -v '^[[:space:]]*$' "$FULL_CSV_PATH" | tail -n +2 | wc -l)
-  
+
+  # Pre-populate the CSV with stub rows containing the correct IDs and parent IDs
+  echo "[INFO] Pre-populating CSV with stub rows: $required_ids_str"
+  # Use first parent as default for stubs (AI will adjust if needed)
+  local first_parent_id
+  first_parent_id=$(echo "$valid_parent_ids" | cut -d',' -f1)
+  for id in "${required_ids[@]}"; do
+    echo "$id,$first_parent_id,\"[PLACEHOLDER: Replace with parameter tuning idea]\",,pending" >> "$temp_csv"
+  done
+
+  echo "[INFO] Generating $count hill climbing ideas with IDs: $required_ids_str"
+
+  # Count total lines in temp CSV (including header)
+  local total_lines
+  total_lines=$(wc -l < "$temp_csv")
+  local read_offset=$((total_lines - 25))
+  if [[ $read_offset -lt 1 ]]; then
+    read_offset=1
+  fi
+
   # Get existing Python files for this generation to avoid ID collisions
   local existing_py_files=$(get_existing_py_files_for_generation "$CURRENT_GENERATION")
-  
+
   # Extract just the IDs from top performers for clarity
   local valid_parent_ids
   valid_parent_ids=$(echo "$top_performers" | cut -d',' -f1 | paste -sd ',' -)
-  
+
   # Use relative paths and change to evolution directory so AI can access files
   local temp_csv_basename=$(basename "$temp_csv")
-  
-  local prompt="I need you to use your file editing capabilities to APPEND exactly $count parameter tuning ideas to the CSV file: $temp_csv_basename
+
+  local prompt="I need you to use your file editing capabilities to fill in PLACEHOLDER descriptions in the CSV file: $temp_csv_basename
+
+THE FILE HAS $total_lines TOTAL LINES. Read from line $read_offset to see the placeholder rows at the end.
 
 IMPORTANT: You MUST use one of these exact parent IDs: $valid_parent_ids
 
@@ -1019,28 +1154,29 @@ If you must read source files:
 
 Most of the time, you can infer parameters from descriptions like "RSI with threshold 30" or "MA period 20".
 
-CRITICAL INSTRUCTIONS:
-1. Use the Read tool to examine the current CSV file
-   IMPORTANT: If the CSV file is large (>200 lines), read it in chunks using the offset and limit parameters to avoid context overload
-   Example: Read(file_path='temp-csv-123.csv', offset=0, limit=100) then Read(offset=100, limit=100), etc.
-2. DO NOT DELETE OR REPLACE ANY EXISTING ROWS - YOU MUST PRESERVE ALL EXISTING DATA
-3. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
-4. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001
-5. Use the Edit or MultiEdit tool to APPEND exactly $count new rows AT THE END of the CSV file
-6. For each idea, create a row with: id,parent_id,description,,pending
-7. Each parent_id MUST be one of: $valid_parent_ids
-8. CRITICAL CSV FORMATTING RULES:
-   - ALWAYS wrap the description field in double quotes
-   - If the description contains quotes, escape them by doubling them (\" becomes \"\")
-   - Example: gen01-001,gen00-000,\"Lower rsi_entry from 21 to 18\",,pending
-   - BAD: gen01-001,gen00-000,Lower rsi_entry from 21 to 18,,pending
-   - NEVER omit quotes around descriptions - this causes CSV parsing errors
-9. Each description should focus on adjusting specific parameters that exist in the parent's source code
-10. Include current and new parameter values - for example: \"Lower rsi_entry from 21 to 18\"
+CRITICAL TASK:
+The CSV file already contains $count stub rows with these IDs: $required_ids_str
+Each stub row has a PLACEHOLDER description like: \"[PLACEHOLDER: Replace with parameter tuning idea]\"
+Your job is to REPLACE each PLACEHOLDER with a real parameter tuning idea.
 
-IMPORTANT: You must APPEND new rows to the existing CSV file. DO NOT replace the file contents. All existing rows must remain unchanged.
-CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly.
-CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). Only modify the file directly."
+⚠️ CRITICAL FILE READING INSTRUCTIONS ⚠️
+THE CSV FILE IS VERY LARGE (OVER 100,000 TOKENS). YOU WILL RUN OUT OF CONTEXT IF YOU READ IT ALL!
+- DO NOT read the entire file or you will exceed context limits and CRASH
+- Use: Read(file_path='$temp_csv_basename', offset=$read_offset, limit=25)
+- This will read ONLY the last 25 lines where the placeholders are
+- DO NOT READ FROM OFFSET 0 - that will load the entire huge file and fail!
+
+CRITICAL INSTRUCTIONS:
+1. Read ONLY the last 25 lines using the offset specified above
+2. DO NOT ADD OR DELETE ANY ROWS - only EDIT the placeholder descriptions
+3. DO NOT CHANGE THE IDs - they are already correct ($required_ids_str)
+4. Use the Edit tool to replace EACH PLACEHOLDER text with a parameter tuning idea
+5. When editing, preserve the CSV structure: keep the ID field unchanged
+6. You may change the parent_id field if needed to reference a different top performer
+7. Each description should focus on adjusting specific parameters - include current and new values
+   Example: \"Lower rsi_entry from 21 to 18\" or \"Increase MA period from 20 to 50\"
+8. CRITICAL: When editing, preserve the CSV formatting with proper quoting
+9. DO NOT use any git commands (git add, git commit, git reset, etc.). Only modify the file directly."
 
   # Change to evolution directory so AI can access files
   local original_pwd=$(pwd)
@@ -1062,13 +1198,13 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
   # Restore working directory
   cd "$original_pwd"
   
-  
-  # Validate that the CSV file was actually modified
-  if ! validate_direct_csv_modification "$temp_csv" "$count" "hill-climbing" "$ai_response"; then
+
+  # Validate that the CSV file was actually modified with correct IDs
+  if ! validate_direct_csv_modification "$temp_csv" "$count" "hill-climbing" "$ai_response" "$required_ids_str"; then
     rm -f "$temp_csv"
     return 1
   fi
-  
+
   echo "[INFO] Hill climbing ideas generated successfully"
   return 0
 }
@@ -1077,25 +1213,56 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
 generate_structural_mutation_direct() {
   local count="$1"
   local top_performers="$2"
-  
+
+  # Get the next available ID BEFORE creating temp CSV
+  local next_id
+  next_id=$(get_next_id "$CURRENT_GENERATION")
+  echo "[INFO] Next available ID for structural mutation: $next_id" >&2
+
+  # Generate the list of IDs this strategy should use
+  local next_id_num
+  next_id_num=$(echo "$next_id" | grep -o '[0-9]*$')
+  local required_ids=()
+  for ((i=0; i<count; i++)); do
+    required_ids+=("$(printf "gen%s-%03d" "$CURRENT_GENERATION" $((next_id_num + i)))")
+  done
+  local required_ids_str="${required_ids[*]}"
+
   # Create temporary CSV copy in evolution directory (so AI can access it)
   local temp_csv="$FULL_EVOLUTION_DIR/temp-csv-$$.csv"
   cp "$FULL_CSV_PATH" "$temp_csv"
-  
-  echo "[INFO] Generating $count structural mutation ideas..."
-  local data_rows=$(grep -v '^[[:space:]]*$' "$FULL_CSV_PATH" | tail -n +2 | wc -l)
-  
+
+  # Pre-populate the CSV with stub rows
+  echo "[INFO] Pre-populating CSV with stub rows: $required_ids_str"
+  local first_parent_id
+  first_parent_id=$(echo "$valid_parent_ids" | cut -d',' -f1)
+  for id in "${required_ids[@]}"; do
+    echo "$id,$first_parent_id,\"[PLACEHOLDER: Replace with structural modification idea]\",,pending" >> "$temp_csv"
+  done
+
+  echo "[INFO] Generating $count structural mutation ideas with IDs: $required_ids_str"
+
+  # Count total lines in temp CSV (including header)
+  local total_lines
+  total_lines=$(wc -l < "$temp_csv")
+  local read_offset=$((total_lines - 25))
+  if [[ $read_offset -lt 1 ]]; then
+    read_offset=1
+  fi
+
   # Get existing Python files for this generation to avoid ID collisions
   local existing_py_files=$(get_existing_py_files_for_generation "$CURRENT_GENERATION")
-  
+
   # Extract just the IDs from top performers for clarity
   local valid_parent_ids
   valid_parent_ids=$(echo "$top_performers" | cut -d',' -f1 | paste -sd ',' -)
-  
+
   # Use relative paths and change to evolution directory so AI can access files
   local temp_csv_basename=$(basename "$temp_csv")
-  
-  local prompt="I need you to use your file editing capabilities to APPEND exactly $count structural modification ideas to the CSV file: $temp_csv_basename
+
+  local prompt="I need you to use your file editing capabilities to fill in PLACEHOLDER descriptions in the CSV file: $temp_csv_basename
+
+THE FILE HAS $total_lines TOTAL LINES. Read from line $read_offset to see the placeholder rows at the end.
 
 IMPORTANT: You MUST use one of these exact parent IDs: $valid_parent_ids
 
@@ -1108,28 +1275,28 @@ IMPORTANT: DO NOT read evolution_*.py files. Generate structural ideas based ONL
 - Your knowledge of common algorithmic structures and patterns
 Reading code files wastes tokens and time. Focus on high-level architectural ideas based on the descriptions.
 
-CRITICAL INSTRUCTIONS:
-1. Use the Read tool to examine the current CSV file
-   IMPORTANT: If the CSV file is large (>200 lines), read it in chunks using the offset and limit parameters to avoid context overload
-   Example: Read(file_path='temp-csv-123.csv', offset=0, limit=100) then Read(offset=100, limit=100), etc.
-2. DO NOT DELETE OR REPLACE ANY EXISTING ROWS - YOU MUST PRESERVE ALL EXISTING DATA
-3. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
-4. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001
-5. Use the Edit or MultiEdit tool to APPEND exactly $count new rows AT THE END of the CSV file
-6. For each idea, create a row with: id,parent_id,description,,pending
-7. Each parent_id MUST be one of: $valid_parent_ids
-8. CRITICAL CSV FORMATTING RULES:
-   - ALWAYS wrap the description field in double quotes
-   - If the description contains quotes, escape them by doubling them (\" becomes \"\")
-   - Example: gen01-001,gen00-000,\"Add ML-based regime detection using LSTM\",,pending
-   - BAD: gen01-001,gen00-000,Add ML-based regime detection using LSTM,,pending
-   - NEVER omit quotes around descriptions - this causes CSV parsing errors
-9. Each description should focus on architectural/structural changes based on the parent's actual code
-10. Reference actual components/methods found in the source code
+CRITICAL TASK:
+The CSV file already contains $count stub rows with these IDs: $required_ids_str
+Each stub row has a PLACEHOLDER description like: \"[PLACEHOLDER: Replace with structural modification idea]\"
+Your job is to REPLACE each PLACEHOLDER with a real structural modification idea.
 
-IMPORTANT: You must APPEND new rows to the existing CSV file. DO NOT replace the file contents. All existing rows must remain unchanged.
-CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly.
-CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). Only modify the file directly."
+⚠️ CRITICAL FILE READING INSTRUCTIONS ⚠️
+THE CSV FILE IS VERY LARGE (OVER 100,000 TOKENS). YOU WILL RUN OUT OF CONTEXT IF YOU READ IT ALL!
+- DO NOT read the entire file or you will exceed context limits and CRASH
+- Use: Read(file_path='$temp_csv_basename', offset=$read_offset, limit=25)
+- This will read ONLY the last 25 lines where the placeholders are
+- DO NOT READ FROM OFFSET 0 - that will load the entire huge file and fail!
+
+CRITICAL INSTRUCTIONS:
+1. Read ONLY the last 25 lines using the offset specified above
+2. DO NOT ADD OR DELETE ANY ROWS - only EDIT the placeholder descriptions
+3. DO NOT CHANGE THE IDs - they are already correct ($required_ids_str)
+4. Use the Edit tool to replace EACH PLACEHOLDER text with a structural modification idea
+5. When editing, preserve the CSV structure: keep the ID field unchanged
+6. You may change the parent_id field if needed to reference a different top performer
+7. Each description should focus on architectural/structural changes
+8. CRITICAL: When editing, preserve the CSV formatting with proper quoting
+9. DO NOT use any git commands (git add, git commit, git reset, etc.). Only modify the file directly."
 
   # Change to evolution directory so AI can access files
   local original_pwd=$(pwd)
@@ -1151,13 +1318,13 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
   # Restore working directory
   cd "$original_pwd"
   
-  
-  # Validate that the CSV file was actually modified
-  if ! validate_direct_csv_modification "$temp_csv" "$count" "structural" "$ai_response"; then
+
+  # Validate that the CSV file was actually modified with correct IDs
+  if ! validate_direct_csv_modification "$temp_csv" "$count" "structural" "$ai_response" "$required_ids_str"; then
     rm -f "$temp_csv"
     return 1
   fi
-  
+
   echo "[INFO] Structural mutation ideas generated successfully"
   return 0
 }
@@ -1166,25 +1333,56 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
 generate_crossover_direct() {
   local count="$1"
   local top_performers="$2"
-  
+
+  # Get the next available ID BEFORE creating temp CSV
+  local next_id
+  next_id=$(get_next_id "$CURRENT_GENERATION")
+  echo "[INFO] Next available ID for crossover: $next_id" >&2
+
+  # Generate the list of IDs this strategy should use
+  local next_id_num
+  next_id_num=$(echo "$next_id" | grep -o '[0-9]*$')
+  local required_ids=()
+  for ((i=0; i<count; i++)); do
+    required_ids+=("$(printf "gen%s-%03d" "$CURRENT_GENERATION" $((next_id_num + i)))")
+  done
+  local required_ids_str="${required_ids[*]}"
+
   # Create temporary CSV copy in evolution directory (so AI can access it)
   local temp_csv="$FULL_EVOLUTION_DIR/temp-csv-$$.csv"
   cp "$FULL_CSV_PATH" "$temp_csv"
-  
-  echo "[INFO] Generating $count crossover hybrid ideas..."
-  local data_rows=$(grep -v '^[[:space:]]*$' "$FULL_CSV_PATH" | tail -n +2 | wc -l)
-  
+
+  # Pre-populate the CSV with stub rows
+  echo "[INFO] Pre-populating CSV with stub rows: $required_ids_str"
+  local first_parent_id
+  first_parent_id=$(echo "$valid_parent_ids" | cut -d',' -f1)
+  for id in "${required_ids[@]}"; do
+    echo "$id,$first_parent_id,\"[PLACEHOLDER: Replace with crossover hybrid idea]\",,pending" >> "$temp_csv"
+  done
+
+  echo "[INFO] Generating $count crossover hybrid ideas with IDs: $required_ids_str"
+
+  # Count total lines in temp CSV (including header)
+  local total_lines
+  total_lines=$(wc -l < "$temp_csv")
+  local read_offset=$((total_lines - 25))
+  if [[ $read_offset -lt 1 ]]; then
+    read_offset=1
+  fi
+
   # Get existing Python files for this generation to avoid ID collisions
   local existing_py_files=$(get_existing_py_files_for_generation "$CURRENT_GENERATION")
-  
+
   # Extract just the IDs from top performers for clarity
   local valid_parent_ids
   valid_parent_ids=$(echo "$top_performers" | cut -d',' -f1 | paste -sd ',' -)
-  
+
   # Use relative paths and change to evolution directory so AI can access files
   local temp_csv_basename=$(basename "$temp_csv")
-  
-  local prompt="I need you to use your file editing capabilities to APPEND exactly $count hybrid combination ideas to the CSV file: $temp_csv_basename
+
+  local prompt="I need you to use your file editing capabilities to fill in PLACEHOLDER descriptions in the CSV file: $temp_csv_basename
+
+THE FILE HAS $total_lines TOTAL LINES. Read from line $read_offset to see the placeholder rows at the end.
 
 IMPORTANT: You MUST use ONLY these exact parent IDs: $valid_parent_ids
 
@@ -1197,28 +1395,28 @@ IMPORTANT: DO NOT read evolution_*.py files. Generate crossover ideas based ONLY
 - Your knowledge of how different algorithmic approaches can be combined
 Reading code files wastes tokens and time. Focus on combining the described features creatively.
 
-CRITICAL INSTRUCTIONS:
-1. Use the Read tool to examine the current CSV file
-   IMPORTANT: If the CSV file is large (>200 lines), read it in chunks using the offset and limit parameters to avoid context overload
-   Example: Read(file_path='temp-csv-123.csv', offset=0, limit=100) then Read(offset=100, limit=100), etc.
-2. DO NOT DELETE OR REPLACE ANY EXISTING ROWS - YOU MUST PRESERVE ALL EXISTING DATA
-3. Find the highest ID number for generation $CURRENT_GENERATION (e.g., if gen$CURRENT_GENERATION-003 exists, next should be gen$CURRENT_GENERATION-004)
-4. If no gen$CURRENT_GENERATION entries exist yet, start with gen$CURRENT_GENERATION-001
-5. Use the Edit or MultiEdit tool to APPEND exactly $count new rows AT THE END of the CSV file
-6. For each idea, create a row with: id,parent_id,description,,pending
-7. Each parent_id MUST be one of: $valid_parent_ids (choose the primary parent)
-8. CRITICAL CSV FORMATTING RULES:
-   - ALWAYS wrap the description field in double quotes
-   - If the description contains quotes, escape them by doubling them (\" becomes \"\")
-   - Example: gen01-001,gen00-000,\"Combine gen01-123's RSI logic with gen01-456's volatility scaling\",,pending
-   - BAD: gen01-001,gen00-000,Combine gen01-123's RSI logic with gen01-456's volatility scaling,,pending
-   - NEVER omit quotes around descriptions - this causes CSV parsing errors
-9. Each description should combine actual elements from 2+ algorithms based on their source code
-10. Reference specific components/features found in the actual source code
+CRITICAL TASK:
+The CSV file already contains $count stub rows with these IDs: $required_ids_str
+Each stub row has a PLACEHOLDER description like: \"[PLACEHOLDER: Replace with crossover hybrid idea]\"
+Your job is to REPLACE each PLACEHOLDER with a real crossover/hybrid idea that combines 2+ algorithms.
 
-IMPORTANT: You must APPEND new rows to the existing CSV file. DO NOT replace the file contents. All existing rows must remain unchanged.
-CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly.
-CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). Only modify the file directly."
+⚠️ CRITICAL FILE READING INSTRUCTIONS ⚠️
+THE CSV FILE IS VERY LARGE (OVER 100,000 TOKENS). YOU WILL RUN OUT OF CONTEXT IF YOU READ IT ALL!
+- DO NOT read the entire file or you will exceed context limits and CRASH
+- Use: Read(file_path='$temp_csv_basename', offset=$read_offset, limit=25)
+- This will read ONLY the last 25 lines where the placeholders are
+- DO NOT READ FROM OFFSET 0 - that will load the entire huge file and fail!
+
+CRITICAL INSTRUCTIONS:
+1. Read ONLY the last 25 lines using the offset specified above
+2. DO NOT ADD OR DELETE ANY ROWS - only EDIT the placeholder descriptions
+3. DO NOT CHANGE THE IDs - they are already correct ($required_ids_str)
+4. Use the Edit tool to replace EACH PLACEHOLDER text with a crossover idea
+5. When editing, preserve the CSV structure: keep the ID field unchanged
+6. You may change the parent_id field if needed (choose the primary parent)
+7. Each description should combine actual elements from 2+ top performers
+8. CRITICAL: When editing, preserve the CSV formatting with proper quoting
+9. DO NOT use any git commands (git add, git commit, git reset, etc.). Only modify the file directly."
 
   # Change to evolution directory so AI can access files
   local original_pwd=$(pwd)
@@ -1240,13 +1438,13 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
   # Restore working directory
   cd "$original_pwd"
   
-  
-  # Validate that the CSV file was actually modified
-  if ! validate_direct_csv_modification "$temp_csv" "$count" "crossover" "$ai_response"; then
+
+  # Validate that the CSV file was actually modified with correct IDs
+  if ! validate_direct_csv_modification "$temp_csv" "$count" "crossover" "$ai_response" "$required_ids_str"; then
     rm -f "$temp_csv"
     return 1
   fi
-  
+
   echo "[INFO] Crossover hybrid ideas generated successfully"
   return 0
 }
