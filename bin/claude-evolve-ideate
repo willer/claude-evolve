@@ -989,6 +989,8 @@ generate_novel_ideas_direct() {
   # Generate the list of IDs this strategy should use
   local next_id_num
   next_id_num=$(echo "$next_id" | grep -o '[0-9]*$')
+  # Strip leading zeros to avoid octal interpretation in arithmetic
+  next_id_num=$((10#$next_id_num))
   local required_ids=()
   for ((i=0; i<count; i++)); do
     required_ids+=("$(printf "gen%s-%03d" "$CURRENT_GENERATION" $((next_id_num + i)))")
@@ -1121,6 +1123,8 @@ generate_hill_climbing_direct() {
   # Generate the list of IDs this strategy should use
   local next_id_num
   next_id_num=$(echo "$next_id" | grep -o '[0-9]*$')
+  # Strip leading zeros to avoid octal interpretation in arithmetic
+  next_id_num=$((10#$next_id_num))
   local required_ids=()
   for ((i=0; i<count; i++)); do
     required_ids+=("$(printf "gen%s-%03d" "$CURRENT_GENERATION" $((next_id_num + i)))")
@@ -1251,6 +1255,8 @@ generate_structural_mutation_direct() {
   # Generate the list of IDs this strategy should use
   local next_id_num
   next_id_num=$(echo "$next_id" | grep -o '[0-9]*$')
+  # Strip leading zeros to avoid octal interpretation in arithmetic
+  next_id_num=$((10#$next_id_num))
   local required_ids=()
   for ((i=0; i<count; i++)); do
     required_ids+=("$(printf "gen%s-%03d" "$CURRENT_GENERATION" $((next_id_num + i)))")
@@ -1371,6 +1377,8 @@ generate_crossover_direct() {
   # Generate the list of IDs this strategy should use
   local next_id_num
   next_id_num=$(echo "$next_id" | grep -o '[0-9]*$')
+  # Strip leading zeros to avoid octal interpretation in arithmetic
+  next_id_num=$((10#$next_id_num))
   local required_ids=()
   for ((i=0; i<count; i++)); do
     required_ids+=("$(printf "gen%s-%03d" "$CURRENT_GENERATION" $((next_id_num + i)))")
