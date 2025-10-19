@@ -176,6 +176,12 @@ call_ai_for_ideation() {
         fi
       else
         echo "[INFO] CSV unchanged after $model (exit code: $ai_exit_code)" >&2
+        # Log last few lines of AI output to help debug why it succeeded but didn't change the file
+        if [[ -n "$ai_output" ]]; then
+          echo "[AI] Last 10 lines of $model output:" >&2
+          echo "$ai_output" | tail -n 10 >&2
+          echo "[AI] ---" >&2
+        fi
         # Continue to next model
       fi
     else
@@ -1102,6 +1108,10 @@ generate_hill_climbing_direct() {
   local temp_csv="$FULL_EVOLUTION_DIR/temp-csv-$$.csv"
   cp "$FULL_CSV_PATH" "$temp_csv"
 
+  # Extract just the IDs from top performers for clarity (needed before pre-populating)
+  local valid_parent_ids
+  valid_parent_ids=$(echo "$top_performers" | cut -d',' -f1 | paste -sd ',' -)
+
   # Pre-populate the CSV with stub rows containing the correct IDs and parent IDs
   echo "[INFO] Pre-populating CSV with stub rows: $required_ids_str"
   # Use first parent as default for stubs (AI will adjust if needed)
@@ -1123,10 +1133,6 @@ generate_hill_climbing_direct() {
 
   # Get existing Python files for this generation to avoid ID collisions
   local existing_py_files=$(get_existing_py_files_for_generation "$CURRENT_GENERATION")
-
-  # Extract just the IDs from top performers for clarity
-  local valid_parent_ids
-  valid_parent_ids=$(echo "$top_performers" | cut -d',' -f1 | paste -sd ',' -)
 
   # Use relative paths and change to evolution directory so AI can access files
   local temp_csv_basename=$(basename "$temp_csv")
@@ -1232,6 +1238,10 @@ generate_structural_mutation_direct() {
   local temp_csv="$FULL_EVOLUTION_DIR/temp-csv-$$.csv"
   cp "$FULL_CSV_PATH" "$temp_csv"
 
+  # Extract just the IDs from top performers for clarity (needed before pre-populating)
+  local valid_parent_ids
+  valid_parent_ids=$(echo "$top_performers" | cut -d',' -f1 | paste -sd ',' -)
+
   # Pre-populate the CSV with stub rows
   echo "[INFO] Pre-populating CSV with stub rows: $required_ids_str"
   local first_parent_id
@@ -1252,10 +1262,6 @@ generate_structural_mutation_direct() {
 
   # Get existing Python files for this generation to avoid ID collisions
   local existing_py_files=$(get_existing_py_files_for_generation "$CURRENT_GENERATION")
-
-  # Extract just the IDs from top performers for clarity
-  local valid_parent_ids
-  valid_parent_ids=$(echo "$top_performers" | cut -d',' -f1 | paste -sd ',' -)
 
   # Use relative paths and change to evolution directory so AI can access files
   local temp_csv_basename=$(basename "$temp_csv")
@@ -1352,6 +1358,10 @@ generate_crossover_direct() {
   local temp_csv="$FULL_EVOLUTION_DIR/temp-csv-$$.csv"
   cp "$FULL_CSV_PATH" "$temp_csv"
 
+  # Extract just the IDs from top performers for clarity (needed before pre-populating)
+  local valid_parent_ids
+  valid_parent_ids=$(echo "$top_performers" | cut -d',' -f1 | paste -sd ',' -)
+
   # Pre-populate the CSV with stub rows
   echo "[INFO] Pre-populating CSV with stub rows: $required_ids_str"
   local first_parent_id
@@ -1372,10 +1382,6 @@ generate_crossover_direct() {
 
   # Get existing Python files for this generation to avoid ID collisions
   local existing_py_files=$(get_existing_py_files_for_generation "$CURRENT_GENERATION")
-
-  # Extract just the IDs from top performers for clarity
-  local valid_parent_ids
-  valid_parent_ids=$(echo "$top_performers" | cut -d',' -f1 | paste -sd ',' -)
 
   # Use relative paths and change to evolution directory so AI can access files
   local temp_csv_basename=$(basename "$temp_csv")

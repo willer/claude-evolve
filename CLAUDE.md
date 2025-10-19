@@ -1,4 +1,20 @@
-# Claude Evolution Project Guidelines
+# Claude Evolve
+
+This is an npm package, which is built to re-implement the ideas behind AlphaEvolve by Google.
+The basic idea is to run an evolutionary search to find the best algorithm to suit a particular
+performance criteria. caude-evolve itself doesn't care what type of algorithm, it just runs
+the process:
+
+a) tell AI's to ideate new ideas based on the best ones in evolution.csv (using BRIEF.md as the explanation)
+b) for each idea in "pending" state in the evolution.csv file, get an AI to write the code for it
+c) for each new algorithm code, run evaluator.py on the new code to determine its performance (i.e. fitness) value
+d) save "completed" state in the csv for that algorithm, and record the performance in the csv
+e) go to (a)
+
+Each evolution is like a greenhouse, growing plants one generation at a time. The user must 
+fill out BRIEF.md, algorithm.py (the first "plant"), and evaluator.py, and then claude-evolve
+will take it from there.
+
 
 ## Evaluator Output Specification
 

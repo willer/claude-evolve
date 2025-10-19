@@ -68,7 +68,7 @@ $prompt"
     gemini-pro)
       local ai_output
       # Gemini needs longer timeout as it streams output while working (20 minutes)
-      ai_output=$(timeout 1200 gemini -y -m gemini-2.5-pro -p "$prompt" 2>&1)
+      ai_output=$(timeout 1800 gemini -y -m gemini-2.5-pro -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     gemini-flash)
@@ -93,8 +93,9 @@ $prompt"
       local ai_exit_code=$?
       ;;
     glm-zai)
+      # GLM -- can be slow sometimes
       local ai_output
-      ai_output=$(timeout 1200 opencode -m zai-coding-plan/glm-4.6 run "$prompt" 2>&1)
+      ai_output=$(timeout 1800 opencode -m zai-coding-plan/glm-4.6 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     deepseek-openrouter)

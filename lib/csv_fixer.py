@@ -9,6 +9,31 @@ import csv
 import sys
 import re
 
+def clean_candidate_id(candidate_id):
+    """
+    Clean and normalize a candidate ID.
+    Returns (cleaned_id, was_modified)
+    """
+    if not candidate_id or candidate_id == "id":
+        return candidate_id, False
+
+    original = candidate_id
+    cleaned = candidate_id
+
+    # Strip leading/trailing whitespace
+    cleaned = cleaned.strip()
+
+    # Remove any internal spaces (e.g., "gen01 -001" -> "gen01-001")
+    cleaned = re.sub(r'\s+', '', cleaned)
+
+    # Remove pipe characters and anything before them (line number artifacts)
+    if '|' in cleaned:
+        # Extract the part after the last pipe
+        parts = cleaned.split('|')
+        cleaned = parts[-1].strip()
+
+    return cleaned, (cleaned != original)
+
 def is_valid_candidate_id(candidate_id):
     """
     Check if a candidate ID is valid.
@@ -25,7 +50,7 @@ def is_valid_candidate_id(candidate_id):
     if not candidate_id or candidate_id == "id":
         return True  # Header row
 
-    # Reject IDs containing pipe characters (line number artifacts)
+    # Reject IDs still containing pipe characters after cleaning
     if '|' in candidate_id:
         return False
 
@@ -46,13 +71,14 @@ def fix_csv_format(input_file, output_file):
     """
     Read a CSV file and ensure all fields are properly quoted.
     The csv module handles quoting automatically based on content.
-    Also filters out rows with invalid candidate IDs.
+    Also cleans and validates candidate IDs, filtering out invalid rows.
     """
     with open(input_file, 'r') as infile:
         reader = csv.reader(infile)
         rows = list(reader)
 
     rejected_count = 0
+    cleaned_count = 0
     filtered_rows = []
 
     for i, row in enumerate(rows):
@@ -67,14 +93,27 @@ def fix_csv_format(input_file, output_file):
 
         candidate_id = row[0] if len(row) > 0 else ""
 
-        # Check if candidate ID is valid
-        if not is_valid_candidate_id(candidate_id):
+        # Clean the candidate ID
+        cleaned_id, was_modified = clean_candidate_id(candidate_id)
+
+        if was_modified:
+            cleaned_count += 1
+            print(f"[INFO] Cleaned ID: '{candidate_id}' -> '{cleaned_id}'", file=sys.stderr)
+            row[0] = cleaned_id
+
+        # Check if candidate ID is valid after cleaning
+        if not is_valid_candidate_id(cleaned_id):
             rejected_count += 1
-            print(f"[WARN] Rejecting corrupted record with invalid ID: {candidate_id}", file=sys.stderr)
+            print(f"[WARN] Rejecting corrupted record with invalid ID: {candidate_id} (cleaned: {cleaned_id})", file=sys.stderr)
             continue
+
+        # Trim whitespace from all other fields
+        row = [field.strip() if isinstance(field, str) else field for field in row]
 
         filtered_rows.append(row)
 
+    if cleaned_count > 0:
+        print(f"[INFO] Cleaned {cleaned_count} IDs (removed spaces, pipes, etc.)", file=sys.stderr)
     if rejected_count > 0:
         print(f"[INFO] Filtered out {rejected_count} corrupted records", file=sys.stderr)
 
