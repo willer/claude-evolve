@@ -611,19 +611,34 @@ with EvolutionCSV('$FULL_CSV_PATH') as csv:
     csv.update_candidate_status('$candidate_id', 'failed-ai-retry')
 " 2>/dev/null || true
   elif [[ $process_exit_code -eq 78 ]]; then
-    # Missing parent; mark as failed-parent-missing for clarity
-    echo "[WORKER-$$] Parent missing for $candidate_id - marking failed-parent-missing"
+    # Missing parent; mark child as failed and auto-recover parent
+    echo "[WORKER-$$] Parent '$parent_id' missing for $candidate_id"
+    echo "[WORKER-$$] Marking $candidate_id as failed-parent-missing"
+    echo "[WORKER-$$] Auto-recovering: marking parent '$parent_id' as pending"
+
     "$PYTHON_CMD" -c "
 import sys
 sys.path.insert(0, '$SCRIPT_DIR/..')
 from lib.evolution_csv import EvolutionCSV
 with EvolutionCSV('$FULL_CSV_PATH') as csv:
+    # Mark child as failed
     csv.update_candidate_status('$candidate_id', 'failed-parent-missing')
-" 2>/dev/null || true
-    # Clear current candidate to avoid cleanup resetting it
+
+    # Auto-recover: mark parent as pending so it gets processed
+    parent_info = csv.get_candidate_info('$parent_id')
+    if parent_info:
+        parent_status = parent_info.get('status', '').lower()
+        if parent_status in ('', 'skipped', 'failed-parent-missing'):
+            csv.update_candidate_status('$parent_id', 'pending')
+            print(f'Auto-recovered parent $parent_id: {parent_status} -> pending', file=sys.stderr)
+        else:
+            print(f'Parent $parent_id has status: {parent_status} (not auto-recovering)', file=sys.stderr)
+    else:
+        print(f'Warning: parent $parent_id not found in CSV', file=sys.stderr)
+" 2>&1 | grep -E "Auto-recovered|Parent.*status|Warning" || true
+
+    # Clear current candidate and continue to next (don't break)
     CURRENT_CANDIDATE_ID=""
-    # Stop looping so we don't keep retrying for missing dependency
-    break
   else
     echo "[WORKER-$$] Failed to process $candidate_id"
     # Other failures (evaluation errors, etc) mark as failed
