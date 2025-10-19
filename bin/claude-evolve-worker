@@ -593,10 +593,13 @@ with EvolutionCSV('$FULL_CSV_PATH') as csv:
   
   # Set current candidate for cleanup
   CURRENT_CANDIDATE_ID="$candidate_id"
-  
+
   # Process the candidate and capture exit code
+  # Use 'set +e' temporarily to prevent script exit on non-zero return
+  set +e
   process_candidate "$candidate_id" "$parent_id" "$description"
   process_exit_code=$?
+  set -e
   
   if [[ $process_exit_code -eq 0 ]]; then
     echo "[WORKER-$$] Successfully processed $candidate_id"

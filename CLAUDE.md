@@ -15,6 +15,10 @@ Each evolution is like a greenhouse, growing plants one generation at a time. Th
 fill out BRIEF.md, algorithm.py (the first "plant"), and evaluator.py, and then claude-evolve
 will take it from there.
 
+Because this is an npm package, it's deployed via npm publish. claude-evolve auto-updates itself
+when the mai script is run.  If there's debugging of a production evolution run, it's likely
+to be on a server, even if equivalent paths exist on the development machine.
+
 
 ## Evaluator Output Specification
 
