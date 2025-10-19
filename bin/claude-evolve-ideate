@@ -95,66 +95,76 @@ call_ai_for_ideation() {
     gen_num=1
   fi
   
-  # Get the current row count before any modifications
-  local original_csv_count
+  # Make a backup of the pre-populated temp CSV (which includes stub rows from caller)
+  # This preserves the stub rows that the caller added
+  local temp_csv_backup="${temp_csv_file}.backup"
   if [[ -f "$temp_csv_file" ]]; then
-    original_csv_count=$(grep -v '^[[:space:]]*$' "$temp_csv_file" | tail -n +2 | wc -l)
+    cp "$temp_csv_file" "$temp_csv_backup"
   else
-    original_csv_count=0
+    echo "[ERROR] Temp CSV file not found at start: $temp_csv_file" >&2
+    return 1
   fi
-  
-  
+
+  # Get the current row count before any modifications (from the pre-populated file with stubs)
+  local original_csv_count
+  original_csv_count=$(grep -v '^[[:space:]]*$' "$temp_csv_file" | tail -n +2 | wc -l)
+
+  echo "[DEBUG] Pre-populated temp CSV has $original_csv_count rows (includes stub rows with placeholders)" >&2
+
   # Get models for ideation
   local model_list
   model_list=$(get_models_for_command "ideate")
   local models=()
   read -ra models <<< "$model_list"
-  
+
   if [[ ${#models[@]} -eq 0 ]]; then
     echo "[ERROR] No models configured for ideation" >&2
+    rm -f "$temp_csv_backup"
     return 1
   fi
-  
+
   # Calculate starting index for round-robin
   local num_models=${#models[@]}
   local start_index=$((gen_num % num_models))
-  
+
   # Create ordered list based on round-robin
   local ordered_models=()
   for ((i=0; i<num_models; i++)); do
     local idx=$(((start_index + i) % num_models))
     ordered_models+=("${models[$idx]}")
   done
-  
+
   echo "[AI] Model order for ideate (round-robin): ${ordered_models[*]}" >&2
-  
+
   # Try each model until CSV changes
   for model in "${ordered_models[@]}"; do
     echo "[AI] Attempting ideate with $model" >&2
 
-    # Restore temp CSV before each attempt (in case previous model corrupted it)
-    # This ensures each model starts with the original data
-    if [[ -f "$FULL_CSV_PATH" ]]; then
-      cp "$FULL_CSV_PATH" "$temp_csv_file"
-      # Recapture original count in case it changed
-      original_csv_count=$(grep -v '^[[:space:]]*$' "$temp_csv_file" | tail -n +2 | wc -l)
-    fi
+    # Restore temp CSV from backup before each attempt (in case previous model corrupted it)
+    # This preserves the stub rows that the caller pre-populated
+    cp "$temp_csv_backup" "$temp_csv_file"
 
     # Call the model directly
     local ai_output
     ai_output=$(call_ai_model_configured "$model" "$prompt")
     local ai_exit_code=$?
 
-    # Check if the file was modified AND has correct count
+    # Check if the file was modified correctly
     if [[ -f "$temp_csv_file" ]]; then
       local new_csv_count
       new_csv_count=$(grep -v '^[[:space:]]*$' "$temp_csv_file" | tail -n +2 | wc -l)
       local added_count=$((new_csv_count - original_csv_count))
 
-      if [[ $added_count -gt 0 ]]; then
-        # Validate count BEFORE accepting
-        if [[ $added_count -eq $expected_count ]]; then
-          echo "[INFO] CSV modified by $model: added $added_count/$expected_count rows ✓" >&2
+      echo "[DEBUG] After $model: original=$original_csv_count, new=$new_csv_count, added=$added_count" >&2
+
+      # Check if row count is correct (should be same since we're editing stubs, not adding)
+      if [[ $new_csv_count -eq $original_csv_count ]]; then
+        # Count remaining placeholders - there should be none if AI did its job
+        local placeholder_count
+        placeholder_count=$(grep -c "PLACEHOLDER" "$temp_csv_file" 2>/dev/null || echo "0")
+
+        if [[ $placeholder_count -eq 0 ]]; then
+          echo "[INFO] CSV modified by $model: filled $expected_count placeholder rows ✓" >&2
 
           # Post-process to ensure all description fields are quoted
           local fixed_csv_file="${temp_csv_file}.fixed"
@@ -167,13 +177,22 @@ call_ai_for_ideation() {
             echo "[WARN] CSV format validation failed, using original" >&2
           fi
 
+          # Clean up backup file
+          rm -f "$temp_csv_backup"
+
           # Echo the successful model name for caller to capture
           echo "$model"
           return 0
         else
-          echo "[WARN] $model added wrong count: $added_count (expected $expected_count) - trying next model" >&2
-          # Continue to next model - maybe another will get it right
+          echo "[WARN] $model left $placeholder_count placeholders unfilled - trying next model" >&2
+          # Continue to next model
         fi
+      elif [[ $added_count -lt 0 ]]; then
+        echo "[WARN] $model deleted rows ($added_count) - trying next model" >&2
+        # Continue to next model
+      elif [[ $added_count -gt 0 ]]; then
+        echo "[WARN] $model added extra rows ($added_count) instead of editing stubs - trying next model" >&2
+        # Continue to next model
       else
         echo "[INFO] CSV unchanged after $model (exit code: $ai_exit_code)" >&2
         # Log last few lines of AI output to help debug why it succeeded but didn't change the file
@@ -191,6 +210,7 @@ call_ai_for_ideation() {
   done
   
   # All models tried, none changed the file
+  rm -f "$temp_csv_backup"
   echo "[ERROR] All AI models failed to generate ideas" >&2
   return 1
 }
