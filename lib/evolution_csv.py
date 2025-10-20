@@ -153,7 +153,8 @@ class EvolutionCSV:
         for i in range(len(rows) - 1, start_idx - 1, -1):
             row = rows[i]
             if self.is_pending_candidate(row):
-                candidate_id = row[0].strip()
+                # Strip both whitespace and quotes to handle CSV corruption
+                candidate_id = row[0].strip().strip('"')
                 current_status = row[4].strip() if len(row) > 4 else ''
                 pending.append((candidate_id, current_status))
 
@@ -181,7 +182,8 @@ class EvolutionCSV:
             row = rows[i]
 
             if self.is_pending_candidate(row):
-                candidate_id = row[0].strip()
+                # Strip both whitespace and quotes to handle CSV corruption
+                candidate_id = row[0].strip().strip('"')
                 original_status = row[4].strip() if len(row) > 4 else ''
 
                 # Ensure row has at least 5 columns
@@ -335,7 +337,7 @@ class EvolutionCSV:
         for row in rows[start_idx:]:
             if self.is_valid_candidate_row(row) and row[0].strip().strip('"') == candidate_id.strip().strip('"'):
                 return {
-                    'id': row[0].strip() if len(row) > 0 else '',
+                    'id': row[0].strip().strip('"') if len(row) > 0 else '',
                     'basedOnId': row[1].strip() if len(row) > 1 else '',
                     'description': row[2].strip() if len(row) > 2 else '',
                     'performance': row[3].strip() if len(row) > 3 else '',
