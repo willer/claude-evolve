@@ -378,6 +378,12 @@ try:
         if len(rows[i]) > 4 and rows[i][4] == 'running':
             rows[i][4] = ''
             changed_count += 1
+
+    # Reset failed-parent-missing to pending at startup - give them another chance
+    for i in range(1, len(rows)):
+        if len(rows[i]) > 4 and rows[i][4] == 'failed-parent-missing':
+            rows[i][4] = 'pending'
+            changed_count += 1
     
     # Check for missing Python files for completed/failed candidates
     for i in range(1, len(rows)):
@@ -577,43 +583,17 @@ while true; do
     if [[ -f "$FULL_CSV_PATH" && ${#worker_pids[@]} -eq 0 ]]; then
       echo "[DISPATCHER] Checking for stuck candidates (no active workers)..."
       "$PYTHON_CMD" -c "
-import csv
 import sys
-from pathlib import Path
+sys.path.insert(0, '$SCRIPT_DIR/..')
+from lib.evolution_csv import EvolutionCSV
 
-csv_file = '$FULL_CSV_PATH'
-rows = []
-
-with open(csv_file, 'r') as f:
-    rows = list(csv.reader(f))
-
-reset_count = 0
-has_header = rows and rows[0] and rows[0][0].lower() == 'id'
-start_idx = 1 if has_header else 0
-
-for i in range(start_idx, len(rows)):
-    if len(rows[i]) > 4:
-        status = rows[i][4].strip() if rows[i][4] else ''
-        candidate_id = rows[i][0] if rows[i] else ''
-
-        # Reset 'running' when no workers are active
-        if status == 'running':
-            print(f'[INFO] Resetting stuck running candidate: {candidate_id}', file=sys.stderr)
-            rows[i][4] = 'pending'
-            reset_count += 1
-        # Reset unknown statuses like 'ready'
-        elif status not in ['', 'pending', 'complete', 'failed', 'failed-ai-retry',
-                           'failed-retry1', 'failed-retry2', 'failed-retry3', 'skipped']:
-            print(f'[WARN] Resetting unknown status \"{status}\" to pending: {candidate_id}', file=sys.stderr)
-            rows[i][4] = 'pending'
-            reset_count += 1
-
-if reset_count > 0:
-    with open(csv_file + '.tmp', 'w', newline='') as f:
-        csv.writer(f).writerows(rows)
-    Path(csv_file + '.tmp').rename(csv_file)
-    print(f'[INFO] Reset {reset_count} stuck/unknown candidates to pending', file=sys.stderr)
-" || true
+try:
+    with EvolutionCSV('$FULL_CSV_PATH') as csv:
+        reset_count = csv.reset_stuck_candidates()
+except Exception as e:
+    print(f'[ERROR] Failed to reset stuck candidates: {e}', file=sys.stderr)
+    sys.exit(1)
+"
     fi
   fi
 
@@ -635,21 +615,17 @@ if reset_count > 0:
     # Before blocking, do final check for stuck work (immediate, not periodic)
     echo "[DISPATCHER] Performing final verification for stuck candidates..."
     stuck_work_count=$("$PYTHON_CMD" -c "
-import csv
-csv_file = '$FULL_CSV_PATH'
-stuck = 0
-with open(csv_file, 'r') as f:
-    reader = csv.reader(f)
-    next(reader, None)  # Skip header
-    for row in reader:
-        if len(row) > 4:
-            status = row[4].strip() if row[4] else ''
-            # Count running, unknown, and retry statuses
-            if status in ['running'] or \
-               (status and status not in ['', 'pending', 'complete', 'failed', 'skipped',
-                                          'failed-ai-retry', 'failed-retry1', 'failed-retry2', 'failed-retry3']):
-                stuck += 1
-print(stuck)
+import sys
+sys.path.insert(0, '$SCRIPT_DIR/..')
+from lib.evolution_csv import EvolutionCSV
+
+try:
+    with EvolutionCSV('$FULL_CSV_PATH') as csv:
+        stuck = csv.count_stuck_candidates()
+        print(stuck)
+except Exception as e:
+    print(f'[ERROR] Failed to count stuck candidates: {e}', file=sys.stderr)
+    print('0')  # Default to 0 on error
 " 2>/dev/null || echo "0")
 
     if [[ $stuck_work_count -gt 0 ]]; then

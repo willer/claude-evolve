@@ -297,13 +297,22 @@ with EvolutionCSV('$FULL_CSV_PATH') as csv:
     if [[ "$current_status" == "complete" ]]; then
       echo "[WORKER-$$] Already evaluated - skipping"
       # Reset status back to complete since get_next_pending_candidate() set it to running
-      "$PYTHON_CMD" -c "
+      if ! "$PYTHON_CMD" -c "
 import sys
 sys.path.insert(0, '$SCRIPT_DIR/..')
 from lib.evolution_csv import EvolutionCSV
 with EvolutionCSV('$FULL_CSV_PATH') as csv:
-    csv.update_candidate_status('$candidate_id', 'complete')
-" 2>/dev/null || true
+    success = csv.update_candidate_status('$candidate_id', 'complete')
+    if not success:
+        print(f'ERROR: Failed to update status for $candidate_id', file=sys.stderr)
+        sys.exit(1)
+"; then
+        echo "[WORKER-$$] ERROR: Failed to reset status to complete for $candidate_id" >&2
+        # Don't clear CURRENT_CANDIDATE_ID so cleanup handler can try again
+        return 1
+      fi
+
+      echo "[WORKER-$$] Status confirmed as complete"
       # Clear CURRENT_CANDIDATE_ID before returning to prevent cleanup from interfering
       CURRENT_CANDIDATE_ID=""
       return 0

@@ -416,6 +416,72 @@ class EvolutionCSV:
 
         return fixed_count
 
+    def reset_stuck_candidates(self) -> int:
+        """
+        Reset 'running' candidates and unknown statuses to 'pending'.
+        Should only be called when no workers are active.
+        Returns the number of candidates reset.
+        """
+        rows = self._read_csv()
+        if not rows:
+            return 0
+
+        reset_count = 0
+        has_header = rows and rows[0] and rows[0][0].lower() == 'id'
+        start_idx = 1 if has_header else 0
+
+        valid_statuses = {'', 'pending', 'complete', 'failed', 'failed-ai-retry',
+                         'failed-retry1', 'failed-retry2', 'failed-retry3', 'skipped',
+                         'failed-parent-missing', 'running'}
+
+        for i in range(start_idx, len(rows)):
+            if len(rows[i]) > 4:
+                status = rows[i][4].strip() if rows[i][4] else ''
+                candidate_id = rows[i][0] if rows[i] else ''
+
+                # Reset 'running' when no workers are active
+                if status == 'running':
+                    print(f'[INFO] Resetting stuck running candidate: {candidate_id}', file=sys.stderr)
+                    rows[i][4] = 'pending'
+                    reset_count += 1
+                # Reset unknown statuses
+                elif status not in valid_statuses:
+                    print(f'[WARN] Resetting unknown status "{status}" to pending: {candidate_id}', file=sys.stderr)
+                    rows[i][4] = 'pending'
+                    reset_count += 1
+
+        if reset_count > 0:
+            self._write_csv(rows)
+            print(f'[INFO] Reset {reset_count} stuck/unknown candidates to pending', file=sys.stderr)
+
+        return reset_count
+
+    def count_stuck_candidates(self) -> int:
+        """
+        Count candidates that are stuck (running or have unknown status).
+        Returns the number of stuck candidates.
+        """
+        rows = self._read_csv()
+        if not rows:
+            return 0
+
+        stuck = 0
+        has_header = rows and rows[0] and rows[0][0].lower() == 'id'
+        start_idx = 1 if has_header else 0
+
+        valid_statuses = {'', 'pending', 'complete', 'failed', 'failed-ai-retry',
+                         'failed-retry1', 'failed-retry2', 'failed-retry3', 'skipped',
+                         'failed-parent-missing'}
+
+        for i in range(start_idx, len(rows)):
+            if len(rows[i]) > 4:
+                status = rows[i][4].strip() if rows[i][4] else ''
+                # Count running and unknown statuses
+                if status == 'running' or (status and status not in valid_statuses):
+                    stuck += 1
+
+        return stuck
+
     def has_pending_work(self) -> bool:
         """Check if there are any pending candidates. Used by dispatcher."""
         return self.count_pending_candidates() > 0
