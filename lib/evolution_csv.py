@@ -205,27 +205,33 @@ class EvolutionCSV:
         rows = self._read_csv()
         if not rows:
             return False
-            
+
         updated = False
-        
+        update_count = 0
+
         # Skip header row if it exists
         start_idx = 1 if rows and rows[0] and rows[0][0].lower() == 'id' else 0
-        
+
+        # Update ALL matching rows (in case of duplicates)
         for i in range(start_idx, len(rows)):
             row = rows[i]
-            
+
             if self.is_valid_candidate_row(row) and row[0].strip().strip('"') == candidate_id.strip().strip('"'):
                 # Ensure row has at least 5 columns
                 while len(row) < 5:
                     row.append('')
-                    
+
                 row[4] = new_status
                 updated = True
-                break
-                
+                update_count += 1
+                # Don't break - continue to update ALL instances (handles duplicates)
+
+        if update_count > 1:
+            print(f'[WARN] Updated {update_count} duplicate entries for candidate {candidate_id} to status {new_status}', file=sys.stderr)
+
         if updated:
             self._write_csv(rows)
-            
+
         return updated
         
     def update_candidate_performance(self, candidate_id: str, performance: str) -> bool:
@@ -233,27 +239,33 @@ class EvolutionCSV:
         rows = self._read_csv()
         if not rows:
             return False
-            
+
         updated = False
-        
+        update_count = 0
+
         # Skip header row if it exists
         start_idx = 1 if rows and rows[0] and rows[0][0].lower() == 'id' else 0
-        
+
+        # Update ALL matching rows (in case of duplicates)
         for i in range(start_idx, len(rows)):
             row = rows[i]
-            
+
             if self.is_valid_candidate_row(row) and row[0].strip().strip('"') == candidate_id.strip().strip('"'):
                 # Ensure row has at least 4 columns
                 while len(row) < 4:
                     row.append('')
-                    
+
                 row[3] = performance  # Performance is column 4 (index 3)
                 updated = True
-                break
-                
+                update_count += 1
+                # Don't break - continue to update ALL instances (handles duplicates)
+
+        if update_count > 1:
+            print(f'[WARN] Updated {update_count} duplicate entries for candidate {candidate_id} performance', file=sys.stderr)
+
         if updated:
             self._write_csv(rows)
-            
+
         return updated
         
     def update_candidate_field(self, candidate_id: str, field_name: str, value: str) -> bool:
@@ -304,8 +316,10 @@ class EvolutionCSV:
         
         # Update the candidate's field
         updated = False
+        update_count = 0
         start_idx = 1 if has_header else 0
-        
+
+        # Update ALL matching rows (in case of duplicates)
         for i in range(start_idx, len(rows)):
             row = rows[i]
             # Strip quotes from both stored ID and search ID for comparison
@@ -315,14 +329,18 @@ class EvolutionCSV:
                 # Ensure row has enough columns
                 while len(row) <= field_index:
                     row.append('')
-                    
+
                 row[field_index] = value
                 updated = True
-                break
-                
+                update_count += 1
+                # Don't break - continue to update ALL instances (handles duplicates)
+
+        if update_count > 1:
+            print(f'[WARN] Updated {update_count} duplicate entries for candidate {candidate_id} field {field_name}', file=sys.stderr)
+
         if updated:
             self._write_csv(rows)
-            
+
         return updated
         
     def get_candidate_info(self, candidate_id: str) -> Optional[Dict[str, str]]:
@@ -492,6 +510,49 @@ class EvolutionCSV:
                     stuck += 1
 
         return stuck
+
+    def remove_duplicate_candidates(self) -> int:
+        """
+        Remove duplicate candidate entries, keeping only the first occurrence.
+        Returns the number of duplicates removed.
+        """
+        rows = self._read_csv()
+        if not rows:
+            return 0
+
+        has_header = rows and rows[0] and rows[0][0].lower() == 'id'
+        start_idx = 1 if has_header else 0
+
+        # Track seen IDs and their row indices
+        seen_ids = {}
+        rows_to_remove = []
+
+        for i in range(start_idx, len(rows)):
+            if len(rows[i]) > 0:
+                candidate_id = rows[i][0].strip().strip('"')
+
+                if candidate_id in seen_ids:
+                    # Duplicate found
+                    first_row = seen_ids[candidate_id]
+                    status_first = rows[first_row][4] if len(rows[first_row]) > 4 else ''
+                    status_dup = rows[i][4] if len(rows[i]) > 4 else ''
+
+                    print(f'[WARN] Removing duplicate candidate {candidate_id}:', file=sys.stderr)
+                    print(f'[WARN]   Keeping row {first_row}: status={status_first}', file=sys.stderr)
+                    print(f'[WARN]   Removing row {i}: status={status_dup}', file=sys.stderr)
+                    rows_to_remove.append(i)
+                else:
+                    seen_ids[candidate_id] = i
+
+        if rows_to_remove:
+            # Remove rows in reverse order to maintain indices
+            for idx in sorted(rows_to_remove, reverse=True):
+                del rows[idx]
+
+            self._write_csv(rows)
+            print(f'[INFO] Removed {len(rows_to_remove)} duplicate candidate(s)', file=sys.stderr)
+
+        return len(rows_to_remove)
 
     def has_pending_work(self) -> bool:
         """Check if there are any pending candidates. Used by dispatcher."""

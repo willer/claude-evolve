@@ -295,8 +295,23 @@ get_csv_stats() {
 echo "[DISPATCHER] Starting unified evolution engine"
 echo "[DISPATCHER] Configuration: max_workers=$MAX_WORKERS, timeout=${timeout_seconds:-none}"
 
-# Clean up any stuck 'running' statuses at startup
+# Clean up any stuck 'running' statuses and duplicates at startup
 if [[ -f "$FULL_CSV_PATH" ]]; then
+  echo "[DISPATCHER] Checking for duplicate candidates..."
+  "$PYTHON_CMD" -c "
+import sys
+sys.path.insert(0, '$SCRIPT_DIR/..')
+from lib.evolution_csv import EvolutionCSV
+
+try:
+    with EvolutionCSV('$FULL_CSV_PATH') as csv:
+        dup_count = csv.remove_duplicate_candidates()
+        if dup_count == 0:
+            print('[DISPATCHER] No duplicate candidates found', file=sys.stderr)
+except Exception as e:
+    print(f'[ERROR] Failed to remove duplicates: {e}', file=sys.stderr)
+" 2>&1 || true
+
   echo "[DISPATCHER] Resetting any stuck 'running' candidates to 'pending'..."
   if "$SCRIPT_DIR/claude-evolve-edit" running pending >/dev/null 2>&1; then
     echo "[DISPATCHER] Successfully reset stuck candidates"
