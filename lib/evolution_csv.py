@@ -434,14 +434,25 @@ class EvolutionCSV:
                          'failed-retry1', 'failed-retry2', 'failed-retry3', 'skipped',
                          'failed-parent-missing', 'running'}
 
+        # Track seen IDs to detect duplicates
+        seen_ids = {}
+
         for i in range(start_idx, len(rows)):
             if len(rows[i]) > 4:
                 status = rows[i][4].strip() if rows[i][4] else ''
-                candidate_id = rows[i][0] if rows[i] else ''
+                candidate_id = rows[i][0].strip().strip('"') if rows[i] else ''
+
+                # Check for duplicate IDs
+                if candidate_id in seen_ids:
+                    print(f'[WARN] Duplicate candidate ID found: {candidate_id} at rows {seen_ids[candidate_id]} and {i}', file=sys.stderr)
+                    print(f'[WARN] Row {seen_ids[candidate_id]}: status={rows[seen_ids[candidate_id]][4] if len(rows[seen_ids[candidate_id]]) > 4 else "?"}', file=sys.stderr)
+                    print(f'[WARN] Row {i}: status={status}', file=sys.stderr)
+                else:
+                    seen_ids[candidate_id] = i
 
                 # Reset 'running' when no workers are active
                 if status == 'running':
-                    print(f'[INFO] Resetting stuck running candidate: {candidate_id}', file=sys.stderr)
+                    print(f'[INFO] Resetting stuck running candidate: {candidate_id} (row {i})', file=sys.stderr)
                     rows[i][4] = 'pending'
                     reset_count += 1
                 # Reset unknown statuses

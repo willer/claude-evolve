@@ -600,11 +600,17 @@ with EvolutionCSV('$FULL_CSV_PATH') as csv:
     if rows:
         start_idx = 1 if rows and rows[0] and rows[0][0].lower() == 'id' else 0
         status_count = {}
+        running_candidates = []
         for row in rows[start_idx:]:
             if len(row) > 4:
                 status = row[4].strip() or 'pending'
                 status_count[status] = status_count.get(status, 0) + 1
+                if status == 'running':
+                    candidate_id = row[0].strip().strip('\"') if len(row) > 0 else '?'
+                    running_candidates.append(candidate_id)
         print(f'Status counts: {status_count}', file=sys.stderr)
+        if running_candidates:
+            print(f'Running candidates: {running_candidates}', file=sys.stderr)
 " 2>&1 || true
 
   # Try to claim a pending candidate
