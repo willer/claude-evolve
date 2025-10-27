@@ -362,6 +362,12 @@ print(max_id + 1)
 "
 }
 
+# AIDEV-NOTE: This function had a critical race condition bug that caused wrong rows to be updated
+# The bug occurred when parallel processes modified the main CSV between temp CSV creation and append.
+# FIX: Now requires original_main_csv_lines parameter (6th arg) to track the exact line count at copy time.
+# This ensures we always append the correct new rows from temp CSV, regardless of concurrent modifications.
+# Without this fix, the system would update wrong IDs (e.g., claim to add gen81 but update gen80 instead).
+#
 # Validate that AI directly modified the CSV file
 validate_direct_csv_modification() {
   local temp_csv="$1"
@@ -369,6 +375,7 @@ validate_direct_csv_modification() {
   local idea_type="$3"
   local ai_model="${4:-}"  # AI model that generated the ideas
   local expected_ids="${5:-}"  # Optional: comma or space separated list of expected IDs
+  local original_main_csv_lines="${6:-}"  # CRITICAL: Line count of main CSV when temp CSV was created
 
   # Check if the file was actually modified
   if [[ ! -f "$temp_csv" ]]; then
@@ -376,32 +383,37 @@ validate_direct_csv_modification() {
     return 1
   fi
 
-  # Get the count before modification from the temp CSV (which was copied from original before AI ran)
-  # We need to track this before the AI runs by reading from the beginning state
-  # First, get a fresh count from the current main CSV (which reflects any previous operations in this session)
-  local current_original_count
-  current_original_count=$(grep -v '^[[:space:]]*$' "$FULL_CSV_PATH" | tail -n +2 | wc -l | tr -d '[:space:]')
-
   # Count data rows in the modified temp CSV
   local new_count
   new_count=$(grep -v '^[[:space:]]*$' "$temp_csv" | tail -n +2 | wc -l | tr -d '[:space:]')
 
+  # If original line count wasn't provided, fall back to current main CSV count (old behavior)
+  # This preserves backward compatibility but may have race conditions
+  if [[ -z "$original_main_csv_lines" ]]; then
+    echo "[WARN] No original line count provided - using current main CSV count (may cause race conditions)" >&2
+    original_main_csv_lines=$(wc -l < "$FULL_CSV_PATH" | tr -d '[:space:]')
+  fi
+
+  # Calculate how many data rows the temp CSV started with (before stubs were added)
+  # This should match the original main CSV line count (including header)
+  local original_data_rows=$((original_main_csv_lines - 1))  # Subtract header
+
+  # Calculate how many rows were actually added to temp CSV
+  local added_count=$((new_count - original_data_rows))
 
   # Check if AI overwrote the file instead of appending
-  if [[ $new_count -lt $current_original_count ]]; then
-    echo "[ERROR] AI overwrote the CSV file instead of appending ($new_count < $current_original_count)" >&2
+  if [[ $new_count -lt $original_data_rows ]]; then
+    echo "[ERROR] AI overwrote the CSV file instead of appending ($new_count < $original_data_rows)" >&2
     head -10 "$temp_csv" >&2
     return 1
   fi
 
   # Check if no changes were made
-  if [[ $new_count -eq $current_original_count ]]; then
-    echo "[ERROR] CSV file wasn't modified - same number of data rows ($new_count = $current_original_count)" >&2
+  if [[ $new_count -eq $original_data_rows ]]; then
+    echo "[ERROR] CSV file wasn't modified - same number of data rows ($new_count = $original_data_rows)" >&2
     head -10 "$temp_csv" >&2
     return 1
   fi
-
-  local added_count=$((new_count - current_original_count))
   if [[ $added_count -ne $expected_count ]]; then
     echo "[ERROR] Expected to add $expected_count ideas but only added $added_count" >&2
     echo "[ERROR] Ideation failed - rejecting partial results to prevent endless loops" >&2
@@ -434,43 +446,47 @@ validate_direct_csv_modification() {
 
   # Use proper locking to safely update the CSV
   echo "[INFO] Acquiring CSV lock to apply changes..."
-  
+
   # Set the lockfile path
   CSV_LOCKFILE="$FULL_EVOLUTION_DIR/.evolution.csv.lock"
-  
+
   if ! acquire_csv_lock; then
     echo "[ERROR] Failed to acquire CSV lock for update" >&2
     rm -f "$temp_csv"
     return 1
   fi
-  
-  # Get just the new entries (skip header and existing entries)
-  local original_line_count=$(wc -l < "$FULL_CSV_PATH" | tr -d '[:space:]')
-  
-  # Append only the new lines from temp CSV to the main CSV
-  tail -n +$((original_line_count + 1)) "$temp_csv" >> "$FULL_CSV_PATH"
-  
+
+  # CRITICAL FIX: Use the original line count (when temp CSV was created) to determine which lines to append
+  # This prevents race conditions where other processes modify the main CSV between temp CSV creation and append
+  # Append only the NEW lines from temp CSV (those added after the original content)
+  echo "[DEBUG] Appending last $added_count rows from temp CSV (from line $((original_main_csv_lines + 1)) onwards)" >&2
+  tail -n +$((original_main_csv_lines + 1)) "$temp_csv" >> "$FULL_CSV_PATH"
+
+  # Get the IDs that were actually added by reading them from temp CSV (not main CSV)
+  # This avoids race conditions where other processes add rows to main CSV
+  local new_ids
+  new_ids=$(tail -n $added_count "$temp_csv" | grep -v "^id," | cut -d',' -f1 | tr -d '"')
+  echo "[DEBUG] IDs being added: $new_ids" >&2
+
   # Clean up temp file
   rm -f "$temp_csv"
-  
+
   # Update idea-LLM field for newly added rows if model is known
   if [[ -n "$ai_model" ]]; then
     echo "[INFO] Recording that $ai_model generated the ideas" >&2
-    # Get the IDs of the newly added rows (skip header line and strip quotes)
-    local new_ids
-    new_ids=$(tail -n $added_count "$FULL_CSV_PATH" | grep -v "^id," | cut -d',' -f1 | tr -d '"')
-    
+
     # Update each new row with the model that generated it
     for id in $new_ids; do
       if [[ -n "$id" && "$id" != "id" ]]; then
+        echo "[DEBUG] Updating field for $id" >&2
         "$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$FULL_CSV_PATH" field "$id" "idea-LLM" "$ai_model" || echo "[WARN] Failed to update $id" >&2
       fi
     done
   fi
-  
+
   # Release the lock
   release_csv_lock
-  
+
   echo "[INFO] Successfully added $added_count $idea_type ideas to CSV"
   return 0
 }
@@ -1001,6 +1017,12 @@ generate_novel_ideas_direct() {
   local temp_csv="$FULL_EVOLUTION_DIR/temp-csv-$$.csv"
   cp "$FULL_CSV_PATH" "$temp_csv"
 
+  # CRITICAL: Capture the original line count immediately after copying
+  # This is needed to correctly append rows later, preventing race conditions
+  local original_csv_lines
+  original_csv_lines=$(wc -l < "$temp_csv" | tr -d '[:space:]')
+  echo "[DEBUG] Original CSV has $original_csv_lines lines (including header)" >&2
+
   # Pre-populate the CSV with stub rows containing the correct IDs
   # This ensures the AI can't possibly use wrong IDs - it just fills in descriptions
   echo "[INFO] Pre-populating CSV with stub rows: $required_ids_str"
@@ -1098,10 +1120,10 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
   
   # Restore working directory
   cd "$original_pwd"
-  
 
   # Validate that the CSV file was actually modified with correct IDs
-  if ! validate_direct_csv_modification "$temp_csv" "$count" "novel" "$ai_response" "$required_ids_str"; then
+  # Pass original_csv_lines to prevent race conditions
+  if ! validate_direct_csv_modification "$temp_csv" "$count" "novel" "$ai_response" "$required_ids_str" "$original_csv_lines"; then
     rm -f "$temp_csv"
     return 1
   fi
@@ -1134,6 +1156,11 @@ generate_hill_climbing_direct() {
   # Create temporary CSV copy in evolution directory (so AI can access it)
   local temp_csv="$FULL_EVOLUTION_DIR/temp-csv-$$.csv"
   cp "$FULL_CSV_PATH" "$temp_csv"
+
+  # CRITICAL: Capture the original line count immediately after copying
+  local original_csv_lines
+  original_csv_lines=$(wc -l < "$temp_csv" | tr -d '[:space:]')
+  echo "[DEBUG] Original CSV has $original_csv_lines lines (including header)" >&2
 
   # Extract just the IDs from top performers for clarity (needed before pre-populating)
   local valid_parent_ids
@@ -1230,10 +1257,10 @@ CRITICAL INSTRUCTIONS:
   
   # Restore working directory
   cd "$original_pwd"
-  
 
   # Validate that the CSV file was actually modified with correct IDs
-  if ! validate_direct_csv_modification "$temp_csv" "$count" "hill-climbing" "$ai_response" "$required_ids_str"; then
+  # Pass original_csv_lines to prevent race conditions
+  if ! validate_direct_csv_modification "$temp_csv" "$count" "hill-climbing" "$ai_response" "$required_ids_str" "$original_csv_lines"; then
     rm -f "$temp_csv"
     return 1
   fi
@@ -1266,6 +1293,11 @@ generate_structural_mutation_direct() {
   # Create temporary CSV copy in evolution directory (so AI can access it)
   local temp_csv="$FULL_EVOLUTION_DIR/temp-csv-$$.csv"
   cp "$FULL_CSV_PATH" "$temp_csv"
+
+  # CRITICAL: Capture the original line count immediately after copying
+  local original_csv_lines
+  original_csv_lines=$(wc -l < "$temp_csv" | tr -d '[:space:]')
+  echo "[DEBUG] Original CSV has $original_csv_lines lines (including header)" >&2
 
   # Extract just the IDs from top performers for clarity (needed before pre-populating)
   local valid_parent_ids
@@ -1352,10 +1384,10 @@ CRITICAL INSTRUCTIONS:
   
   # Restore working directory
   cd "$original_pwd"
-  
 
   # Validate that the CSV file was actually modified with correct IDs
-  if ! validate_direct_csv_modification "$temp_csv" "$count" "structural" "$ai_response" "$required_ids_str"; then
+  # Pass original_csv_lines to prevent race conditions
+  if ! validate_direct_csv_modification "$temp_csv" "$count" "structural" "$ai_response" "$required_ids_str" "$original_csv_lines"; then
     rm -f "$temp_csv"
     return 1
   fi
@@ -1388,6 +1420,11 @@ generate_crossover_direct() {
   # Create temporary CSV copy in evolution directory (so AI can access it)
   local temp_csv="$FULL_EVOLUTION_DIR/temp-csv-$$.csv"
   cp "$FULL_CSV_PATH" "$temp_csv"
+
+  # CRITICAL: Capture the original line count immediately after copying
+  local original_csv_lines
+  original_csv_lines=$(wc -l < "$temp_csv" | tr -d '[:space:]')
+  echo "[DEBUG] Original CSV has $original_csv_lines lines (including header)" >&2
 
   # Extract just the IDs from top performers for clarity (needed before pre-populating)
   local valid_parent_ids
@@ -1474,10 +1511,10 @@ CRITICAL INSTRUCTIONS:
   
   # Restore working directory
   cd "$original_pwd"
-  
 
   # Validate that the CSV file was actually modified with correct IDs
-  if ! validate_direct_csv_modification "$temp_csv" "$count" "crossover" "$ai_response" "$required_ids_str"; then
+  # Pass original_csv_lines to prevent race conditions
+  if ! validate_direct_csv_modification "$temp_csv" "$count" "crossover" "$ai_response" "$required_ids_str" "$original_csv_lines"; then
     rm -f "$temp_csv"
     return 1
   fi
@@ -1496,7 +1533,12 @@ ideate_ai_legacy() {
   # Create temporary CSV copy in evolution directory (so AI can access it)
   local temp_csv="$FULL_EVOLUTION_DIR/temp-csv-$$.csv"
   cp "$FULL_CSV_PATH" "$temp_csv"
-  
+
+  # CRITICAL: Capture the original line count immediately after copying
+  local original_csv_lines
+  original_csv_lines=$(wc -l < "$temp_csv" | tr -d '[:space:]')
+  echo "[DEBUG] Original CSV has $original_csv_lines lines (including header)" >&2
+
   echo "[INFO] Generating $TOTAL_IDEAS ideas (legacy mode)..."
 
   # Get top performers for context
@@ -1580,14 +1622,14 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
   
   # Restore working directory
   cd "$original_pwd"
-  
-  
+
   # Validate that the CSV file was actually modified
-  if ! validate_direct_csv_modification "$temp_csv" "$TOTAL_IDEAS" "mixed" "$ai_response"; then
+  # Pass original_csv_lines to prevent race conditions
+  if ! validate_direct_csv_modification "$temp_csv" "$TOTAL_IDEAS" "mixed" "$ai_response" "" "$original_csv_lines"; then
     rm -f "$temp_csv"
     return 1
   fi
-  
+
   echo "[INFO] Legacy ideas generated"
   return 0
 }
