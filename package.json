@@ -1,6 +1,6 @@
 {
   "name": "claude-evolve",
-  "version": "1.8.8",
+  "version": "1.8.12",
   "bin": {
     "claude-evolve": "./bin/claude-evolve",
     "claude-evolve-main": "./bin/claude-evolve-main",
@@ -9,7 +9,8 @@
     "claude-evolve-run": "./bin/claude-evolve-run",
     "claude-evolve-worker": "./bin/claude-evolve-worker",
     "claude-evolve-analyze": "./bin/claude-evolve-analyze",
-    "claude-evolve-config": "./bin/claude-evolve-config"
+    "claude-evolve-config": "./bin/claude-evolve-config",
+    "claude-evolve-killall": "./bin/claude-evolve-killall"
   },
   "files": [
     "bin/",

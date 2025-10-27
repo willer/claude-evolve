@@ -226,39 +226,42 @@ class AutoStatus:
         try:
             data = self.get_status_data()
         except Exception as e:
-            self.display.clear_screen()
             self.display.move_cursor(1, 1)
+            self.display.clear_line()
             print(f"Error reading status: {e}")
             return
-        
-        # Clear screen and start rendering
-        self.display.clear_screen()
+
+        # Move to top and start rendering (no full clear to avoid flicker)
+        self.display.move_cursor(1, 1)
         row = 1
         
         # Header
         self.display.move_cursor(row, 1)
+        self.display.clear_line()
         header = "Claude Evolution Auto-Status"
-        print(f"\033[1;36m{header.center(self.display.cols)}\033[0m")
+        print(f"\033[1;36m{header.center(self.display.cols)}\033[0m", end="")
         row += 1
-        
+
         # Timestamp and working dir
         self.display.move_cursor(row, 1)
+        self.display.clear_line()
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         working_dir = os.path.basename(data["working_dir"])
-        print(f"Last updated: {timestamp} | Working dir: {working_dir} | Press '\''q'\'' to quit")
+        print(f"Last updated: {timestamp} | Working dir: {working_dir} | Press '\''q'\'' to quit", end="")
         row += 2
-        
+
         # Leader
         self.display.move_cursor(row, 1)
+        self.display.clear_line()
         if data["leader"]:
             leader_id, leader_desc, leader_score = data["leader"]
             # Truncate description for leader
             max_desc_len = self.display.cols - 30
             if len(leader_desc) > max_desc_len:
                 leader_desc = leader_desc[:max_desc_len-3] + "..."
-            print(f"\033[1;32mLeader:\033[0m {leader_id} | {leader_score:.4f} | {leader_desc}")
+            print(f"\033[1;32mLeader:\033[0m {leader_id} | {leader_score:.4f} | {leader_desc}", end="")
         else:
-            print("\033[1;32mLeader:\033[0m None (no completed candidates)")
+            print("\033[1;32mLeader:\033[0m None (no completed candidates)", end="")
         row += 2
         
         # Generation table
@@ -266,14 +269,16 @@ class AutoStatus:
         if generations:
             # Table header
             self.display.move_cursor(row, 1)
+            self.display.clear_line()
             header_fmt = "{:<10} | {:^25} | {:>10} | {:>8} | {}".format(
                 "Generation", "Stats (p/c/f/r/s)", "Top ID", "Score", "Description"
             )
-            print("\033[1m" + header_fmt[:self.display.cols] + "\033[0m")
+            print("\033[1m" + header_fmt[:self.display.cols] + "\033[0m", end="")
             row += 1
-            
+
             self.display.move_cursor(row, 1)
-            print("-" * min(self.display.cols, len(header_fmt)))
+            self.display.clear_line()
+            print("-" * min(self.display.cols, len(header_fmt)), end="")
             row += 1
             # Sort generations numerically by extracting the number after "gen"
             # Put baseline first, then sort numerically
@@ -299,21 +304,22 @@ class AutoStatus:
             for gen in sorted_gens[start_idx:]:
                 if row >= self.display.rows - 1:
                     break
-                
+
                 gen_data = generations[gen]
                 stats_str = f"{gen_data['\''pending'\'']}/{gen_data['\''complete'\'']}/{gen_data['\''failed'\'']}/{gen_data['\''running'\'']}"
                 if gen_data['\''skipped'\''] > 0:
                     stats_str += f"/{gen_data['\''skipped'\'']}"
-                
+
                 self.display.move_cursor(row, 1)
-                
+                self.display.clear_line()
+
                 if gen_data["best"]:
                     best_id, best_desc, best_score = gen_data["best"]
                     # Truncate description
                     max_desc_len = self.display.cols - 55
                     if len(best_desc) > max_desc_len:
                         best_desc = best_desc[:max_desc_len-3] + "..."
-                    
+
                     # Highlight if this is the overall leader
                     if data["leader"] and best_id == data["leader"][0]:
                         line = "{:<10} | {:^25} | \033[32m{:>10}\033[0m | {:>8.4f} | {}".format(
@@ -327,10 +333,16 @@ class AutoStatus:
                     line = "{:<10} | {:^25} | {:>10} | {:>8} | {}".format(
                         gen, stats_str, "-", "-", "No completed candidates"
                     )
-                
-                print(line[:self.display.cols])
+
+                print(line[:self.display.cols], end="")
                 row += 1
-        
+
+            # Clear any remaining lines from previous render
+            while row < self.display.rows:
+                self.display.move_cursor(row, 1)
+                self.display.clear_line()
+                row += 1
+
         # Ensure cursor is at bottom
         self.display.move_cursor(self.display.rows, 1)
         sys.stdout.flush()
@@ -366,8 +378,8 @@ class AutoStatus:
                     sys.stdout.flush()
                     time.sleep(2)  # Give time to read error
                 
-                # Check for input and wait
-                for _ in range(10):  # Check 10 times per second
+                # Check for input and wait (update every 5 seconds)
+                for _ in range(50):  # Check 50 times over 5 seconds
                     if self.check_input():
                         break
                     time.sleep(0.1)

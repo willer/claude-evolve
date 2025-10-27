@@ -407,19 +407,41 @@ with EvolutionCSV('$FULL_CSV_PATH') as csv:
     eval_arg=""
   fi
   local eval_cmd=("$PYTHON_CMD" "$FULL_EVALUATOR_PATH" "$eval_arg")
-  
+
   # Add memory limiting if configured
+  # CRITICAL: Use multiple layers of protection (ulimit + Python wrapper + monitoring)
+  local memory_protection=""
   if [[ -n "$MEMORY_LIMIT_MB" ]] && [[ "$MEMORY_LIMIT_MB" -gt 0 ]]; then
+    # Layer 1: ulimit for hard memory limit (kernel-enforced)
+    # IMPORTANT: Use -m (RSS) not -v (virtual memory) because:
+    # - Neural networks use mmap() which bypasses RLIMIT_AS (-v)
+    # - RSS limit is more reliable for actual memory consumption
+    # Convert MB to KB for ulimit
+    local memory_limit_kb=$((MEMORY_LIMIT_MB * 1024))
+
+    # Try -m first (RSS limit), fall back to -v if not supported
+    if ulimit -m $memory_limit_kb 2>/dev/null; then
+      memory_protection="ulimit -m $memory_limit_kb 2>/dev/null; "
+      echo "[MEMORY] Layer 1: ulimit -m ${memory_limit_kb}KB (RSS limit - catches neural networks)" >&2
+    else
+      memory_protection="ulimit -v $memory_limit_kb 2>/dev/null; "
+      echo "[MEMORY] Layer 1: ulimit -v ${memory_limit_kb}KB (fallback - may not catch neural networks)" >&2
+    fi
+
+    # Layer 2: Python wrapper with PROCESS TREE monitoring (backup protection)
     eval_cmd=("$PYTHON_CMD" "$SCRIPT_DIR/../lib/memory_limit_wrapper.py" "$MEMORY_LIMIT_MB" "${eval_cmd[@]}")
+
+    echo "[MEMORY] Layer 2: Python process tree monitoring (kills entire subprocess tree)" >&2
   fi
-  
+
   # Add timeout if configured
   [[ -n "$timeout_seconds" ]] && eval_cmd=(timeout "$timeout_seconds" "${eval_cmd[@]}")
-  
-  # Run evaluation with tee to both display and capture output
+
+  # Run evaluation with memory protection, tee to both display and capture output
   # Use stdbuf to disable buffering for real-time output
   # IMPORTANT: Use PIPESTATUS to get the exit code of the evaluation command, not tee
-  stdbuf -o0 -e0 "${eval_cmd[@]}" 2>&1 | tee "$eval_output_file" >&2
+  # The subshell ensures ulimit is applied before the command runs
+  stdbuf -o0 -e0 bash -c "${memory_protection}$(printf '%q ' "${eval_cmd[@]}")" 2>&1 | tee "$eval_output_file" >&2
   local eval_exit_code=${PIPESTATUS[0]}  # Get exit code of first command in pipe
   
   if [[ $eval_exit_code -eq 0 ]]; then

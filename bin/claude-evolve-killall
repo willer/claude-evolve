@@ -1,0 +1,80 @@
+#!/bin/bash
+set -e
+
+echo "🛑 Claude Evolve - Kill All Processes"
+echo "======================================"
+echo ""
+
+# Find all claude-evolve related processes
+# Patterns to match:
+# - claude-evolve-* (but NOT this killall script)
+# - evaluator.py and evaluator_*.py (e.g., evaluator_fast.py)
+# - evolution_*.py
+# - algorithm.py
+# - backtest.py
+
+echo "Searching for claude-evolve related processes..."
+echo ""
+
+# Get all matching processes with their PIDs
+# Exclude this script itself and grep
+PROCESSES=$(ps aux | grep -E '(claude-evolve-|evaluator.*\.py|evolution_.*\.py|algorithm\.py|backtest\.py)' | grep -v grep | grep -v 'claude-evolve-killall' || true)
+
+if [[ -z "$PROCESSES" ]]; then
+  echo "✓ No claude-evolve processes found running."
+  exit 0
+fi
+
+echo "Found the following processes:"
+echo "$PROCESSES" | awk '{printf "  PID: %-8s CMD: %s\n", $2, substr($0, index($0,$11))}'
+echo ""
+
+# Extract PIDs
+PIDS=$(echo "$PROCESSES" | awk '{print $2}')
+PID_COUNT=$(echo "$PIDS" | wc -l | tr -d ' ')
+
+echo "Found $PID_COUNT process(es) to terminate."
+echo ""
+
+# Ask for confirmation
+read -p "Do you want to kill these processes? (y/N) " -n 1 -r
+echo ""
+
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+  echo "Aborted."
+  exit 0
+fi
+
+echo ""
+echo "Terminating processes..."
+
+# First try SIGTERM (graceful)
+for PID in $PIDS; do
+  if kill -0 "$PID" 2>/dev/null; then
+    echo "  Sending SIGTERM to PID $PID..."
+    kill -TERM "$PID" 2>/dev/null || echo "    (already terminated)"
+  fi
+done
+
+# Wait a moment for graceful shutdown
+sleep 2
+
+# Check if any are still running and force kill if needed
+REMAINING_PIDS=""
+for PID in $PIDS; do
+  if kill -0 "$PID" 2>/dev/null; then
+    REMAINING_PIDS="$REMAINING_PIDS $PID"
+  fi
+done
+
+if [[ -n "$REMAINING_PIDS" ]]; then
+  echo ""
+  echo "Some processes did not terminate gracefully. Forcing with SIGKILL..."
+  for PID in $REMAINING_PIDS; do
+    echo "  Sending SIGKILL to PID $PID..."
+    kill -9 "$PID" 2>/dev/null || echo "    (already terminated)"
+  done
+fi
+
+echo ""
+echo "✓ All claude-evolve processes terminated."

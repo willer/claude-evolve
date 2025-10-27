@@ -68,6 +68,7 @@ COMMANDS:
     cleanup            Clean up unchanged algorithms and descendants
     clean-corrupted    Remove corrupted records from evolution CSV
     cleanup-duplicates Alias for cleanup (deprecated)
+    killall            Kill all running evolution processes
     help               Show this help message
 
 GLOBAL OPTIONS:
@@ -102,6 +103,7 @@ show_menu() {
   echo "  7) autostatus      - Auto-updating status display (real-time)"
   echo "  8) clean-corrupted - Remove corrupted records from CSV"
   echo "  9) config          - Manage configuration settings"
+  echo "  k) killall         - Kill all running evolution processes"
   echo "  h) help            - Show help message"
   echo "  0) exit            - Exit"
   echo
@@ -154,7 +156,7 @@ check_for_updates
 # Main logic
 if [[ $# -eq 0 ]]; then
   show_menu
-  read -r -p "Enter your choice (1-9, h, 0): " choice
+  read -r -p "Enter your choice (1-9, k, h, 0): " choice
 
   case $choice in
   1) exec "$SCRIPT_DIR/claude-evolve-setup" ;;
@@ -166,13 +168,14 @@ if [[ $# -eq 0 ]]; then
   7) exec "$SCRIPT_DIR/claude-evolve-autostatus" ;;
   8) exec "$SCRIPT_DIR/claude-evolve-clean-corrupted" ;;
   9) exec "$SCRIPT_DIR/claude-evolve-config" ;;
+  k|K) exec "$SCRIPT_DIR/claude-evolve-killall" ;;
   h|H) show_help ;;
   0)
     echo "Goodbye!"
     exit 0
     ;;
   *)
-    echo -e "${RED}Invalid choice. Please select 1-9, h, or 0.${NC}"
+    echo -e "${RED}Invalid choice. Please select 1-9, k, h, or 0.${NC}"
     exit 1
     ;;
   esac
@@ -224,6 +227,10 @@ clean-corrupted)
 config)
   shift
   exec "$SCRIPT_DIR/claude-evolve-config" "$@"
+  ;;
+killall)
+  shift
+  exec "$SCRIPT_DIR/claude-evolve-killall" "$@"
   ;;
 *)
   echo "Unknown command: ${1:-}"
