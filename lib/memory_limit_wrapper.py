@@ -79,11 +79,14 @@ def set_memory_limit(limit_mb: int) -> bool:
         return False
 
 def get_process_tree_memory_native(pid: int) -> float:
-    """Get total memory usage of process tree using native ps command."""
+    """Get total memory usage of entire process group using native ps command."""
     try:
-        # Get all descendant PIDs using ps
+        # Get the process group ID
+        pgid = os.getpgid(pid)
+
+        # Get all processes in the process group
         ps_result = subprocess.run(
-            ["ps", "-o", "pid=,ppid=,rss="],
+            ["ps", "-o", "rss=", "-g", str(pgid)],
             capture_output=True,
             text=True,
             timeout=1
@@ -92,23 +95,15 @@ def get_process_tree_memory_native(pid: int) -> float:
         if ps_result.returncode != 0:
             return 0.0
 
-        # Build process tree and sum memory
+        # Sum all RSS values from the process group
         total_rss_kb = 0
-        lines = ps_result.stdout.strip().split('\n')
-
-        # Find all descendants
-        descendants = {pid}
-        found_new = True
-        while found_new:
-            found_new = False
-            for line in lines:
-                parts = line.split()
-                if len(parts) >= 3:
-                    child_pid, parent_pid, rss = int(parts[0]), int(parts[1]), int(parts[2])
-                    if parent_pid in descendants and child_pid not in descendants:
-                        descendants.add(child_pid)
-                        total_rss_kb += rss
-                        found_new = True
+        for line in ps_result.stdout.strip().split('\n'):
+            line = line.strip()
+            if line:
+                try:
+                    total_rss_kb += int(line)
+                except ValueError:
+                    continue
 
         # Convert KB to MB
         return total_rss_kb / 1024.0
