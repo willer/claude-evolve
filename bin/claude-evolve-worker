@@ -18,6 +18,24 @@ if [[ -n "${FULL_EVOLUTION_DIR:-}" ]]; then
   echo "[WORKER-$$] Logging to: $LOG_FILE"
 fi
 
+# AIDEV-NOTE: Directory restoration helper to prevent working directory corruption
+# Critical for preventing the bug where Ctrl+C during worker leaves the shell in wrong directory
+# Helper to safely change directory with automatic restoration
+safe_pushd() {
+  SAFE_PUSHD_ORIGINAL_PWD=$(pwd)
+  cd "$1" || return 1
+  # Set trap to restore directory on any exit, error, or interrupt
+  trap 'cd "$SAFE_PUSHD_ORIGINAL_PWD" 2>/dev/null || true' EXIT INT TERM ERR
+}
+
+safe_popd() {
+  if [[ -n "${SAFE_PUSHD_ORIGINAL_PWD:-}" ]]; then
+    cd "$SAFE_PUSHD_ORIGINAL_PWD" || true
+    # Clear the trap since we're explicitly returning
+    trap - EXIT INT TERM ERR
+  fi
+}
+
 # Track current candidate for cleanup
 CURRENT_CANDIDATE_ID=""
 TERMINATION_SIGNAL=""
@@ -104,7 +122,7 @@ call_ai_for_evolution() {
   local retry_count=0
   local max_retries=3
   local wait_seconds=300  # Start with 5 minutes
-  local max_wait_seconds=1800  # Cap at 30 minutes
+  local max_wait_seconds=300  # Cap at 5 minutes
 
   while true; do
     # Capture file state before AI call
@@ -330,7 +348,9 @@ with EvolutionCSV('$FULL_CSV_PATH') as csv:
     
     # Use relative path for AI prompt
     local target_basename=$(basename "$target_file")
-    local evolution_prompt="Modify the algorithm in $target_basename based on this description: $description
+    local evolution_prompt="$(get_git_protection_warning)
+
+Modify the algorithm in $target_basename based on this description: $description
 
 The modification should be substantial and follow the description exactly. Make sure the algorithm still follows all interface requirements and can run properly.
 
@@ -340,26 +360,27 @@ IMPORTANT: If you need to read Python (.py) or CSV files, read them in chunks us
 Example: Read(file_path='evolution_gen01-001.py', offset=0, limit=100) then Read(offset=100, limit=100), etc.
 This is especially important for models with smaller context windows (like GLM).
 
-CRITICAL: If you do not know how to implement what was asked for, or if the requested change is unclear or not feasible, you MUST refuse to make any changes. DO NOT modify the code if you are uncertain about the implementation. Simply respond that you cannot implement the requested change and explain why. It is better to refuse than to make incorrect or random changes.
+CRITICAL: If you do not know how to implement what was asked for, or if the requested change is unclear or not feasible, you MUST refuse to make any changes. DO NOT modify the code if you are uncertain about the implementation. Simply respond that you cannot implement the requested change and explain why. It is better to refuse than to make incorrect or random changes."
 
-CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). Only modify the file directly."
-    
     if [[ "$is_baseline" != "true" ]]; then
-      # Change to evolution directory so AI can access files
-      local original_pwd=$(pwd)
-      cd "$FULL_EVOLUTION_DIR"
-      
+      # Change to evolution directory so AI can access files (with safe restoration on interrupt)
+      safe_pushd "$FULL_EVOLUTION_DIR" || {
+        echo "[WORKER-$$] ERROR: Failed to change to evolution directory" >&2
+        rm -f "$target_file"
+        return 1
+      }
+
       # Try AI models with round-robin based on candidate ID
       if ! call_ai_for_evolution "$evolution_prompt" "$candidate_id"; then
         echo "[WORKER-$$] ERROR: All AI models failed to generate code - leaving as pending for retry" >&2
-        cd "$original_pwd"
+        safe_popd
         rm -f "$target_file"  # Clean up on failure
         # Return with special code to indicate AI failure (should remain pending)
         return 77
       fi
-      
+
       # Restore working directory
-      cd "$original_pwd"
+      safe_popd
       
       echo "[WORKER-$$] Evolution applied successfully"
       

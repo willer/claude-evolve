@@ -35,6 +35,7 @@ OPTIONS:
 SELECTORS:
   gen01, gen02, etc.  Target specific generation
   all                 Target all generations
+  winner              Target the candidate with highest performance score
   failed              Target all candidates with failed status (includes retries)
   complete            Target all candidates with complete status
   pending             Target all candidates with pending status
@@ -56,6 +57,7 @@ ACTIONS:
 
 EXAMPLES:
   claude-evolve edit gen03 failed                    # Mark all gen03 as failed
+  claude-evolve edit winner pending                  # Reset the winner to pending (recalculate)
   claude-evolve edit failed pending                  # Reset all failed candidates to pending
   claude-evolve edit pending skipped                 # Skip all pending candidates
   claude-evolve edit --recent-generations=15 failed pending  # Reset only recent 15 gen failures
@@ -116,8 +118,8 @@ if ! validate_config; then
 fi
 
 # Validate selector format
-if [[ "$SELECTOR" != "all" && ! "$SELECTOR" =~ ^gen[0-9]+$ && "$SELECTOR" != "failed" && "$SELECTOR" != "complete" && "$SELECTOR" != "pending" && "$SELECTOR" != "running" && "$SELECTOR" != "skipped" && "$SELECTOR" != "0perf" ]]; then
-  echo "[ERROR] Selector must be 'all', 'genXX' (e.g., gen01), or status ('failed', 'complete', 'pending', 'running', 'skipped', '0perf')" >&2
+if [[ "$SELECTOR" != "all" && "$SELECTOR" != "winner" && ! "$SELECTOR" =~ ^gen[0-9]+$ && "$SELECTOR" != "failed" && "$SELECTOR" != "complete" && "$SELECTOR" != "pending" && "$SELECTOR" != "running" && "$SELECTOR" != "skipped" && "$SELECTOR" != "0perf" ]]; then
+  echo "[ERROR] Selector must be 'all', 'winner', 'genXX' (e.g., gen01), or status ('failed', 'complete', 'pending', 'running', 'skipped', '0perf')" >&2
   exit 1
 fi
 
@@ -201,19 +203,45 @@ try:
             recent_gen_set = set(sorted_generations[:n_recent])
             print(f'[INFO] Filtering to recent generations: {sorted(recent_gen_set)}', file=sys.stderr)
     
+    # For 'winner' selector, find the candidate with highest performance
+    winner_candidate_id = None
+    if selector == 'winner':
+        max_performance = None
+        for i in range(1, len(rows)):
+            row = rows[i]
+            if len(row) < 4:
+                continue
+            try:
+                perf_str = row[3].strip()
+                if perf_str and perf_str != '':
+                    performance = float(perf_str)
+                    if max_performance is None or performance > max_performance:
+                        max_performance = performance
+                        winner_candidate_id = row[0]
+            except (ValueError, IndexError):
+                continue
+
+        if winner_candidate_id:
+            print(f'[INFO] Winner candidate: {winner_candidate_id} with performance: {max_performance}', file=sys.stderr)
+        else:
+            print('[WARN] No winner found (no valid performance scores)', file=sys.stderr)
+
     # Update matching rows
     for i in range(1, len(rows)):
         row = rows[i]
         if len(row) < 1:
             continue
-        
+
         candidate_id = row[0]
         current_status = row[4] if len(row) > 4 else ''
-        
+
         # Check if this row matches selector
         matches = False
         if selector == 'all':
             matches = True
+        elif selector == 'winner':
+            # Match only the winner candidate
+            matches = (candidate_id == winner_candidate_id)
         elif selector.startswith('gen') and '-' in candidate_id:
             # Generation selector (e.g., gen01, gen02)
             matches = candidate_id.startswith(selector + '-')
@@ -335,41 +363,60 @@ try:
         
         # Skip header if present
         start_idx = 1 if rows and rows[0] and rows[0][0].lower() == 'id' else 0
-        
+
         # Determine recent generations if filtering is requested
         recent_gen_set = set()
         if recent_generations and recent_generations.isdigit():
             n_recent = int(recent_generations)
-            
+
             # Find all generation numbers from candidate IDs
             all_generations = set()
             for row in rows[start_idx:]:
                 if len(row) < 1:
                     continue
                 candidate_id = row[0]
-                
+
                 # Extract generation number from candidate_id (e.g., gen01-001 -> 1)
                 match = re.match(r'^gen(\d+)-', candidate_id)
                 if match:
                     gen_num = int(match.group(1))
                     all_generations.add(gen_num)
-            
+
             # Get the most recent N generations
             if all_generations:
                 sorted_generations = sorted(all_generations, reverse=True)
                 recent_gen_set = set(sorted_generations[:n_recent])
-        
+
+        # For 'winner' selector, find the candidate with highest performance
+        winner_candidate_id = None
+        if selector == 'winner':
+            max_performance = None
+            for row in rows[start_idx:]:
+                if len(row) < 4:
+                    continue
+                try:
+                    perf_str = row[3].strip()
+                    if perf_str and perf_str != '':
+                        performance = float(perf_str)
+                        if max_performance is None or performance > max_performance:
+                            max_performance = performance
+                            winner_candidate_id = row[0]
+                except (ValueError, IndexError):
+                    continue
+
         candidates = []
         for row in rows[start_idx:]:
             if len(row) < 1:
                 continue
-            
+
             candidate_id = row[0]
             current_status = row[4] if len(row) > 4 else ''
-            
+
             # Check if matches status selector
             matches = False
-            if selector == 'pending':
+            if selector == 'winner':
+                matches = (candidate_id == winner_candidate_id)
+            elif selector == 'pending':
                 matches = current_status == '' or current_status == 'pending'
             elif selector == 'failed':
                 matches = current_status.startswith('failed')
@@ -478,17 +525,36 @@ with EvolutionCSV('$FULL_CSV_PATH') as csv:
             if all_generations:
                 sorted_generations = sorted(all_generations, reverse=True)
                 recent_gen_set = set(sorted_generations[:n_recent])
-        
+
+        # For 'winner' selector, find the candidate with highest performance
+        winner_candidate_id = None
+        if selector == 'winner':
+            max_performance = None
+            for row in rows[start_idx:]:
+                if not row or len(row) < 4:
+                    continue
+                try:
+                    perf_str = row[3].strip()
+                    if perf_str and perf_str != '':
+                        performance = float(perf_str)
+                        if max_performance is None or performance > max_performance:
+                            max_performance = performance
+                            winner_candidate_id = row[0].strip()
+                except (ValueError, IndexError):
+                    continue
+
         for row in rows[start_idx:]:
             if not row or not row[0].strip():
                 continue
-                
+
             candidate_id = row[0].strip()
             current_status = row[4].strip() if len(row) > 4 else ''
-            
+
             matches = False
             if selector == 'all':
                 matches = True
+            elif selector == 'winner':
+                matches = (candidate_id == winner_candidate_id)
             elif selector.startswith('gen') and re.match(r'^gen\\d+$', selector):
                 # Generation selector (e.g., gen01, gen02)
                 gen_pattern = f'^{selector}-'

@@ -1,8 +1,52 @@
 #!/bin/bash
 # Centralized AI CLI invocation library for claude-evolve
+#
+# AIDEV-NOTE: All timeout commands use -k flag to ensure process termination
+# The -k flag sends SIGKILL if the process doesn't respond to SIGTERM within
+# the grace period (30 seconds). This prevents AI CLI processes from hanging
+# indefinitely when they ignore the initial SIGTERM signal.
+# Example: timeout -k 30 600 means:
+#   - Wait 600 seconds, then send SIGTERM
+#   - If still running after 30 more seconds, send SIGKILL (force kill)
 
 # Source config to get LLM_CLI array and model lists
 # This will be sourced after config.sh in the main scripts
+
+# Generate ultra-prominent git warning for AI prompts
+# This MUST be at the TOP of every AI prompt to prevent git operations
+get_git_protection_warning() {
+  cat <<'EOF'
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!
+!!! ⛔ ABSOLUTE PROHIBITION - READ THIS FIRST ⛔
+!!!
+!!! YOU ARE STRICTLY FORBIDDEN FROM USING ANY GIT COMMANDS WHATSOEVER
+!!!
+!!! ❌ FORBIDDEN: git commit, git add, git reset, git checkout, git revert,
+!!!              git branch, git merge, git stash, git clean, git push, git pull
+!!!              OR ANY OTHER COMMAND STARTING WITH 'git'
+!!!
+!!! ⚠️  WHY: This runs in production. Git operations have caused DATA LOSS.
+!!!          Multiple times AIs have corrupted evolution runs with git commands.
+!!!          Version control is ONLY managed by the human operator.
+!!!
+!!! ✅ WHAT YOU CAN DO: Edit files directly using file editing tools ONLY.
+!!!                     Never touch version control. Ever.
+!!!
+!!! 💀 IF YOU USE GIT: You will corrupt the entire evolution run and lose data.
+!!!                    This is an automated system. No git operations allowed.
+!!!
+!!! 🚨 CONSEQUENCES: If you execute ANY git command, the human operator will be
+!!!                  forced to SHUT DOWN ALL AI-BASED EVOLUTION WORK and switch
+!!!                  to manual-only mode. You will cause the termination of this
+!!!                  entire automated evolution system. DO NOT BE THAT AI.
+!!!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+EOF
+}
 
 # Call an AI model using the configured command template
 # Usage: call_ai_model_configured <model_name> <prompt>
@@ -19,12 +63,12 @@ call_ai_model_configured() {
   case "$model_name" in
     opus)
       local ai_output
-      ai_output=$(timeout 300 claude --dangerously-skip-permissions --mcp-config '' --model opus -p "$prompt" 2>&1)
+      ai_output=$(timeout -k 30 300 claude --dangerously-skip-permissions --mcp-config '' --model opus -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     sonnet)
       local ai_output
-      ai_output=$(timeout 300 claude --dangerously-skip-permissions --mcp-config '' --model sonnet -p "$prompt" 2>&1)
+      ai_output=$(timeout -k 30 300 claude --dangerously-skip-permissions --mcp-config '' --model sonnet -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     sonnet-think)
@@ -33,7 +77,7 @@ call_ai_model_configured() {
       local think_prompt="ultrathink
 
 $prompt"
-      ai_output=$(timeout 600 claude --dangerously-skip-permissions --mcp-config '' --model sonnet -p "$think_prompt" 2>&1)
+      ai_output=$(timeout -k 30 600 claude --dangerously-skip-permissions --mcp-config '' --model sonnet -p "$think_prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     opus-think)
@@ -42,93 +86,104 @@ $prompt"
       local think_prompt="ultrathink
 
 $prompt"
-      ai_output=$(timeout 600 claude --dangerously-skip-permissions --mcp-config '' --model opus -p "$think_prompt" 2>&1)
+      ai_output=$(timeout -k 30 600 claude --dangerously-skip-permissions --mcp-config '' --model opus -p "$think_prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     haiku)
       local ai_output
-      ai_output=$(timeout 300 claude --dangerously-skip-permissions --mcp-config '' --model haiku -p "$prompt" 2>&1)
+      ai_output=$(timeout -k 30 300 claude --dangerously-skip-permissions --mcp-config '' --model haiku -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     gpt5high)
       local ai_output
-      ai_output=$(timeout 600 codex exec -m gpt-5 -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      ai_output=$(timeout -k 30 600 codex exec -m gpt-5.1 -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     gpt5)
       local ai_output
-      ai_output=$(timeout 600 codex exec -m gpt-5 --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      ai_output=$(timeout -k 30 600 codex exec -m gpt-5.1 --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     o3high)
       local ai_output
-      ai_output=$(timeout 600 codex exec -m o3-mini -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      ai_output=$(timeout -k 30 600 codex exec -m o3-mini -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     gemini-pro)
       local ai_output
       # Gemini needs longer timeout as it streams output while working (20 minutes)
-      ai_output=$(timeout 1800 gemini -y -m gemini-2.5-pro -p "$prompt" 2>&1)
+      ai_output=$(timeout -k 30 1800 gemini -y -m gemini-3-pro-preview -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     gemini-flash)
       local ai_output
       # Gemini needs longer timeout as it streams output while working (20 minutes)
-      ai_output=$(timeout 1200 gemini -y -m gemini-2.5-flash -p "$prompt" 2>&1)
+      ai_output=$(timeout -k 30 1200 gemini -y -m gemini-2.5-flash -p "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    gemini-3-pro-preview)
+      local ai_output
+      # Gemini v3 Pro Preview via OpenRouter (30 minute timeout)
+      ai_output=$(timeout -k 30 1800 opencode -m openrouter/google/gemini-3-pro-preview run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     cursor-sonnet)
       local ai_output
-      ai_output=$(timeout 600 cursor-agent sonnet-4.5 -p "$prompt" 2>&1)
+      ai_output=$(timeout -k 30 600 cursor-agent sonnet-4.5 -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     cursor-opus)
       local ai_output
-      ai_output=$(timeout 600 cursor-agent opus -p "$prompt" 2>&1)
+      ai_output=$(timeout -k 30 600 cursor-agent opus -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     glm-openrouter)
       local ai_output
-      ai_output=$(timeout 600 opencode -m openrouter/z-ai/glm-4.6 run "$prompt" 2>&1)
+      ai_output=$(timeout -k 30 600 opencode -m openrouter/z-ai/glm-4.6 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     glm-zai)
       # GLM -- can be slow sometimes
       local ai_output
-      ai_output=$(timeout 1800 opencode -m zai-coding-plan/glm-4.6 run "$prompt" 2>&1)
+      ai_output=$(timeout -k 30 1800 opencode -m zai-coding-plan/glm-4.6 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     deepseek-openrouter)
       local ai_output
-      ai_output=$(timeout 600 opencode -m openrouter/deepseek/deepseek-v3.1-terminus run "$prompt" 2>&1)
+      ai_output=$(timeout -k 30 600 opencode -m openrouter/deepseek/deepseek-v3.1-terminus run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     grok-code-fast-openrouter)
       local ai_output
-      ai_output=$(timeout 600 opencode -m openrouter/x-ai/grok-code-fast-1 run "$prompt" 2>&1)
+      ai_output=$(timeout -k 30 600 opencode -m openrouter/x-ai/grok-code-fast-1 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     grok-4-openrouter)
       local ai_output
-      ai_output=$(timeout 600 opencode -m openrouter/x-ai/grok-4 run "$prompt" 2>&1)
+      ai_output=$(timeout -k 30 600 opencode -m openrouter/x-ai/grok-4 run "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    opus-openrouter)
+      local ai_output
+      ai_output=$(timeout -k 30 600 opencode -m openrouter/anthropic/claude-opus-4.1 run "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    kimi-k2-think-moonshot)
+      local ai_output
+      # Use kimi CLI directly (assumes kimi is installed and configured)
+      ai_output=$(timeout -k 30 600 kimi --print -c "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     codex-oss-local)
       # Codex-OSS via Codex CLI with Ollama backend
       local ai_output
-      ai_output=$(timeout 2400 codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss "$prompt" 2>&1)
-      local ai_exit_code=$?
-      ;;
-    kimi-k2-llamacloud)
-      # Kimi K2 via Codex CLI with Ollama cloud backend
-      local ai_output
-      ai_output=$(timeout 600 codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss -m kimi-k2:1t-cloud "$prompt" 2>&1)
+      ai_output=$(timeout -k 30 2400 codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     deepseek-v3-llamacloud)
       # Deepseek via Codex CLI with Ollama cloud backend
       local ai_output
-      ai_output=$(timeout 600 codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss -m deepseek-v3.1:671b-cloud "$prompt" 2>&1)
+      ai_output=$(timeout -k 30 600 codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss -m deepseek-v3.1:671b-cloud "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
   esac
@@ -230,15 +285,15 @@ get_models_for_command() {
   echo "$model_list"
 }
 
-# Call AI with round-robin and fallback support
+# Call AI with random selection and fallback support
 # Usage: call_ai_with_round_robin <prompt> <command> <hash_value>
 # command: "run" or "ideate"
-# hash_value: numeric value for round-robin selection (e.g., candidate ID hash)
+# hash_value: unused (kept for backward compatibility)
 call_ai_with_round_robin() {
   local prompt="$1"
   local command="$2"
   local hash_value="${3:-0}"
-  
+
   # Get model list for this command
   local model_list
   model_list=$(get_models_for_command "$command")
@@ -246,31 +301,30 @@ call_ai_with_round_robin() {
     echo "[ERROR] No models configured for command: $command" >&2
     return 1
   fi
-  
+
   # Convert to array
   local models=()
   read -ra models <<< "$model_list"
-  
+
   if [[ ${#models[@]} -eq 0 ]]; then
     echo "[ERROR] No models available for $command" >&2
     return 1
   fi
-  
-  # Calculate starting index for round‑robin
-  # Use a random starting point to avoid always using the same model
-  # for a given hash/value. This keeps the selection simple and
-  # avoids retrying the same model in the event of failures.
+
+  # Shuffle the models using Fisher-Yates algorithm for random selection
   local num_models=${#models[@]}
-  local start_index=$((RANDOM % num_models))
-  
-  # Create ordered list based on round-robin
-  local ordered_models=()
-  for ((i=0; i<num_models; i++)); do
-    local idx=$(((start_index + i) % num_models))
-    ordered_models+=("${models[$idx]}")
+  for ((i=num_models-1; i>0; i--)); do
+    local j=$((RANDOM % (i+1)))
+    # Swap models[i] and models[j]
+    local temp="${models[i]}"
+    models[i]="${models[j]}"
+    models[j]="$temp"
   done
-  
-  echo "[AI] Model order for $command (round-robin): ${ordered_models[*]}" >&2
+
+  # Use the shuffled array directly
+  local ordered_models=("${models[@]}")
+
+  echo "[AI] Model order for $command (random): ${ordered_models[*]}" >&2
   
   # Track models that hit usage limits
   local limited_models=()

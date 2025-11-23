@@ -36,6 +36,24 @@ if [[ -n "${FULL_EVOLUTION_DIR:-}" ]]; then
   echo "[IDEATE-$$] Logging to: $LOG_FILE"
 fi
 
+# AIDEV-NOTE: Directory restoration helper to prevent working directory corruption
+# Critical for preventing the bug where Ctrl+C during ideation leaves the shell in wrong directory
+# Helper to safely change directory with automatic restoration
+safe_pushd() {
+  SAFE_PUSHD_ORIGINAL_PWD=$(pwd)
+  cd "$1" || return 1
+  # Set trap to restore directory on any exit, error, or interrupt
+  trap 'cd "$SAFE_PUSHD_ORIGINAL_PWD" 2>/dev/null || true' EXIT INT TERM ERR
+}
+
+safe_popd() {
+  if [[ -n "${SAFE_PUSHD_ORIGINAL_PWD:-}" ]]; then
+    cd "$SAFE_PUSHD_ORIGINAL_PWD" || true
+    # Clear the trap since we're explicitly returning
+    trap - EXIT INT TERM ERR
+  fi
+}
+
 # Helper function to call AI with limit check
 call_ai_with_limit_check() {
   local prompt="$1"
@@ -317,14 +335,15 @@ print(max_gen)
   # Keep incrementing until we find a generation with no Python files
   local candidate_gen=$start_gen
   while true; do
-    local gen_formatted=$(printf "%02d" $candidate_gen)
-    
+    # No padding - generation numbers are used as-is in filenames
+    local gen_formatted="$candidate_gen"
+
     # Check if any Python files exist for this generation
     local py_files_exist=false
     if ls "$FULL_OUTPUT_DIR"/evolution_gen${gen_formatted}-*.py >/dev/null 2>&1; then
       py_files_exist=true
     fi
-    
+
     if [[ "$py_files_exist" == "false" ]]; then
       # This generation is safe to use
       echo "$gen_formatted"
@@ -332,10 +351,10 @@ print(max_gen)
     else
       echo "[WARN] Generation $gen_formatted already has Python files, skipping to next generation" >&2
       candidate_gen=$((candidate_gen + 1))
-      
+
       # Safety check to prevent infinite loop
-      if [[ $candidate_gen -gt 999 ]]; then
-        echo "[ERROR] Could not find a safe generation number (checked up to 999)" >&2
+      if [[ $candidate_gen -gt 9999 ]]; then
+        echo "[ERROR] Could not find a safe generation number (checked up to 9999)" >&2
         exit 1
       fi
     fi
@@ -1046,7 +1065,9 @@ generate_novel_ideas_direct() {
   # Get existing Python files for this generation to avoid ID collisions
   local existing_py_files=$(get_existing_py_files_for_generation "$CURRENT_GENERATION")
 
-  local prompt="I need you to use your file editing capabilities to fill in PLACEHOLDER descriptions in the CSV file: $temp_csv_basename
+  local prompt="$(get_git_protection_warning)
+
+I need you to use your file editing capabilities to fill in PLACEHOLDER descriptions in the CSV file: $temp_csv_basename
 
 THE FILE HAS $total_lines TOTAL LINES. Read from line $read_offset to see the placeholder rows at the end.
 
@@ -1056,6 +1077,11 @@ Current evolution context:
 - Brief: $(head -5 "$FULL_BRIEF_PATH" 2>/dev/null | head -c 500 || echo "No brief file found")
 
 IMPORTANT: DO NOT read algorithm.py or any evolution_*.py files. Focus on creative ideation based on the brief and CSV context only. Reading code files wastes tokens and time.
+
+CROSS-POLLINATION OPPORTUNITY:
+Consider looking at the last 20-30 ideas from other evolution files in sibling directories (../*/evolution.csv).
+These may contain different algorithmic approaches that could inspire novel combinations or variations.
+This is OPTIONAL - only do it if you think it would help generate more diverse ideas.
 
 CRITICAL TASK:
 The CSV file already contains $count stub rows with these IDs: $required_ids_str
@@ -1094,17 +1120,19 @@ CRITICAL INSTRUCTIONS:
 11. Consider machine learning, new indicators, regime detection, risk management, etc.
 
 IMPORTANT: You must APPEND new rows to the existing CSV file. DO NOT replace the file contents. All existing rows must remain unchanged.
-CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly.
-CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). Only modify the file directly."
+CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly."
 
   # Debug prompt size and context (removed - no longer needed)
 
-  # Change to evolution directory so AI can access files
-  local original_pwd=$(pwd)
-  cd "$FULL_EVOLUTION_DIR"
-  
+  # Change to evolution directory so AI can access files (with safe restoration on interrupt)
+  safe_pushd "$FULL_EVOLUTION_DIR" || {
+    echo "[ERROR] Failed to change to evolution directory" >&2
+    rm -f "$temp_csv"
+    return 1
+  }
+
   # Debug: Show files in evolution directory
-  
+
   # Get AI to directly edit the CSV file
   local ai_response
   local stderr_file="stderr-$$.txt"
@@ -1112,14 +1140,14 @@ CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). On
   if ! ai_response=$(call_ai_for_ideation "$prompt" "$CURRENT_GENERATION" "$count" "$temp_csv_basename"); then
     echo "[ERROR] All AI models failed to generate novel ideas" >&2
     cat "$stderr_file" >&2
-    cd "$original_pwd"
+    safe_popd
     rm -f "$temp_csv" "$stderr_file"
     return 1
   fi
   rm -f "$stderr_file"
-  
+
   # Restore working directory
-  cd "$original_pwd"
+  safe_popd
 
   # Validate that the CSV file was actually modified with correct IDs
   # Pass original_csv_lines to prevent race conditions
@@ -1191,7 +1219,12 @@ generate_hill_climbing_direct() {
   # Use relative paths and change to evolution directory so AI can access files
   local temp_csv_basename=$(basename "$temp_csv")
 
-  local prompt="I need you to use your file editing capabilities to fill in PLACEHOLDER descriptions in the CSV file: $temp_csv_basename
+  # Build prompt using cat with heredoc to avoid variable expansion issues
+  local prompt
+  prompt="$(get_git_protection_warning)
+
+$(cat <<EOF
+I need you to use your file editing capabilities to fill in PLACEHOLDER descriptions in the CSV file: $temp_csv_basename
 
 THE FILE HAS $total_lines TOTAL LINES. Read from line $read_offset to see the placeholder rows at the end.
 
@@ -1201,6 +1234,15 @@ Successful algorithms to tune:
 $top_performers
 
 IMPORTANT: Generate parameter tuning ideas based primarily on the descriptions and scores above.
+EOF
+)"
+
+  prompt+="
+
+CROSS-POLLINATION OPPORTUNITY:
+Consider looking at the last 20-30 ideas from other evolution files in sibling directories (../*/evolution.csv).
+These may contain interesting parameter tuning approaches or strategies that could be applied to your top performers.
+This is OPTIONAL - only do it if you think it would help generate more diverse tuning ideas.
 
 ONLY read parent source files (evolution_<PARENT_ID>.py) if:
 - The description is too vague to identify specific parameters
@@ -1235,13 +1277,15 @@ CRITICAL INSTRUCTIONS:
 6. You may change the parent_id field if needed to reference a different top performer
 7. Each description should focus on adjusting specific parameters - include current and new values
    Example: \"Lower rsi_entry from 21 to 18\" or \"Increase MA period from 20 to 50\"
-8. CRITICAL: When editing, preserve the CSV formatting with proper quoting
-9. DO NOT use any git commands (git add, git commit, git reset, etc.). Only modify the file directly."
+8. CRITICAL: When editing, preserve the CSV formatting with proper quoting"
 
-  # Change to evolution directory so AI can access files
-  local original_pwd=$(pwd)
-  cd "$FULL_EVOLUTION_DIR"
-  
+  # Change to evolution directory so AI can access files (with safe restoration on interrupt)
+  safe_pushd "$FULL_EVOLUTION_DIR" || {
+    echo "[ERROR] Failed to change to evolution directory" >&2
+    rm -f "$temp_csv"
+    return 1
+  }
+
   # Get AI to directly edit the CSV file
   local ai_response
   local stderr_file="stderr-$$.txt"
@@ -1249,14 +1293,14 @@ CRITICAL INSTRUCTIONS:
   if ! ai_response=$(call_ai_for_ideation "$prompt" "$CURRENT_GENERATION" "$count" "$temp_csv_basename"); then
     echo "[ERROR] All AI models failed to generate hill climbing ideas" >&2
     cat "$stderr_file" >&2
-    cd "$original_pwd"
+    safe_popd
     rm -f "$temp_csv" "$stderr_file"
     return 1
   fi
   rm -f "$stderr_file"
-  
+
   # Restore working directory
-  cd "$original_pwd"
+  safe_popd
 
   # Validate that the CSV file was actually modified with correct IDs
   # Pass original_csv_lines to prevent race conditions
@@ -1327,7 +1371,12 @@ generate_structural_mutation_direct() {
   # Use relative paths and change to evolution directory so AI can access files
   local temp_csv_basename=$(basename "$temp_csv")
 
-  local prompt="I need you to use your file editing capabilities to fill in PLACEHOLDER descriptions in the CSV file: $temp_csv_basename
+  # Build prompt using cat with heredoc to avoid variable expansion issues
+  local prompt
+  prompt="$(get_git_protection_warning)
+
+$(cat <<EOF
+I need you to use your file editing capabilities to fill in PLACEHOLDER descriptions in the CSV file: $temp_csv_basename
 
 THE FILE HAS $total_lines TOTAL LINES. Read from line $read_offset to see the placeholder rows at the end.
 
@@ -1341,6 +1390,15 @@ IMPORTANT: DO NOT read evolution_*.py files. Generate structural ideas based ONL
 - The performance scores
 - Your knowledge of common algorithmic structures and patterns
 Reading code files wastes tokens and time. Focus on high-level architectural ideas based on the descriptions.
+EOF
+)"
+
+  prompt+="
+
+CROSS-POLLINATION OPPORTUNITY:
+Consider looking at the last 20-30 ideas from other evolution files in sibling directories (../*/evolution.csv).
+These may contain different structural approaches or architectural patterns that could be adapted to your top performers.
+This is OPTIONAL - only do it if you think it would help generate more creative structural modifications.
 
 CRITICAL TASK:
 The CSV file already contains $count stub rows with these IDs: $required_ids_str
@@ -1362,13 +1420,15 @@ CRITICAL INSTRUCTIONS:
 5. When editing, preserve the CSV structure: keep the ID field unchanged
 6. You may change the parent_id field if needed to reference a different top performer
 7. Each description should focus on architectural/structural changes
-8. CRITICAL: When editing, preserve the CSV formatting with proper quoting
-9. DO NOT use any git commands (git add, git commit, git reset, etc.). Only modify the file directly."
+8. CRITICAL: When editing, preserve the CSV formatting with proper quoting"
 
-  # Change to evolution directory so AI can access files
-  local original_pwd=$(pwd)
-  cd "$FULL_EVOLUTION_DIR"
-  
+  # Change to evolution directory so AI can access files (with safe restoration on interrupt)
+  safe_pushd "$FULL_EVOLUTION_DIR" || {
+    echo "[ERROR] Failed to change to evolution directory" >&2
+    rm -f "$temp_csv"
+    return 1
+  }
+
   # Get AI to directly edit the CSV file
   local ai_response
   local stderr_file="stderr-$$.txt"
@@ -1376,14 +1436,14 @@ CRITICAL INSTRUCTIONS:
   if ! ai_response=$(call_ai_for_ideation "$prompt" "$CURRENT_GENERATION" "$count" "$temp_csv_basename"); then
     echo "[ERROR] All AI models failed to generate structural mutation ideas" >&2
     cat "$stderr_file" >&2
-    cd "$original_pwd"
+    safe_popd
     rm -f "$temp_csv" "$stderr_file"
     return 1
   fi
   rm -f "$stderr_file"
-  
+
   # Restore working directory
-  cd "$original_pwd"
+  safe_popd
 
   # Validate that the CSV file was actually modified with correct IDs
   # Pass original_csv_lines to prevent race conditions
@@ -1454,7 +1514,12 @@ generate_crossover_direct() {
   # Use relative paths and change to evolution directory so AI can access files
   local temp_csv_basename=$(basename "$temp_csv")
 
-  local prompt="I need you to use your file editing capabilities to fill in PLACEHOLDER descriptions in the CSV file: $temp_csv_basename
+  # Build prompt using cat with heredoc to avoid variable expansion issues
+  local prompt
+  prompt="$(get_git_protection_warning)
+
+$(cat <<EOF
+I need you to use your file editing capabilities to fill in PLACEHOLDER descriptions in the CSV file: $temp_csv_basename
 
 THE FILE HAS $total_lines TOTAL LINES. Read from line $read_offset to see the placeholder rows at the end.
 
@@ -1468,6 +1533,15 @@ IMPORTANT: DO NOT read evolution_*.py files. Generate crossover ideas based ONLY
 - The performance scores
 - Your knowledge of how different algorithmic approaches can be combined
 Reading code files wastes tokens and time. Focus on combining the described features creatively.
+EOF
+)"
+
+  prompt+="
+
+CROSS-POLLINATION OPPORTUNITY:
+Consider looking at the last 20-30 ideas from other evolution files in sibling directories (../*/evolution.csv).
+These parallel evolutionary strains may have developed different successful features that could be crossed with your top performers.
+This is OPTIONAL - only do it if you think it would help generate more innovative hybrid ideas.
 
 CRITICAL TASK:
 The CSV file already contains $count stub rows with these IDs: $required_ids_str
@@ -1489,13 +1563,15 @@ CRITICAL INSTRUCTIONS:
 5. When editing, preserve the CSV structure: keep the ID field unchanged
 6. You may change the parent_id field if needed (choose the primary parent)
 7. Each description should combine actual elements from 2+ top performers
-8. CRITICAL: When editing, preserve the CSV formatting with proper quoting
-9. DO NOT use any git commands (git add, git commit, git reset, etc.). Only modify the file directly."
+8. CRITICAL: When editing, preserve the CSV formatting with proper quoting"
 
-  # Change to evolution directory so AI can access files
-  local original_pwd=$(pwd)
-  cd "$FULL_EVOLUTION_DIR"
-  
+  # Change to evolution directory so AI can access files (with safe restoration on interrupt)
+  safe_pushd "$FULL_EVOLUTION_DIR" || {
+    echo "[ERROR] Failed to change to evolution directory" >&2
+    rm -f "$temp_csv"
+    return 1
+  }
+
   # Get AI to directly edit the CSV file
   local ai_response
   local stderr_file="stderr-$$.txt"
@@ -1503,14 +1579,14 @@ CRITICAL INSTRUCTIONS:
   if ! ai_response=$(call_ai_for_ideation "$prompt" "$CURRENT_GENERATION" "$count" "$temp_csv_basename"); then
     echo "[ERROR] All AI models failed to generate crossover hybrid ideas" >&2
     cat "$stderr_file" >&2
-    cd "$original_pwd"
+    safe_popd
     rm -f "$temp_csv" "$stderr_file"
     return 1
   fi
   rm -f "$stderr_file"
-  
+
   # Restore working directory
-  cd "$original_pwd"
+  safe_popd
 
   # Validate that the CSV file was actually modified with correct IDs
   # Pass original_csv_lines to prevent race conditions
@@ -1551,15 +1627,22 @@ ideate_ai_legacy() {
   # Build prompt for direct CSV modification
   # Use relative paths and change to evolution directory so AI can access files
   local temp_csv_basename=$(basename "$temp_csv")
-  
-  local prompt="I need you to use your file editing capabilities to add exactly $TOTAL_IDEAS algorithmic ideas to the CSV file: $temp_csv_basename
+
+  # Build initial prompt safely
+  local prompt
+  prompt="$(get_git_protection_warning)
+
+$(cat <<EOF
+I need you to use your file editing capabilities to add exactly $TOTAL_IDEAS algorithmic ideas to the CSV file: $temp_csv_basename
 
 Current evolution context:
 - Generation: $CURRENT_GENERATION
 - Algorithm: algorithm.py (base algorithm)
 - Brief: $(head -10 "$FULL_BRIEF_PATH" 2>/dev/null | head -c 1000 || echo "No brief file found")
 
-IMPORTANT: DO NOT read algorithm.py or any evolution_*.py files - that uses too many tokens and is unnecessary for ideation. Just generate creative ideas based on the brief and top performers listed above. Focus your creativity on the problem space, not the implementation details."
+IMPORTANT: DO NOT read algorithm.py or any evolution_*.py files - that uses too many tokens and is unnecessary for ideation. Just generate creative ideas based on the brief and top performers listed above. Focus your creativity on the problem space, not the implementation details.
+EOF
+)"
 
   if [[ -n $top_performers ]]; then
     prompt+="
@@ -1601,27 +1684,29 @@ CRITICAL INSTRUCTIONS:
 - Parameter Optimization: Entry thresholds, indicator periods, strategy weights
 
 IMPORTANT: You must APPEND new rows to the existing CSV file. DO NOT replace the file contents. All existing rows must remain unchanged.
-CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly.
-CRITICAL: Do NOT use any git commands (git add, git commit, git reset, etc.). Only modify the file directly."
+CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CSV file. DO NOT return CSV text - use your tools to edit the file directly."
 
-  # Change to evolution directory so AI can access files
-  local original_pwd=$(pwd)
-  cd "$FULL_EVOLUTION_DIR"
-  
+  # Change to evolution directory so AI can access files (with safe restoration on interrupt)
+  safe_pushd "$FULL_EVOLUTION_DIR" || {
+    echo "[ERROR] Failed to change to evolution directory" >&2
+    rm -f "$temp_csv"
+    return 1
+  }
+
   # Get AI to directly edit the CSV file
   local ai_response
   local stderr_file="stderr-$$.txt"
   if ! ai_response=$(call_ai_for_ideation "$prompt" "$CURRENT_GENERATION" "$TOTAL_IDEAS" "$temp_csv_basename" 2>"$stderr_file"); then
     echo "[ERROR] All AI models failed to generate ideas" >&2
     cat "$stderr_file" >&2
-    cd "$original_pwd"
+    safe_popd
     rm -f "$temp_csv" "$stderr_file"
     return 1
   fi
   rm -f "$stderr_file"
-  
+
   # Restore working directory
-  cd "$original_pwd"
+  safe_popd
 
   # Validate that the CSV file was actually modified
   # Pass original_csv_lines to prevent race conditions
@@ -1641,7 +1726,7 @@ echo "[INFO] Starting ideation for generation $CURRENT_GENERATION"
 # Main execution with retry logic and exponential backoff
 retry_count=0
 wait_seconds=300  # Start with 5 minutes
-max_wait_seconds=1800  # Cap at 30 minutes
+max_wait_seconds=300  # Cap at 5 minutes
 
 while true; do
   if [[ $use_strategies == true ]]; then

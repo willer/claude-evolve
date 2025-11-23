@@ -275,29 +275,34 @@ count_pending_candidates() {
 # Function to get CSV stats
 get_csv_stats() {
   local csv_path="${1:-$FULL_CSV_PATH}"
-  
+
   if [[ ! -f "$csv_path" ]]; then
     echo "[ERROR] CSV not found at: $csv_path" >&2
     echo "0 0 0"
     return
   fi
-  
+
   local total_rows complete_count pending_count
   total_rows=$(wc -l < "$csv_path" | tr -d '[:space:]')
   complete_count=$(grep ',complete' "$csv_path" 2>/dev/null | wc -l | tr -d '[:space:]')
-  
+
   # Count pending using UNIFIED CSV logic
   pending_count=$("$PYTHON_CMD" "$SCRIPT_DIR/../lib/evolution_csv.py" "$csv_path" count)
-  
+
   echo "$total_rows $complete_count $pending_count"
 }
 
-echo "[DISPATCHER] Starting unified evolution engine"
-echo "[DISPATCHER] Configuration: max_workers=$MAX_WORKERS, timeout=${timeout_seconds:-none}"
+# Function to perform full CSV cleanup (duplicates, stuck statuses, missing files, etc.)
+cleanup_csv_full() {
+  if [[ ! -f "$FULL_CSV_PATH" ]]; then
+    echo "[DISPATCHER] No CSV file to clean up" >&2
+    return 0
+  fi
 
-# Clean up any stuck 'running' statuses and duplicates at startup
-if [[ -f "$FULL_CSV_PATH" ]]; then
-  echo "[DISPATCHER] Checking for duplicate candidates..."
+  echo "[DISPATCHER] Performing full CSV cleanup..." >&2
+
+  # Remove duplicate candidates
+  echo "[DISPATCHER] Checking for duplicate candidates..." >&2
   "$PYTHON_CMD" -c "
 import sys
 sys.path.insert(0, '$SCRIPT_DIR/..')
@@ -312,53 +317,49 @@ except Exception as e:
     print(f'[ERROR] Failed to remove duplicates: {e}', file=sys.stderr)
 " 2>&1 || true
 
-  echo "[DISPATCHER] Resetting any stuck 'running' candidates to 'pending'..."
+  # Reset stuck 'running' candidates
+  echo "[DISPATCHER] Resetting any stuck 'running' candidates to 'pending'..." >&2
   if "$SCRIPT_DIR/claude-evolve-edit" running pending >/dev/null 2>&1; then
-    echo "[DISPATCHER] Successfully reset stuck candidates"
+    echo "[DISPATCHER] Successfully reset stuck candidates" >&2
   else
-    echo "[DISPATCHER] No stuck candidates found or edit command not available"
+    echo "[DISPATCHER] No stuck candidates found or edit command not available" >&2
   fi
-fi
 
-# Validate CSV and clean up stuck statuses and duplicates
-if [[ -f "$FULL_CSV_PATH" ]]; then
-  echo "[DISPATCHER] Validating CSV and cleaning up..."
-  
-  # First check for and clean up duplicates
-  echo "[DISPATCHER] Checking for duplicate entries..."
+  # Clean up duplicates with the dedicated cleanup script
+  echo "[DISPATCHER] Checking for duplicate entries..." >&2
   duplicate_check_output=$("$PYTHON_CMD" "$SCRIPT_DIR/claude-evolve-cleanup-duplicates" "$FULL_CSV_PATH" 2>&1)
   if echo "$duplicate_check_output" | grep -q "Found.*duplicate"; then
-    echo "[DISPATCHER] WARNING: Duplicate entries detected in CSV!"
-    echo "$duplicate_check_output"
-    echo "[DISPATCHER] Automatically cleaning up duplicates..."
+    echo "[DISPATCHER] WARNING: Duplicate entries detected in CSV!" >&2
+    echo "$duplicate_check_output" >&2
+    echo "[DISPATCHER] Automatically cleaning up duplicates..." >&2
     if "$PYTHON_CMD" "$SCRIPT_DIR/claude-evolve-cleanup-duplicates" "$FULL_CSV_PATH" --fix; then
-      echo "[DISPATCHER] Duplicates cleaned up successfully"
+      echo "[DISPATCHER] Duplicates cleaned up successfully" >&2
     else
       echo "[ERROR] Failed to clean up duplicates" >&2
-      exit 1
+      return 1
     fi
   else
-    echo "[DISPATCHER] No duplicates found"
+    echo "[DISPATCHER] No duplicates found" >&2
   fi
-  
-  # Check for and clean up invalid entries
-  echo "[DISPATCHER] Checking for invalid entries..."
+
+  # Clean up invalid entries
+  echo "[DISPATCHER] Checking for invalid entries..." >&2
   invalid_check_output=$("$PYTHON_CMD" "$SCRIPT_DIR/claude-evolve-clean-invalid" "$FULL_CSV_PATH" --dry-run 2>&1)
   if echo "$invalid_check_output" | grep -q "Found.*invalid"; then
-    echo "[DISPATCHER] WARNING: Invalid entries detected in CSV!"
-    echo "$invalid_check_output"
-    echo "[DISPATCHER] Automatically cleaning up invalid entries..."
+    echo "[DISPATCHER] WARNING: Invalid entries detected in CSV!" >&2
+    echo "$invalid_check_output" >&2
+    echo "[DISPATCHER] Automatically cleaning up invalid entries..." >&2
     if "$PYTHON_CMD" "$SCRIPT_DIR/claude-evolve-clean-invalid" "$FULL_CSV_PATH"; then
-      echo "[DISPATCHER] Invalid entries cleaned up successfully"
+      echo "[DISPATCHER] Invalid entries cleaned up successfully" >&2
     else
       echo "[ERROR] Failed to clean up invalid entries" >&2
-      exit 1
+      return 1
     fi
   else
-    echo "[DISPATCHER] No invalid entries found"
+    echo "[DISPATCHER] No invalid entries found" >&2
   fi
-  
-  # Then validate and clean stuck statuses
+
+  # Clean stuck statuses and missing files
   if ! "$PYTHON_CMD" -c "
 import csv
 import sys
@@ -366,90 +367,88 @@ import os
 from pathlib import Path
 
 csv_file = '$FULL_CSV_PATH'
-full_output_dir = '$FULL_OUTPUT_DIR' # Pass FULL_OUTPUT_DIR to Python script
-script_dir = '$SCRIPT_DIR' # Pass SCRIPT_DIR for sys.path.append
+full_output_dir = '$FULL_OUTPUT_DIR'
+script_dir = '$SCRIPT_DIR'
 
 try:
-    # Read CSV - let Python's csv module handle all the complexity
     with open(csv_file, 'r') as f:
         reader = csv.reader(f)
         rows = list(reader)
-    
+
     if not rows:
         print('[ERROR] CSV is empty')
         sys.exit(1)
-    
-    # Basic sanity checks
-    header = rows[0]
-    num_fields = len(header)
-    
+
     if len(rows) == 1:
         print('[INFO] CSV has no data rows (only header)')
-    
+
     changed_count = 0
-    
+
     # Clean up any stuck 'running' statuses
     for i in range(1, len(rows)):
         if len(rows[i]) > 4 and rows[i][4] == 'running':
             rows[i][4] = ''
             changed_count += 1
 
-    # Reset failed-parent-missing to pending at startup - give them another chance
+    # Reset failed-parent-missing to pending - give them another chance
     for i in range(1, len(rows)):
         if len(rows[i]) > 4 and rows[i][4] == 'failed-parent-missing':
             rows[i][4] = 'pending'
             changed_count += 1
-    
+
     # Check for missing Python files for completed/failed candidates
     for i in range(1, len(rows)):
         if len(rows[i]) > 4:
             candidate_id = rows[i][0]
             status = rows[i][4]
-            
-            # Only check if status implies a file should exist
+
             if status in ['complete', 'failed', 'failed-ai-retry', 'failed-retry1', 'failed-retry2', 'failed-retry3']:
                 expected_file = Path(full_output_dir) / f'evolution_{candidate_id}.py'
                 if not expected_file.is_file():
                     print(f'[INFO] Detected missing file for {candidate_id} (status: {status}). Resetting to pending.')
-                    rows[i][4] = 'pending' # Reset status to pending
-                    # Clear performance and other fields if desired, for a clean retry
-                    if len(rows[i]) > 3: rows[i][3] = '' # Performance
-                    if len(rows[i]) > 5: rows[i][5] = '' # LLM used for run
+                    rows[i][4] = 'pending'
+                    if len(rows[i]) > 3: rows[i][3] = ''
+                    if len(rows[i]) > 5: rows[i][5] = ''
                     changed_count += 1
-    
+
     if changed_count > 0:
-        # Write back
         with open(csv_file + '.tmp', 'w', newline='') as f:
             writer = csv.writer(f)
             writer.writerows(rows)
         os.rename(csv_file + '.tmp', csv_file)
         print(f'[INFO] Reset {changed_count} candidates (stuck running or missing files) to pending')
-    
-    # Count pending candidates using UNIFIED logic
+
     sys.path.append(script_dir + '/..')
     from lib.evolution_csv import EvolutionCSV
-    
+
     with EvolutionCSV(csv_file) as csv_ops:
-        # Auto-fix any corrupted status fields before counting
         fixed = csv_ops.cleanup_corrupted_status_fields()
         if fixed > 0:
             print(f'[INFO] Auto-fixed {fixed} corrupted status field(s)', file=sys.stderr)
         pending = csv_ops.count_pending_candidates()
 
     print(f'[INFO] CSV loaded: {len(rows)-1} total candidates, {pending} pending')
-    
+
 except csv.Error as e:
     print(f'[ERROR] CSV parsing error: {e}')
-    print('[ERROR] The CSV file appears to be malformed')
     sys.exit(1)
 except Exception as e:
     print(f'[ERROR] Failed to read CSV: {e}')
     sys.exit(1)
 " 2>&1; then
-    echo "[ERROR] CSV validation failed. Please check the error message above."
-    exit 1
+    echo "[ERROR] CSV validation failed during cleanup" >&2
+    return 1
   fi
-fi
+
+  echo "[DISPATCHER] Full CSV cleanup complete" >&2
+  return 0
+}
+
+echo "[DISPATCHER] Starting unified evolution engine"
+echo "[DISPATCHER] Configuration: max_workers=$MAX_WORKERS, timeout=${timeout_seconds:-none}"
+
+# Perform full CSV cleanup at startup
+cleanup_csv_full || exit 1
 
 # Automatic cleanup detection - check for unchanged algorithms and warn user
 echo "[DISPATCHER] Checking for duplicate/unchanged algorithms..."
@@ -585,8 +584,28 @@ while true; do
 
   # Check if API limit was reached
   if [[ "$api_limit_reached" == "true" ]]; then
-    echo "[DISPATCHER] Stopping evolution run due to API usage limits" >&2
-    break
+    echo "[DISPATCHER] All AI models hit usage limits" >&2
+    echo "[DISPATCHER] Waiting 5 minutes before restarting the run process..." >&2
+
+    # Wait 5 minutes with countdown
+    remaining=300
+    while [[ $remaining -gt 0 ]]; do
+      if [[ $((remaining % 60)) -eq 0 ]]; then
+        echo "[DISPATCHER] Restarting in $((remaining / 60)) minutes..." >&2
+      fi
+      sleep 60
+      remaining=$((remaining - 60))
+    done
+
+    echo "[DISPATCHER] Restarting run process to clear stuck states and retry..." >&2
+    # Perform full CSV cleanup to reset stuck states, just like at startup
+    cleanup_csv_full || {
+      echo "[ERROR] CSV cleanup failed after API limit wait" >&2
+      # Continue anyway - better to try than to stop completely
+    }
+    # Clear the flag and continue - this restarts the main loop
+    api_limit_reached=false
+    continue
   fi
 
   # Periodic cleanup of stuck candidates (every 5 iterations, ~25 seconds)
@@ -627,8 +646,8 @@ except Exception as e:
   if [[ $pending_count -eq 0 && $active_workers -eq 0 ]]; then
     echo "[DISPATCHER] No pending candidates found."
 
-    # Before blocking, do final check for stuck work (immediate, not periodic)
-    echo "[DISPATCHER] Performing final verification for stuck candidates..."
+    # Before triggering ideation, do final check AND RESET stuck work (immediate, not periodic)
+    echo "[DISPATCHER] Performing final verification and cleanup for stuck candidates..."
     stuck_work_count=$("$PYTHON_CMD" -c "
 import sys
 sys.path.insert(0, '$SCRIPT_DIR/..')
@@ -636,18 +655,25 @@ from lib.evolution_csv import EvolutionCSV
 
 try:
     with EvolutionCSV('$FULL_CSV_PATH') as csv:
+        # First count stuck candidates
         stuck = csv.count_stuck_candidates()
+
+        # If any found, reset them immediately
+        if stuck > 0:
+            print(f'[DISPATCHER] Found {stuck} stuck candidates, resetting to pending...', file=sys.stderr)
+            reset_count = csv.reset_stuck_candidates()
+            print(f'[DISPATCHER] Reset {reset_count} stuck candidates to pending', file=sys.stderr)
+
         print(stuck)
 except Exception as e:
-    print(f'[ERROR] Failed to count stuck candidates: {e}', file=sys.stderr)
+    print(f'[ERROR] Failed to check/reset stuck candidates: {e}', file=sys.stderr)
     print('0')  # Default to 0 on error
 " 2>/dev/null || echo "0")
 
     if [[ $stuck_work_count -gt 0 ]]; then
-      echo "[DISPATCHER] Found $stuck_work_count stuck candidates - running cleanup cycle..."
-      # Force immediate cleanup
-      loop_iteration=$((last_stuck_check + 5))
-      continue  # Go back to top of loop to trigger cleanup
+      echo "[DISPATCHER] Reset $stuck_work_count stuck candidates to pending"
+      # Don't trigger ideation - go back to check pending count again
+      continue  # Go back to top of loop to re-count pending
     fi
 
     # Check if auto ideation is enabled
