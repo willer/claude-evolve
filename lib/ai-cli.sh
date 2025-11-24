@@ -180,6 +180,13 @@ $prompt"
       ai_output=$(timeout -k 30 600 kimi --print -c "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
+    kimi-coder)
+      local ai_output
+      # Kimi for Coding model via kimi CLI (fast coding-focused model)
+      # Use --print to see agent actions while still allowing file modifications
+      ai_output=$(timeout -k 30 600 kimi --print -y -m kimi-for-coding -c "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
     codex-oss-local)
       # Codex-OSS via Codex CLI with Ollama backend
       local ai_output
