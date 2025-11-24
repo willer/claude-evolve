@@ -80,7 +80,7 @@ llm_cli:
   # Default configuration: 100% local code generation, commercial ideation + local fallback
   # Commented out because these change over time; uncomment to override
   #run: codex-qwen3
-  #ideate: opus-openrouter kimi-k2-think-moonshot gemini-pro sonnet-think gpt5high grok-4-openrouter deepseek-openrouter glm-zai
+  #ideate: opus-openrouter kimi-k2-openrouter gemini-pro sonnet-think gpt5high grok-4-openrouter deepseek-openrouter glm-zai
 
   # Available models:
   # - sonnet: Claude 3.5 Sonnet via Claude CLI
@@ -97,6 +97,7 @@ llm_cli:
   # - grok-code-fast: Grok Code Fast 1 via OpenRouter
   # - grok-4: Grok 4 via OpenRouter
   # - opus-openrouter: Claude Opus 4.1 via OpenRouter
-  # - kimi-k2-think-moonshot: Kimi K2 Thinking via Moonshot
+  # - kimi-k2-openrouter: Kimi K2 Thinking via OpenRouter (RECOMMENDED - no separate auth)
+  # - kimi-k2-think-moonshot: Kimi K2 Thinking via Moonshot CLI (requires separate kimi CLI setup)
   # - codex-qwen3: Qwen3-Coder via Codex + Ollama (local, free, RECOMMENDED)
   # - aider-qwen3: Qwen3-Coder via Aider + Ollama (local, free, experimental)

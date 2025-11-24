@@ -168,6 +168,12 @@ $prompt"
       ai_output=$(timeout -k 30 600 opencode -m openrouter/anthropic/claude-opus-4.1 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
+    kimi-k2-openrouter)
+      local ai_output
+      # Kimi K2 Thinking via OpenRouter (no separate auth needed)
+      ai_output=$(timeout -k 30 600 opencode -m openrouter/moonshotai/kimi-k2-thinking run "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
     kimi-k2-think-moonshot)
       local ai_output
       # Use kimi CLI directly (assumes kimi is installed and configured)
