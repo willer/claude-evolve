@@ -77,9 +77,9 @@ llm_cli:
   # Models are tried in order, with round-robin distribution across candidates
   # You can repeat models for weighted selection (e.g., "sonnet sonnet gemini" for 2:1 ratio)
 
-  # Default configuration: Mix of local and commercial code generation, commercial ideation
+  # Default configuration: 50/50 split between glm-zai and kimi-coder, commercial ideation
   # Commented out because these change over time; uncomment to override
-  #run: glm-zai glm-zai kimi-coder codex-oss-local
+  #run: glm-zai kimi-coder glm-zai kimi-coder glm-zai kimi-coder codex-oss-local
   #ideate: opus-openrouter kimi-k2-openrouter gemini-pro sonnet-think gpt5high grok-4-openrouter deepseek-openrouter glm-zai
 
   # Available models:

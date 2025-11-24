@@ -337,8 +337,9 @@ call_ai_with_round_robin() {
   # Use the shuffled array directly
   local ordered_models=("${models[@]}")
 
-  echo "[AI] Model order for $command (random): ${ordered_models[*]}" >&2
-  
+  # Debug output (commented out - no need to show shuffled order every time)
+  # echo "[AI] Model order for $command (random): ${ordered_models[*]}" >&2
+
   # Track models that hit usage limits
   local limited_models=()
   local tried_models=()
