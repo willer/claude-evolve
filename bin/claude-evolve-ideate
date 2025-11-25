@@ -54,36 +54,16 @@ safe_popd() {
   fi
 }
 
-# Helper function to call AI with limit check
+# Helper function to call AI (legacy wrapper)
 call_ai_with_limit_check() {
   local prompt="$1"
-  local generation="${2:-01}"  # Default to generation 01 if not provided
-  
-  # Calculate hash value for round-robin based on generation
-  local gen_num
-  if [[ $generation =~ ^0*([0-9]+)$ ]]; then
-    gen_num=$((10#${BASH_REMATCH[1]}))
-  else
-    gen_num=1
-  fi
-  
-  # Use centralized AI library for ideation
+
+  # Use centralized AI library for ideation (random model selection)
   local ai_output
-  ai_output=$(call_ai_with_round_robin "$prompt" "ideate" "$gen_num")
+  ai_output=$(call_ai_random "$prompt" "ideate")
   local ai_exit_code=$?
-  
-  # Handle special exit codes
-  if [[ $ai_exit_code -eq 3 ]]; then
-    # All models hit usage limits
-    echo -e "\033[31m[ERROR] ALL AI MODELS HIT USAGE LIMITS!\033[0m" >&2
-    echo -e "\033[31m[ERROR] Ideation halted due to API rate limits.\033[0m" >&2
-    echo -e "\033[33m[INFO] Please wait for the rate limits to reset before continuing.\033[0m" >&2
-    echo -e "\033[33m[INFO] No ideas were generated. Run ideate again when the limits reset.\033[0m" >&2
-    exit 1
-  fi
-  
+
   if [[ $ai_exit_code -eq 0 ]]; then
-    # For ideation, AI modifies files directly - just return success
     echo "[INFO] AI succeeded" >&2
     return 0
   else
@@ -97,28 +77,16 @@ call_claude_with_limit_check() {
   call_ai_with_limit_check "$@"
 }
 
-# Robust AI calling with fallbacks across all available models
+# Robust AI calling with random model selection (no fallback)
 # Returns 0 on success and echoes the successful model name to stdout
 call_ai_for_ideation() {
   local prompt="$1"
   local generation="${2:-01}"
   local expected_count="${3:-1}"  # Number of ideas expected to be added
   local temp_csv_file="${4:-temp-csv-$$.csv}"  # Optional temp CSV filename
-  
-  # Calculate hash value for round-robin based on generation
-  local gen_num
-  if [[ $generation =~ ^0*([0-9]+)$ ]]; then
-    gen_num=$((10#${BASH_REMATCH[1]}))
-  else
-    gen_num=1
-  fi
-  
-  # Make a backup of the pre-populated temp CSV (which includes stub rows from caller)
-  # This preserves the stub rows that the caller added
-  local temp_csv_backup="${temp_csv_file}.backup"
-  if [[ -f "$temp_csv_file" ]]; then
-    cp "$temp_csv_file" "$temp_csv_backup"
-  else
+
+  # Verify temp CSV exists
+  if [[ ! -f "$temp_csv_file" ]]; then
     echo "[ERROR] Temp CSV file not found at start: $temp_csv_file" >&2
     return 1
   fi
@@ -137,103 +105,68 @@ call_ai_for_ideation() {
 
   if [[ ${#models[@]} -eq 0 ]]; then
     echo "[ERROR] No models configured for ideation" >&2
-    rm -f "$temp_csv_backup"
     return 1
   fi
 
-  # Calculate starting index for round-robin
+  # Pick one random model (no fallback)
   local num_models=${#models[@]}
-  local start_index=$((gen_num % num_models))
+  local random_index=$((RANDOM % num_models))
+  local model="${models[$random_index]}"
 
-  # Create ordered list based on round-robin
-  local ordered_models=()
-  for ((i=0; i<num_models; i++)); do
-    local idx=$(((start_index + i) % num_models))
-    ordered_models+=("${models[$idx]}")
-  done
+  echo "[AI] Selected $model for ideate (random from $num_models models)" >&2
 
-  echo "[AI] Model order for ideate (round-robin): ${ordered_models[*]}" >&2
+  # Call the model directly
+  local ai_output
+  ai_output=$(call_ai_model_configured "$model" "$prompt")
+  local ai_exit_code=$?
 
-  # Try each model until CSV changes
-  for model in "${ordered_models[@]}"; do
-    echo "[AI] Attempting ideate with $model" >&2
+  # Check if the file was modified correctly
+  if [[ ! -f "$temp_csv_file" ]]; then
+    echo "[ERROR] Temp CSV file not found after $model: $temp_csv_file" >&2
+    return 1
+  fi
 
-    # Restore temp CSV from backup before each attempt (in case previous model corrupted it)
-    # This preserves the stub rows that the caller pre-populated
-    cp "$temp_csv_backup" "$temp_csv_file"
+  local new_csv_count
+  new_csv_count=$(grep -v '^[[:space:]]*$' "$temp_csv_file" | tail -n +2 | wc -l | tr -d '[:space:]')
+  local added_count=$((new_csv_count - original_csv_count))
 
-    # Call the model directly
-    local ai_output
-    ai_output=$(call_ai_model_configured "$model" "$prompt")
-    local ai_exit_code=$?
+  echo "[DEBUG] After $model: original=$original_csv_count, new=$new_csv_count, added=$added_count" >&2
 
-    # Check if the file was modified correctly
-    if [[ -f "$temp_csv_file" ]]; then
-      local new_csv_count
-      new_csv_count=$(grep -v '^[[:space:]]*$' "$temp_csv_file" | tail -n +2 | wc -l | tr -d '[:space:]')
-      local added_count=$((new_csv_count - original_csv_count))
-
-      echo "[DEBUG] After $model: original=$original_csv_count, new=$new_csv_count, added=$added_count" >&2
-
-      # Check if row count is correct (should be same since we're editing stubs, not adding)
-      if [[ $new_csv_count -eq $original_csv_count ]]; then
-        # Count remaining placeholders - there should be none if AI did its job
-        local placeholder_count
-        placeholder_count=$(grep -c "PLACEHOLDER" "$temp_csv_file" 2>/dev/null || echo "0")
-        # Strip whitespace and ensure we have a clean integer
-        placeholder_count=$(echo "$placeholder_count" | tr -d '[:space:]')
-        placeholder_count=${placeholder_count:-0}
-
-        if [[ $placeholder_count -eq 0 ]]; then
-          echo "[INFO] CSV modified by $model: filled $expected_count placeholder rows ✓" >&2
-
-          # Post-process to ensure all description fields are quoted
-          local fixed_csv_file="${temp_csv_file}.fixed"
-
-          # Use the CSV fixer script
-          if "$PYTHON_CMD" "$SCRIPT_DIR/../lib/csv_fixer.py" "$temp_csv_file" "$fixed_csv_file"; then
-            mv "$fixed_csv_file" "$temp_csv_file"
-            echo "[INFO] CSV format validated and fixed if needed" >&2
-          else
-            echo "[WARN] CSV format validation failed, using original" >&2
-          fi
-
-          # Clean up backup file
-          rm -f "$temp_csv_backup"
-
-          # Echo the successful model name for caller to capture
-          echo "$model"
-          return 0
-        else
-          echo "[WARN] $model left $placeholder_count placeholders unfilled - trying next model" >&2
-          # Continue to next model
-        fi
-      elif [[ $added_count -lt 0 ]]; then
-        echo "[WARN] $model deleted rows ($added_count) - trying next model" >&2
-        # Continue to next model
-      elif [[ $added_count -gt 0 ]]; then
-        echo "[WARN] $model added extra rows ($added_count) instead of editing stubs - trying next model" >&2
-        # Continue to next model
-      else
-        echo "[INFO] CSV unchanged after $model (exit code: $ai_exit_code)" >&2
-        # Log last few lines of AI output to help debug why it succeeded but didn't change the file
-        if [[ -n "$ai_output" ]]; then
-          echo "[AI] Last 10 lines of $model output:" >&2
-          echo "$ai_output" | tail -n 10 >&2
-          echo "[AI] ---" >&2
-        fi
-        # Continue to next model
-      fi
+  # Check if row count is correct (should be same since we're editing stubs, not adding)
+  if [[ $new_csv_count -ne $original_csv_count ]]; then
+    if [[ $added_count -lt 0 ]]; then
+      echo "[ERROR] $model deleted rows ($added_count)" >&2
     else
-      echo "[INFO] Temp CSV file not found after $model: $temp_csv_file" >&2
-      # Continue to next model
+      echo "[ERROR] $model added extra rows ($added_count) instead of editing stubs" >&2
     fi
-  done
-  
-  # All models tried, none changed the file
-  rm -f "$temp_csv_backup"
-  echo "[ERROR] All AI models failed to generate ideas" >&2
-  return 1
+    return 1
+  fi
+
+  # Count remaining placeholders - there should be none if AI did its job
+  local placeholder_count
+  placeholder_count=$(grep -c "PLACEHOLDER" "$temp_csv_file" 2>/dev/null || echo "0")
+  placeholder_count=$(echo "$placeholder_count" | tr -d '[:space:]')
+  placeholder_count=${placeholder_count:-0}
+
+  if [[ $placeholder_count -ne 0 ]]; then
+    echo "[ERROR] $model left $placeholder_count placeholders unfilled" >&2
+    return 1
+  fi
+
+  echo "[INFO] CSV modified by $model: filled $expected_count placeholder rows ✓" >&2
+
+  # Post-process to ensure all description fields are quoted
+  local fixed_csv_file="${temp_csv_file}.fixed"
+  if "$PYTHON_CMD" "$SCRIPT_DIR/../lib/csv_fixer.py" "$temp_csv_file" "$fixed_csv_file"; then
+    mv "$fixed_csv_file" "$temp_csv_file"
+    echo "[INFO] CSV format validated and fixed if needed" >&2
+  else
+    echo "[WARN] CSV format validation failed, using original" >&2
+  fi
+
+  # Echo the successful model name for caller to capture
+  echo "$model"
+  return 0
 }
 
 # Parse arguments
@@ -654,7 +587,7 @@ IMPORTANT: Output the complete modified CSV file. Do not add any explanation or 
   local modified_csv
   local stderr_file="$FULL_EVOLUTION_DIR/stderr-$$.txt"
   if ! modified_csv=$(call_ai_for_ideation "$csv_prompt" "$CURRENT_GENERATION" 2>"$stderr_file"); then
-    echo "[ERROR] All AI models failed to modify CSV" >&2
+    echo "[ERROR] AI model failed to modify CSV" >&2
     cat "$stderr_file" >&2
     rm -f "$temp_csv" "$stderr_file"
     return 1
@@ -1138,7 +1071,7 @@ CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CS
   local stderr_file="stderr-$$.txt"
   # Temporarily show stderr for debugging
   if ! ai_response=$(call_ai_for_ideation "$prompt" "$CURRENT_GENERATION" "$count" "$temp_csv_basename"); then
-    echo "[ERROR] All AI models failed to generate novel ideas" >&2
+    echo "[ERROR] AI model failed to generate novel ideas" >&2
     cat "$stderr_file" >&2
     safe_popd
     rm -f "$temp_csv" "$stderr_file"
@@ -1291,7 +1224,7 @@ CRITICAL INSTRUCTIONS:
   local stderr_file="stderr-$$.txt"
   # Temporarily show stderr for debugging
   if ! ai_response=$(call_ai_for_ideation "$prompt" "$CURRENT_GENERATION" "$count" "$temp_csv_basename"); then
-    echo "[ERROR] All AI models failed to generate hill climbing ideas" >&2
+    echo "[ERROR] AI model failed to generate hill climbing ideas" >&2
     cat "$stderr_file" >&2
     safe_popd
     rm -f "$temp_csv" "$stderr_file"
@@ -1434,7 +1367,7 @@ CRITICAL INSTRUCTIONS:
   local stderr_file="stderr-$$.txt"
   # Temporarily show stderr for debugging
   if ! ai_response=$(call_ai_for_ideation "$prompt" "$CURRENT_GENERATION" "$count" "$temp_csv_basename"); then
-    echo "[ERROR] All AI models failed to generate structural mutation ideas" >&2
+    echo "[ERROR] AI model failed to generate structural mutation ideas" >&2
     cat "$stderr_file" >&2
     safe_popd
     rm -f "$temp_csv" "$stderr_file"
@@ -1577,7 +1510,7 @@ CRITICAL INSTRUCTIONS:
   local stderr_file="stderr-$$.txt"
   # Temporarily show stderr for debugging
   if ! ai_response=$(call_ai_for_ideation "$prompt" "$CURRENT_GENERATION" "$count" "$temp_csv_basename"); then
-    echo "[ERROR] All AI models failed to generate crossover hybrid ideas" >&2
+    echo "[ERROR] AI model failed to generate crossover hybrid ideas" >&2
     cat "$stderr_file" >&2
     safe_popd
     rm -f "$temp_csv" "$stderr_file"
@@ -1697,7 +1630,7 @@ CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CS
   local ai_response
   local stderr_file="stderr-$$.txt"
   if ! ai_response=$(call_ai_for_ideation "$prompt" "$CURRENT_GENERATION" "$TOTAL_IDEAS" "$temp_csv_basename" 2>"$stderr_file"); then
-    echo "[ERROR] All AI models failed to generate ideas" >&2
+    echo "[ERROR] AI model failed to generate ideas" >&2
     cat "$stderr_file" >&2
     safe_popd
     rm -f "$temp_csv" "$stderr_file"

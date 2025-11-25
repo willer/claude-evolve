@@ -298,14 +298,13 @@ get_models_for_command() {
   echo "$model_list"
 }
 
-# Call AI with random selection and fallback support
-# Usage: call_ai_with_round_robin <prompt> <command> <hash_value>
+# Call AI with random model selection (no fallback)
+# Usage: call_ai_random <prompt> <command>
 # command: "run" or "ideate"
-# hash_value: unused (kept for backward compatibility)
-call_ai_with_round_robin() {
+# Picks one random model from the list and uses it
+call_ai_random() {
   local prompt="$1"
   local command="$2"
-  local hash_value="${3:-0}"
 
   # Get model list for this command
   local model_list
@@ -324,69 +323,43 @@ call_ai_with_round_robin() {
     return 1
   fi
 
-  # Shuffle the models using Fisher-Yates algorithm for random selection
+  # Pick one random model
   local num_models=${#models[@]}
-  for ((i=num_models-1; i>0; i--)); do
-    local j=$((RANDOM % (i+1)))
-    # Swap models[i] and models[j]
-    local temp="${models[i]}"
-    models[i]="${models[j]}"
-    models[j]="$temp"
-  done
+  local random_index=$((RANDOM % num_models))
+  local model="${models[$random_index]}"
 
-  # Use the shuffled array directly
-  local ordered_models=("${models[@]}")
+  echo "[AI] Selected $model for $command (random from $num_models models)" >&2
 
-  # Debug output (commented out - no need to show shuffled order every time)
-  # echo "[AI] Model order for $command (random): ${ordered_models[*]}" >&2
+  # Call the AI model
+  local ai_output
+  ai_output=$(call_ai_model_configured "$model" "$prompt")
+  local ai_exit_code=$?
 
-  # Track models that hit usage limits
-  local limited_models=()
-  local tried_models=()
-  
-  # Try each model in order
-  for model in "${ordered_models[@]}"; do
-    echo "[AI] Attempting $command with $model" >&2
-    tried_models+=("$model")
-    
-    # Call the AI model
-    local ai_output
-    ai_output=$(call_ai_model_configured "$model" "$prompt")
-    local ai_exit_code=$?
-    
-    # Clean output if needed
-    ai_output=$(clean_ai_output "$ai_output" "$model")
-    
-    # Success if exit code is 0, or if it's just a timeout (124)
-    # Timeout doesn't mean the AI failed - it may have completed the task
-    if [[ $ai_exit_code -eq 0 ]] || [[ $ai_exit_code -eq 124 ]]; then
-      if [[ $ai_exit_code -eq 124 ]]; then
-        echo "[AI] $model timed out but continuing (exit code: 124)" >&2
-      else
-        echo "[AI] $model returned exit code 0" >&2
-      fi
-      # Export the successful model for tracking (used by worker)
-      export SUCCESSFUL_RUN_MODEL="$model"
-      # Debug: log what AI returned on success
-      if [[ "${DEBUG_AI_SUCCESS:-}" == "true" ]]; then
-        echo "[AI] $model success output preview:" >&2
-        echo "$ai_output" | head -10 >&2
-        echo "[AI] (truncated to first 10 lines)" >&2
-      fi
-      # Output the cleaned result
-      echo "$ai_output"
-      return 0
-    fi
-    
-    echo "[AI] $model returned exit code $ai_exit_code, trying next model..." >&2
-  done
-  
-  # All models have been tried
-  echo "[AI] All models have been tried without success" >&2
-  return 1
+  # Clean output if needed
+  ai_output=$(clean_ai_output "$ai_output" "$model")
+
+  # Export the model used for tracking (used by worker)
+  export SUCCESSFUL_RUN_MODEL="$model"
+
+  # Log result
+  if [[ $ai_exit_code -eq 0 ]]; then
+    echo "[AI] $model returned exit code 0" >&2
+  elif [[ $ai_exit_code -eq 124 ]]; then
+    echo "[AI] $model timed out (exit code: 124)" >&2
+  else
+    echo "[AI] $model returned exit code $ai_exit_code" >&2
+  fi
+
+  # Output the result
+  echo "$ai_output"
+  return $ai_exit_code
 }
 
-# Legacy function name for compatibility
+# Legacy function names for compatibility
+call_ai_with_round_robin() {
+  call_ai_random "$@"
+}
+
 call_ai_with_fallbacks() {
-  call_ai_with_round_robin "$@"
+  call_ai_random "$@"
 }

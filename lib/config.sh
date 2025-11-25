@@ -60,7 +60,7 @@ DEFAULT_WORKER_MAX_CANDIDATES=3
 # Default LLM CLI configuration
 DEFAULT_LLM_RUN="glm-zai kimi-coder glm-zai kimi-coder glm-zai kimi-coder codex-oss-local haiku"
 # Ideate: Commercial models for idea generation + local fallback
-DEFAULT_LLM_IDEATE="opus-openrouter kimi-k2-openrouter gemini-3-pro-preview sonnet-think gpt5high grok-4-openrouter deepseek-openrouter glm-zai"
+DEFAULT_LLM_IDEATE="opus-think kimi-k2-openrouter gemini-3-pro-preview sonnet-think gpt5high grok-4-openrouter deepseek-openrouter glm-zai"
 
 # Load configuration from a YAML file and update variables
 _load_yaml_config() {
