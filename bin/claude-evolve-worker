@@ -111,6 +111,8 @@ else
 fi
 
 # AI random selection function for code evolution
+# AIDEV-NOTE: This function reads the model name from a temp file written by call_ai_random
+# because exports don't propagate from subshells. The model is stored in SUCCESSFUL_RUN_MODEL.
 call_ai_for_evolution() {
   local prompt="$1"
   local candidate_id="$2"
@@ -130,6 +132,17 @@ call_ai_for_evolution() {
   local ai_output
   ai_output=$(call_ai_random "$prompt" "run")
   local ai_exit_code=$?
+
+  # Read the model name from temp file (written by call_ai_random in subshell)
+  local model_file="/tmp/.claude-evolve-model-$$"
+  if [[ -f "$model_file" ]]; then
+    SUCCESSFUL_RUN_MODEL=$(cat "$model_file")
+    rm -f "$model_file"
+    echo "[WORKER-$$] AI model used: $SUCCESSFUL_RUN_MODEL" >&2
+  else
+    echo "[WORKER-$$] Warning: Could not determine which AI model was used" >&2
+    SUCCESSFUL_RUN_MODEL=""
+  fi
 
   # Check if the target file was actually modified
   local file_was_modified=false
@@ -310,20 +323,48 @@ CRITICAL: If you do not know how to implement what was asked for, or if the requ
         return 1
       }
 
-      # Call AI with random model selection
-      if ! call_ai_for_evolution "$evolution_prompt" "$candidate_id"; then
-        echo "[WORKER-$$] ERROR: AI model failed to generate code - leaving as pending for retry" >&2
+      # AIDEV-NOTE: Retry logic for AI code generation
+      # Try up to 3 times with different random models before giving up
+      # This handles transient failures like rate limits or capacity issues
+      local max_retries=3
+      local retry_count=0
+      local ai_success=false
+
+      while [[ $retry_count -lt $max_retries ]]; do
+        ((retry_count++))
+        echo "[WORKER-$$] AI attempt $retry_count/$max_retries for $candidate_id" >&2
+
+        # Re-copy source file if this is a retry (previous attempt may have corrupted it)
+        if [[ $retry_count -gt 1 ]]; then
+          echo "[WORKER-$$] Re-copying source file for retry attempt" >&2
+          cp "$source_file" "$target_file"
+        fi
+
+        if call_ai_for_evolution "$evolution_prompt" "$candidate_id"; then
+          ai_success=true
+          break
+        else
+          echo "[WORKER-$$] AI attempt $retry_count failed" >&2
+          if [[ $retry_count -lt $max_retries ]]; then
+            echo "[WORKER-$$] Will retry with a different model..." >&2
+            sleep 2  # Brief pause before retry
+          fi
+        fi
+      done
+
+      if [[ "$ai_success" != "true" ]]; then
+        echo "[WORKER-$$] ERROR: All $max_retries AI attempts failed for $candidate_id" >&2
         safe_popd
         rm -f "$target_file"  # Clean up on failure
-        # Return with special code to indicate AI failure (should remain pending)
+        # Return with special code to indicate AI failure after all retries exhausted
         return 77
       fi
 
       # Restore working directory
       safe_popd
-      
-      echo "[WORKER-$$] Evolution applied successfully"
-      
+
+      echo "[WORKER-$$] Evolution applied successfully (attempt $retry_count/$max_retries)"
+
       # Record which AI model generated the code (regardless of evaluation outcome)
       if [[ -n "${SUCCESSFUL_RUN_MODEL:-}" ]]; then
         echo "[WORKER-$$] Recording that $SUCCESSFUL_RUN_MODEL generated the code" >&2
@@ -729,7 +770,8 @@ with EvolutionCSV('$FULL_CSV_PATH') as csv:
   
   if [[ $candidates_processed -ge $WORKER_MAX_CANDIDATES ]]; then
     echo "[WORKER-$$] Reached maximum candidates ($WORKER_MAX_CANDIDATES), exiting for refresh"
-    break
+    echo "[WORKER-$$] Worker exiting (will be restarted by dispatcher if running via 'claude-evolve run')"
+    exit 0
   fi
 done
 

@@ -1,6 +1,8 @@
 #!/bin/bash
 
-set -e
+# AIDEV-NOTE: Don't use set -e globally - it causes silent exits on any command failure
+# Instead, handle errors explicitly where needed
+# set -e  # DISABLED - was causing silent dispatcher crashes
 
 # Load configuration  
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -579,8 +581,8 @@ last_stuck_check=0
 
 # Main dispatch loop
 while true; do
-  # Clean up finished workers
-  cleanup_workers
+  # Clean up finished workers (with error protection)
+  cleanup_workers || echo "[WARN] cleanup_workers had an error, continuing..." >&2
 
   # Check if API limit was reached
   if [[ "$api_limit_reached" == "true" ]]; then
@@ -631,8 +633,17 @@ except Exception as e:
     fi
   fi
 
-  # Get current status
-  csv_stats=$(get_csv_stats "$FULL_CSV_PATH")
+  # Get current status (with error handling to prevent silent crashes)
+  csv_stats=$(get_csv_stats "$FULL_CSV_PATH") || {
+    echo "[ERROR] Failed to get CSV stats, retrying in 5 seconds..." >&2
+    sleep 5
+    continue
+  }
+  if [[ -z "$csv_stats" ]]; then
+    echo "[ERROR] Empty CSV stats, retrying in 5 seconds..." >&2
+    sleep 5
+    continue
+  fi
   read -r total_rows complete_count pending_count <<< "$csv_stats"
   active_workers=${#worker_pids[@]}
   
@@ -670,7 +681,7 @@ except Exception as e:
     print('0')  # Default to 0 on error
 " 2>/dev/null || echo "0")
 
-    if [[ $stuck_work_count -gt 0 ]]; then
+    if [[ ${stuck_work_count:-0} -gt 0 ]]; then
       echo "[DISPATCHER] Reset $stuck_work_count stuck candidates to pending"
       # Don't trigger ideation - go back to check pending count again
       continue  # Go back to top of loop to re-count pending

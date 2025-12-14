@@ -96,12 +96,12 @@ $prompt"
       ;;
     gpt5high)
       local ai_output
-      ai_output=$(timeout -k 30 600 codex exec -m gpt-5.1 -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      ai_output=$(timeout -k 30 600 codex exec -m gpt-5.2 -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     gpt5)
       local ai_output
-      ai_output=$(timeout -k 30 600 codex exec -m gpt-5.1 --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      ai_output=$(timeout -k 30 600 codex exec -m gpt-5.2 --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     o3high)
@@ -150,7 +150,7 @@ $prompt"
       ;;
     deepseek-openrouter)
       local ai_output
-      ai_output=$(timeout -k 30 600 opencode -m openrouter/deepseek/deepseek-v3.1-terminus run "$prompt" 2>&1)
+      ai_output=$(timeout -k 30 600 opencode -m openrouter/deepseek/deepseek-v3.2 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     grok-code-fast-openrouter)
@@ -190,7 +190,7 @@ $prompt"
     codex-oss-local)
       # Codex-OSS via Codex CLI with Ollama backend
       local ai_output
-      ai_output=$(timeout -k 30 2400 codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss "$prompt" 2>&1)
+      ai_output=$(timeout -k 30 2400 codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss --local-provider=ollama "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     deepseek-v3-llamacloud)
@@ -302,6 +302,9 @@ get_models_for_command() {
 # Usage: call_ai_random <prompt> <command>
 # command: "run" or "ideate"
 # Picks one random model from the list and uses it
+# AIDEV-NOTE: This function writes the selected model to a temp file because
+# export doesn't work from subshells (command substitution creates a subshell).
+# The parent process should read /tmp/.claude-evolve-model-$$ to get the model name.
 call_ai_random() {
   local prompt="$1"
   local command="$2"
@@ -330,6 +333,11 @@ call_ai_random() {
 
   echo "[AI] Selected $model for $command (random from $num_models models)" >&2
 
+  # Write model to temp file so parent can read it
+  # (exports don't propagate from subshells created by $(...) command substitution)
+  local model_file="/tmp/.claude-evolve-model-$$"
+  echo "$model" > "$model_file"
+
   # Call the AI model
   local ai_output
   ai_output=$(call_ai_model_configured "$model" "$prompt")
@@ -337,9 +345,6 @@ call_ai_random() {
 
   # Clean output if needed
   ai_output=$(clean_ai_output "$ai_output" "$model")
-
-  # Export the model used for tracking (used by worker)
-  export SUCCESSFUL_RUN_MODEL="$model"
 
   # Log result
   if [[ $ai_exit_code -eq 0 ]]; then

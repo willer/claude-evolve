@@ -144,7 +144,7 @@ call_ai_for_ideation() {
 
   # Count remaining placeholders - there should be none if AI did its job
   local placeholder_count
-  placeholder_count=$(grep -c "PLACEHOLDER" "$temp_csv_file" 2>/dev/null || echo "0")
+  placeholder_count=$(grep -c "PLACEHOLDER" "$temp_csv_file" 2>/dev/null) || true
   placeholder_count=$(echo "$placeholder_count" | tr -d '[:space:]')
   placeholder_count=${placeholder_count:-0}
 
@@ -227,7 +227,7 @@ fi
 
 # Validate strategy configuration
 if [[ $use_strategies == true ]]; then
-  total_check=$((NOVEL_EXPLORATION + HILL_CLIMBING + STRUCTURAL_MUTATION + CROSSOVER_HYBRID))
+  total_check=$((${NOVEL_EXPLORATION:-0} + ${HILL_CLIMBING:-0} + ${STRUCTURAL_MUTATION:-0} + ${CROSSOVER_HYBRID:-0}))
   if [[ $total_check -ne $TOTAL_IDEAS ]]; then
     echo "[ERROR] Strategy counts don't sum to total_ideas ($total_check != $TOTAL_IDEAS)" >&2
     echo "Check your evolution/config.yaml configuration" >&2
@@ -236,10 +236,11 @@ if [[ $use_strategies == true ]]; then
 fi
 
 # Get next generation number that doesn't have existing Python files
+# AIDEV-NOTE: Returns zero-padded generation number (e.g., "02" not "2")
 get_next_generation() {
   # Start with generation 1 if no CSV exists
   local start_gen=1
-  
+
   if [[ -f "$FULL_CSV_PATH" ]]; then
     # Use Python for proper CSV parsing to find max generation
     local max_gen
@@ -264,21 +265,25 @@ print(max_gen)
     # Start checking from the next generation after max
     start_gen=$((max_gen + 1))
   fi
-  
+
   # Keep incrementing until we find a generation with no Python files
   local candidate_gen=$start_gen
   while true; do
-    # No padding - generation numbers are used as-is in filenames
-    local gen_formatted="$candidate_gen"
+    # Zero-pad to 2 digits for consistency (gen01, gen02, etc.)
+    local gen_formatted
+    gen_formatted=$(printf "%02d" "$((10#$candidate_gen))")
 
-    # Check if any Python files exist for this generation
+    # Check if any Python files exist for this generation (check both padded and unpadded)
     local py_files_exist=false
     if ls "$FULL_OUTPUT_DIR"/evolution_gen${gen_formatted}-*.py >/dev/null 2>&1; then
+      py_files_exist=true
+    elif ls "$FULL_OUTPUT_DIR"/evolution_gen${candidate_gen}-*.py >/dev/null 2>&1; then
+      # Also check unpadded format for legacy compatibility
       py_files_exist=true
     fi
 
     if [[ "$py_files_exist" == "false" ]]; then
-      # This generation is safe to use
+      # This generation is safe to use - return padded format
       echo "$gen_formatted"
       return
     else
@@ -894,38 +899,54 @@ ideate_ai_strategies() {
   # Track successes - continue even if some strategies fail
   local strategies_attempted=0
   local strategies_succeeded=0
-  
-  if [[ $NOVEL_EXPLORATION -gt 0 ]]; then
+
+  # Helper to check if we've reached the target for this generation
+  check_generation_complete() {
+    local current_count
+    current_count=$(grep -c "^gen${CURRENT_GENERATION}-" "$FULL_CSV_PATH" 2>/dev/null) || true
+    current_count=${current_count:-0}
+    if [[ $current_count -ge $TOTAL_IDEAS ]]; then
+      echo "[INFO] Generation $CURRENT_GENERATION reached target ($current_count >= $TOTAL_IDEAS), stopping early" >&2
+      return 0
+    fi
+    return 1
+  }
+
+  if [[ ${NOVEL_EXPLORATION:-0} -gt 0 ]]; then
     ((strategies_attempted++))
     if generate_novel_ideas_direct "$NOVEL_EXPLORATION"; then
       ((strategies_succeeded++))
+      check_generation_complete && return 0
     else
       echo "[WARN] Novel exploration strategy failed, continuing with other strategies" >&2
     fi
   fi
-  
-  if [[ $HILL_CLIMBING -gt 0 ]]; then
+
+  if [[ ${HILL_CLIMBING:-0} -gt 0 ]]; then
     ((strategies_attempted++))
     if generate_hill_climbing_direct "$HILL_CLIMBING" "$top_performers"; then
       ((strategies_succeeded++))
+      check_generation_complete && return 0
     else
       echo "[WARN] Hill climbing strategy failed, continuing with other strategies" >&2
     fi
   fi
-  
-  if [[ $STRUCTURAL_MUTATION -gt 0 ]]; then
+
+  if [[ ${STRUCTURAL_MUTATION:-0} -gt 0 ]]; then
     ((strategies_attempted++))
     if generate_structural_mutation_direct "$STRUCTURAL_MUTATION" "$top_performers"; then
       ((strategies_succeeded++))
+      check_generation_complete && return 0
     else
       echo "[WARN] Structural mutation strategy failed, continuing with other strategies" >&2
     fi
   fi
-  
-  if [[ $CROSSOVER_HYBRID -gt 0 ]]; then
+
+  if [[ ${CROSSOVER_HYBRID:-0} -gt 0 ]]; then
     ((strategies_attempted++))
     if generate_crossover_direct "$CROSSOVER_HYBRID" "$top_performers"; then
       ((strategies_succeeded++))
+      check_generation_complete && return 0
     else
       echo "[WARN] Crossover strategy failed, continuing with other strategies" >&2
     fi
@@ -933,13 +954,18 @@ ideate_ai_strategies() {
   
   echo "[INFO] Strategy results: $strategies_succeeded/$strategies_attempted succeeded" >&2
 
-  # REQUIRE ALL strategies to succeed - no partial results
-  # Accepting partial results leads to endless loops with 1 idea per generation
-  if [[ $strategies_succeeded -eq $strategies_attempted ]]; then
+  # Accept partial results - if ANY strategy succeeded, that's enough
+  # The workers will process what we have, and next ideation run can add more
+  # AIDEV-NOTE: Previously required ALL strategies to succeed, which caused
+  # endless ideation loops because CSV writes weren't rolled back on "rejection"
+  if [[ ${strategies_succeeded:-0} -gt 0 ]]; then
+    if [[ $strategies_succeeded -lt $strategies_attempted ]]; then
+      echo "[INFO] Partial success: $strategies_succeeded/$strategies_attempted strategies completed" >&2
+      echo "[INFO] Workers will process existing ideas, next ideation can add more" >&2
+    fi
     return 0
   else
-    echo "[ERROR] Not all ideation strategies succeeded ($strategies_succeeded/$strategies_attempted)" >&2
-    echo "[ERROR] Rejecting partial results - will retry with exponential backoff" >&2
+    echo "[ERROR] All ideation strategies failed (0/$strategies_attempted)" >&2
     return 1
   fi
 }
@@ -1068,16 +1094,12 @@ CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CS
 
   # Get AI to directly edit the CSV file
   local ai_response
-  local stderr_file="stderr-$$.txt"
-  # Temporarily show stderr for debugging
   if ! ai_response=$(call_ai_for_ideation "$prompt" "$CURRENT_GENERATION" "$count" "$temp_csv_basename"); then
     echo "[ERROR] AI model failed to generate novel ideas" >&2
-    cat "$stderr_file" >&2
     safe_popd
-    rm -f "$temp_csv" "$stderr_file"
+    rm -f "$temp_csv"
     return 1
   fi
-  rm -f "$stderr_file"
 
   # Restore working directory
   safe_popd
@@ -1187,7 +1209,7 @@ If you must read source files:
 - Focus only on finding parameter definitions at the top of the file
 - Do NOT read the entire implementation
 
-Most of the time, you can infer parameters from descriptions like "RSI with threshold 30" or "MA period 20".
+Most of the time, you can infer parameters from descriptions like 'RSI with threshold 30' or 'MA period 20'.
 
 CRITICAL TASK:
 The CSV file already contains $count stub rows with these IDs: $required_ids_str
@@ -1221,16 +1243,12 @@ CRITICAL INSTRUCTIONS:
 
   # Get AI to directly edit the CSV file
   local ai_response
-  local stderr_file="stderr-$$.txt"
-  # Temporarily show stderr for debugging
   if ! ai_response=$(call_ai_for_ideation "$prompt" "$CURRENT_GENERATION" "$count" "$temp_csv_basename"); then
     echo "[ERROR] AI model failed to generate hill climbing ideas" >&2
-    cat "$stderr_file" >&2
     safe_popd
-    rm -f "$temp_csv" "$stderr_file"
+    rm -f "$temp_csv"
     return 1
   fi
-  rm -f "$stderr_file"
 
   # Restore working directory
   safe_popd
@@ -1364,16 +1382,12 @@ CRITICAL INSTRUCTIONS:
 
   # Get AI to directly edit the CSV file
   local ai_response
-  local stderr_file="stderr-$$.txt"
-  # Temporarily show stderr for debugging
   if ! ai_response=$(call_ai_for_ideation "$prompt" "$CURRENT_GENERATION" "$count" "$temp_csv_basename"); then
     echo "[ERROR] AI model failed to generate structural mutation ideas" >&2
-    cat "$stderr_file" >&2
     safe_popd
-    rm -f "$temp_csv" "$stderr_file"
+    rm -f "$temp_csv"
     return 1
   fi
-  rm -f "$stderr_file"
 
   # Restore working directory
   safe_popd
@@ -1507,16 +1521,12 @@ CRITICAL INSTRUCTIONS:
 
   # Get AI to directly edit the CSV file
   local ai_response
-  local stderr_file="stderr-$$.txt"
-  # Temporarily show stderr for debugging
   if ! ai_response=$(call_ai_for_ideation "$prompt" "$CURRENT_GENERATION" "$count" "$temp_csv_basename"); then
     echo "[ERROR] AI model failed to generate crossover hybrid ideas" >&2
-    cat "$stderr_file" >&2
     safe_popd
-    rm -f "$temp_csv" "$stderr_file"
+    rm -f "$temp_csv"
     return 1
   fi
-  rm -f "$stderr_file"
 
   # Restore working directory
   safe_popd
@@ -1628,15 +1638,12 @@ CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CS
 
   # Get AI to directly edit the CSV file
   local ai_response
-  local stderr_file="stderr-$$.txt"
-  if ! ai_response=$(call_ai_for_ideation "$prompt" "$CURRENT_GENERATION" "$TOTAL_IDEAS" "$temp_csv_basename" 2>"$stderr_file"); then
+  if ! ai_response=$(call_ai_for_ideation "$prompt" "$CURRENT_GENERATION" "$TOTAL_IDEAS" "$temp_csv_basename"); then
     echo "[ERROR] AI model failed to generate ideas" >&2
-    cat "$stderr_file" >&2
     safe_popd
-    rm -f "$temp_csv" "$stderr_file"
+    rm -f "$temp_csv"
     return 1
   fi
-  rm -f "$stderr_file"
 
   # Restore working directory
   safe_popd
@@ -1652,8 +1659,90 @@ CRITICAL: You must use your file editing tools (Edit/MultiEdit) to modify the CS
   return 0
 }
 
-# Determine generation number for this ideation run
-CURRENT_GENERATION=$(get_next_generation)
+# AIDEV-NOTE: Determine which generation to use for ideation
+# Check if the HIGHEST existing generation needs more ideas before creating a new one
+get_highest_generation() {
+  if [[ ! -f "$FULL_CSV_PATH" ]]; then
+    echo "0"
+    return
+  fi
+  "$PYTHON_CMD" -c "
+import csv
+max_gen = 0
+with open('$FULL_CSV_PATH', 'r') as f:
+    reader = csv.reader(f)
+    next(reader, None)  # Skip header
+    for row in reader:
+        if row and len(row) > 0:
+            id_field = row[0].strip()
+            if id_field.startswith('gen') and '-' in id_field:
+                try:
+                    gen_part = id_field.split('-')[0]
+                    gen_num = int(gen_part[3:])
+                    max_gen = max(max_gen, gen_num)
+                except (ValueError, IndexError):
+                    pass
+print(max_gen)
+"
+}
+
+count_generation_ideas() {
+  local gen="$1"
+  local count
+  count=$(grep -c "^gen${gen}-" "$FULL_CSV_PATH" 2>/dev/null) || true
+  echo "${count:-0}"
+}
+
+count_generation_pending() {
+  local gen="$1"
+  local count
+  count=$(grep -c "^gen${gen}-.*,pending" "$FULL_CSV_PATH" 2>/dev/null) || true
+  echo "${count:-0}"
+}
+
+# Find the right generation to use
+# AIDEV-NOTE: Generation numbers must be zero-padded to 2 digits (gen01, gen02, etc.)
+# to maintain consistency with existing CSV data format
+highest_gen=$(get_highest_generation)
+if [[ ${highest_gen:-0} -eq 0 ]]; then
+  # No generations yet, start with 01
+  CURRENT_GENERATION="01"
+  echo "[INFO] No existing generations, starting with generation 01"
+else
+  # Check if highest generation needs more ideas
+  # Use unpadded for grep patterns (matches both gen1- and gen01-)
+  existing_ideas=$(count_generation_ideas "$highest_gen")
+  pending_ideas=$(count_generation_pending "$highest_gen")
+  # Also check padded format
+  padded_gen=$(printf "%02d" "$((10#$highest_gen))")
+  existing_ideas_padded=$(count_generation_ideas "$padded_gen")
+  pending_ideas_padded=$(count_generation_pending "$padded_gen")
+  # Use whichever found more (handles both gen1 and gen01 formats)
+  if [[ ${existing_ideas_padded:-0} -gt ${existing_ideas:-0} ]]; then
+    existing_ideas=$existing_ideas_padded
+    pending_ideas=$pending_ideas_padded
+  fi
+
+  echo "[INFO] Highest generation: $highest_gen with $existing_ideas total ideas ($pending_ideas pending)"
+
+  if [[ $existing_ideas -ge $TOTAL_IDEAS ]]; then
+    # Highest generation is full, create a new one
+    CURRENT_GENERATION=$(get_next_generation)
+    # Ensure it's zero-padded
+    CURRENT_GENERATION=$(printf "%02d" "$((10#$CURRENT_GENERATION))")
+    echo "[INFO] Generation $highest_gen is full ($existing_ideas >= $TOTAL_IDEAS), creating generation $CURRENT_GENERATION"
+  elif [[ $pending_ideas -ge $TOTAL_IDEAS ]]; then
+    # Already have enough pending, skip ideation
+    echo "[INFO] Generation $padded_gen already has $pending_ideas pending ideas (target: $TOTAL_IDEAS)"
+    echo "[INFO] Skipping ideation - workers will process existing ideas"
+    exit 0
+  else
+    # Continue filling the current highest generation - use padded format
+    CURRENT_GENERATION=$(printf "%02d" "$((10#$highest_gen))")
+    echo "[INFO] Continuing generation $CURRENT_GENERATION (need $((TOTAL_IDEAS - existing_ideas)) more ideas)"
+  fi
+fi
+
 echo "[INFO] Starting ideation for generation $CURRENT_GENERATION"
 
 # Main execution with retry logic and exponential backoff
@@ -1662,6 +1751,20 @@ wait_seconds=300  # Start with 5 minutes
 max_wait_seconds=300  # Cap at 5 minutes
 
 while true; do
+  # Re-check pending count in case another process added ideas
+  pending_count=$(grep -c "^gen${CURRENT_GENERATION}-.*,pending" "$FULL_CSV_PATH" 2>/dev/null) || true
+  pending_count=${pending_count:-0}
+  total_count=$(grep -c "^gen${CURRENT_GENERATION}-" "$FULL_CSV_PATH" 2>/dev/null) || true
+  total_count=${total_count:-0}
+
+  if [[ $total_count -ge $TOTAL_IDEAS ]]; then
+    echo "[INFO] Generation $CURRENT_GENERATION now has $total_count ideas (target: $TOTAL_IDEAS)"
+    echo "[INFO] Ideation complete for this generation"
+    exit 0
+  elif [[ ${pending_count:-0} -gt 0 ]]; then
+    echo "[INFO] Found $pending_count pending, $total_count total for generation $CURRENT_GENERATION (target: $TOTAL_IDEAS)"
+  fi
+
   if [[ $use_strategies == true ]]; then
     echo "[INFO] Multi-strategy AI generation mode"
     if ideate_ai_strategies; then

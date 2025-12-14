@@ -292,10 +292,12 @@ with open('$csv_file', 'r') as f:
 # Sort generations numerically
 for gen in $(cut -d' ' -f1 "$gen_stats_file" | sort -u | awk '{print substr($0,4), $0}' | sort -n | cut -d' ' -f2 || echo ""); do
   [[ -z "$gen" ]] && continue
-  total_in_gen=$(grep -c "^$gen " "$gen_stats_file" 2>/dev/null || echo "0")
-  completed_in_gen=$(grep -c "^$gen completed" "$gen_stats_file" 2>/dev/null || echo "0")
+  total_in_gen=$(grep -c "^$gen " "$gen_stats_file" 2>/dev/null) || true
+  total_in_gen=${total_in_gen:-0}
+  completed_in_gen=$(grep -c "^$gen completed" "$gen_stats_file" 2>/dev/null) || true
   # Clean any whitespace from the numbers
   completed_in_gen=$(echo "$completed_in_gen" | tr -d '[:space:]')
+  completed_in_gen=${completed_in_gen:-0}
   
   echo -n "$gen: $total_in_gen candidates"
   
