@@ -27,6 +27,7 @@ sys.path.insert(0, str(SCRIPT_DIR.parent))
 
 from lib.evolution_csv import EvolutionCSV
 from lib.log import log, log_error, log_warn, set_prefix
+from lib.meta_learning import process_new_generations
 set_prefix("RUN")
 
 
@@ -35,8 +36,10 @@ class RunConfig:
     """Configuration for the run orchestrator."""
     csv_path: str
     evolution_dir: str
+    brief_path: str = ""
     max_workers: int = 4
     auto_ideate: bool = True
+    meta_learning: bool = True  # Enable meta-learning notes
     worker_timeout: int = 600
     poll_interval: int = 5
     min_completed_for_ideation: int = 3
@@ -290,6 +293,20 @@ class EvolutionRunner:
 
                 if stats['pending'] == 0:
                     if self.should_ideate(stats):
+                        # Process meta-learning before ideation
+                        # AIDEV-NOTE: This updates BRIEF-notes.md with learnings from completed generations
+                        if self.config.meta_learning and self.config.brief_path:
+                            try:
+                                processed = process_new_generations(
+                                    self.config.csv_path,
+                                    self.config.evolution_dir,
+                                    self.config.brief_path
+                                )
+                                if processed > 0:
+                                    log(f"Meta-learning: processed {processed} generation(s)")
+                            except Exception as e:
+                                log_warn(f"Meta-learning failed: {e}")
+
                         if self.run_ideation():
                             continue  # Loop back to check for new work
                         else:
@@ -349,8 +366,10 @@ def load_config(config_path: Optional[str] = None) -> RunConfig:
     return RunConfig(
         csv_path=resolve(data.get('csv_file', 'evolution.csv')),
         evolution_dir=str(base_dir.resolve()),
+        brief_path=resolve(data.get('brief_file', 'BRIEF.md')),
         max_workers=parallel.get('max_workers', 4),
         auto_ideate=data.get('auto_ideate', True),
+        meta_learning=data.get('meta_learning', True),
         worker_timeout=data.get('timeout_seconds', 600),
         poll_interval=parallel.get('poll_interval', 5),
         min_completed_for_ideation=data.get('min_completed_for_ideation', 3),

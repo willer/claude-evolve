@@ -34,7 +34,11 @@ from lib.log import log, log_error, log_warn, log_debug, set_prefix
 set_prefix("WORKER")
 
 from lib.evolution_csv import EvolutionCSV
-from lib.ai_cli import call_ai_with_backoff, get_git_protection_warning, AIError
+from lib.ai_cli import (
+    call_ai_with_backoff, call_ai_model, get_models_for_command,
+    get_git_protection_warning, AIError
+)
+from lib.llm_bandit import LLMBandit
 
 
 @dataclass
@@ -73,6 +77,21 @@ class Worker:
         self.csv = EvolutionCSV(config.csv_path)
         self.current_candidate_id: Optional[str] = None
         self._setup_signal_handlers()
+
+        # Initialize LLM bandit for model selection
+        # AIDEV-NOTE: Bandit learns which models produce better improvements
+        models = get_models_for_command("run")
+        if models:
+            bandit_state = os.path.join(config.evolution_dir, "llm_bandit.json")
+            self.bandit = LLMBandit(models, state_file=bandit_state)
+            log(f"LLM bandit initialized with {len(models)} models")
+        else:
+            self.bandit = None
+            log_warn("No models available for bandit, using random selection")
+
+        # Track parent scores for bandit updates
+        self._parent_score: Optional[float] = None
+        self._model_used: Optional[str] = None
 
     def _setup_signal_handlers(self):
         """Setup signal handlers for graceful shutdown."""
@@ -148,10 +167,11 @@ CRITICAL: If you do not know how to implement what was asked for, or if the requ
 
     def _call_ai_with_backoff(self, prompt: str, target_file: Path) -> Tuple[bool, str]:
         """
-        Call AI with round-based retry and exponential backoff.
+        Call AI with bandit-based model selection and fallback.
 
-        AIDEV-NOTE: Uses call_ai_with_backoff which tries all models in the pool,
-        then waits with exponential backoff if all fail, and repeats.
+        AIDEV-NOTE: First tries model selected by UCB bandit.
+        If that fails, falls back to round-robin retry approach.
+        The bandit learns which models produce better algorithm improvements.
 
         Returns:
             Tuple of (success, model_name)
@@ -159,6 +179,31 @@ CRITICAL: If you do not know how to implement what was asked for, or if the requ
         # Get file hash before AI call
         hash_before = self._file_hash(target_file) if target_file.exists() else None
 
+        # Try bandit-selected model first
+        if self.bandit:
+            selected_model = self.bandit.select_model()
+            log(f"Bandit selected: {selected_model}")
+
+            try:
+                output, model = call_ai_model(
+                    prompt,
+                    selected_model,
+                    working_dir=self.config.evolution_dir
+                )
+
+                hash_after = self._file_hash(target_file) if target_file.exists() else None
+
+                if hash_before != hash_after and hash_after is not None:
+                    log(f"AI successfully modified file (model: {model})")
+                    self._model_used = model  # Track for bandit update
+                    return True, model
+                else:
+                    log(f"Bandit model {selected_model} completed but didn't modify file, trying fallback...")
+
+            except AIError as e:
+                log(f"Bandit model {selected_model} failed: {e}, trying fallback...")
+
+        # Fallback to round-based retry with all models
         try:
             output, model = call_ai_with_backoff(
                 prompt,
@@ -174,6 +219,7 @@ CRITICAL: If you do not know how to implement what was asked for, or if the requ
 
             if hash_before != hash_after and hash_after is not None:
                 log(f"AI successfully modified file (model: {model})")
+                self._model_used = model  # Track for bandit update
                 return True, model
             else:
                 log(f"AI completed but did not modify file")
@@ -431,6 +477,9 @@ python validator.py {target_basename}
             Exit code (0=success, 77=AI failed, 78=missing parent, etc.)
         """
         self.current_candidate_id = candidate.id
+        self._model_used = None  # Reset for this candidate
+        self._parent_score = None
+
         log(f"Processing: {candidate.id}")
         log(f"Description: {candidate.description[:80]}..." if len(candidate.description) > 80 else f"Description: {candidate.description}")
         log(f"Based on: {candidate.based_on_id or 'baseline'}")
@@ -438,8 +487,19 @@ python validator.py {target_basename}
         is_baseline = self._is_baseline(candidate.id, candidate.based_on_id)
         target_file = Path(self.config.output_dir) / f"evolution_{candidate.id}.py"
 
-        # Resolve parent
+        # Resolve parent and get parent's score for bandit
         resolved_parent, source_file = self._resolve_parent_id(candidate.based_on_id)
+
+        # Look up parent's score for bandit improvement tracking
+        if resolved_parent and self.bandit:
+            with EvolutionCSV(self.config.csv_path) as csv:
+                parent_info = csv.get_candidate_info(resolved_parent)
+                if parent_info and parent_info.get('performance'):
+                    try:
+                        self._parent_score = float(parent_info['performance'])
+                        log(f"Parent {resolved_parent} score: {self._parent_score}")
+                    except ValueError:
+                        pass
 
         if source_file is None and not is_baseline:
             log_error(f"Parent not found: {candidate.based_on_id}")
@@ -532,6 +592,10 @@ python validator.py {target_basename}
             log_error("Evaluation failed - no score")
             with EvolutionCSV(self.config.csv_path) as csv:
                 csv.update_candidate_status(candidate.id, 'failed')
+            # Update bandit with failure
+            if self.bandit and self._model_used:
+                self.bandit.update(self._model_used, child_score=None, parent_score=self._parent_score)
+                log(f"Bandit update: {self._model_used} failed evaluation")
             return 1
 
         log(f"Score: {score}")
@@ -545,6 +609,16 @@ python validator.py {target_basename}
             for key, value in json_data.items():
                 if key not in ('performance', 'score'):
                     csv.update_candidate_field(candidate.id, key, str(value))
+
+        # Update bandit with improvement data
+        # AIDEV-NOTE: This teaches the bandit which models produce better results
+        if self.bandit and self._model_used:
+            improvement = self.bandit.update(
+                self._model_used,
+                child_score=score,
+                parent_score=self._parent_score
+            )
+            log(f"Bandit update: {self._model_used} improvement={improvement:.4f}")
 
         self.current_candidate_id = None
         return 0

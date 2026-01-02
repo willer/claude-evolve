@@ -27,6 +27,51 @@ from lib.ai_cli import call_ai_with_backoff, get_git_protection_warning, AIError
 from lib.embedding import check_novelty as check_embedding_novelty, get_embedding, set_cache_file, save_cache
 
 
+def sample_parent_powerlaw(parents: List[Dict], alpha: float = 1.0) -> Dict:
+    """
+    Sample a parent using power-law distribution based on rank.
+
+    AIDEV-NOTE: This gives higher probability to top-ranked parents while
+    still allowing lower-ranked ones to be selected. Better than uniform
+    because it focuses evolution on promising directions.
+
+    Formula: prob[i] = (rank_i)^(-alpha) where rank is 1-indexed
+
+    Args:
+        parents: List of parent dicts, assumed to be sorted by performance (best first)
+        alpha: Power-law exponent. 0=uniform, 1=moderate, 2=strong preference for best
+
+    Returns:
+        Selected parent dict
+    """
+    if not parents:
+        raise ValueError("No parents to sample from")
+
+    if len(parents) == 1:
+        return parents[0]
+
+    import random
+
+    # Calculate unnormalized probabilities
+    # rank is 1-indexed (best parent has rank 1)
+    probs = [(i + 1) ** (-alpha) for i in range(len(parents))]
+
+    # Normalize
+    total = sum(probs)
+    probs = [p / total for p in probs]
+
+    # Sample
+    r = random.random()
+    cumulative = 0.0
+    for i, p in enumerate(probs):
+        cumulative += p
+        if r <= cumulative:
+            return parents[i]
+
+    # Fallback (shouldn't happen)
+    return parents[0]
+
+
 @dataclass
 class IdeationConfig:
     """Configuration for ideation."""
@@ -42,6 +87,13 @@ class IdeationConfig:
     structural_mutation: int = 3
     crossover_hybrid: int = 4
     num_elites: int = 3
+
+    # Power-law parent selection
+    # AIDEV-NOTE: alpha controls exploitation vs exploration for parent selection
+    # alpha=0: uniform (all parents equally likely)
+    # alpha=1: moderate preference for top performers
+    # alpha=2: strong preference for top performers
+    parent_selection_alpha: float = 1.0
 
     # Novelty filtering
     novelty_enabled: bool = True
@@ -160,10 +212,20 @@ class IdeationStrategy(ABC):
             temp_csv.unlink(missing_ok=True)
 
     def _get_default_parent(self, context: IdeationContext) -> str:
-        """Get default parent ID for this strategy."""
-        if context.top_performers:
-            return context.top_performers[0]['id']
-        return ""
+        """
+        Get parent ID for this strategy using power-law selection.
+
+        AIDEV-NOTE: Uses power-law sampling to select parent, giving higher
+        probability to top performers while still allowing lower-ranked
+        parents to be selected. This balances exploitation with exploration.
+        """
+        if not context.top_performers:
+            return ""
+
+        # Use power-law sampling from config
+        alpha = getattr(context.config, 'parent_selection_alpha', 1.0)
+        parent = sample_parent_powerlaw(context.top_performers, alpha=alpha)
+        return parent['id']
 
     def _parse_results(self, temp_csv: Path, expected_ids: List[str]) -> List[Idea]:
         """Parse ideas from modified CSV."""
@@ -372,6 +434,22 @@ class Ideator:
         if Path(self.config.brief_path).exists():
             brief_content = Path(self.config.brief_path).read_text()[:1000]
 
+        # Read BRIEF-notes.md if it exists (accumulated learnings)
+        # AIDEV-NOTE: This provides meta-learnings from previous generations
+        notes_path = Path(self.config.evolution_dir) / "BRIEF-notes.md"
+        if notes_path.exists():
+            notes_content = notes_path.read_text()
+            # Take last ~500 chars of notes (most recent learnings)
+            if len(notes_content) > 500:
+                # Find a good cut point at a section header
+                recent_notes = notes_content[-800:]
+                if "## Generation" in recent_notes:
+                    idx = recent_notes.find("## Generation")
+                    recent_notes = recent_notes[idx:]
+                notes_content = "...\n" + recent_notes
+            brief_content += f"\n\n## Learnings from Previous Generations\n{notes_content}"
+            print(f"[IDEATE] Including {len(notes_content)} chars of accumulated learnings", file=sys.stderr)
+
         return IdeationContext(
             generation=generation,
             top_performers=top_performers,
@@ -509,6 +587,7 @@ def load_config(config_path: Optional[str] = None) -> IdeationConfig:
         structural_mutation=ideation.get('structural_mutation', 3),
         crossover_hybrid=ideation.get('crossover_hybrid', 4),
         num_elites=ideation.get('num_elites', 3),
+        parent_selection_alpha=ideation.get('parent_selection_alpha', 1.0),
         novelty_enabled=novelty.get('enabled', True),
         novelty_threshold=novelty.get('threshold', 0.92),
         max_rounds=ideation.get('max_rounds', 10),
