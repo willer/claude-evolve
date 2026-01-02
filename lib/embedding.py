@@ -2,20 +2,74 @@
 """
 Embedding helper using Ollama's nomic-embed-text model.
 AIDEV-NOTE: Requires ollama with nomic-embed-text model pulled.
+AIDEV-NOTE: Embeddings are cached to disk for efficiency.
 """
 
+import hashlib
 import json
 import math
 import os
 import urllib.request
-from typing import List, Optional, Tuple
+from pathlib import Path
+from typing import List, Optional, Tuple, Dict
 
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "nomic-embed-text")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 
+# Global cache - maps text hash to embedding
+_embedding_cache: Dict[str, List[float]] = {}
+_cache_file: Optional[Path] = None
+_cache_dirty = False
 
-def get_embedding(text: str) -> Optional[List[float]]:
-    """Get embedding vector for text using Ollama."""
+
+def _text_hash(text: str) -> str:
+    """Create a short hash of text for cache key."""
+    return hashlib.sha256(text.encode('utf-8')).hexdigest()[:16]
+
+
+def set_cache_file(path: str) -> None:
+    """Set the file path for persistent embedding cache."""
+    global _cache_file, _embedding_cache
+    _cache_file = Path(path)
+    _load_cache()
+
+
+def _load_cache() -> None:
+    """Load cache from disk."""
+    global _embedding_cache
+    if _cache_file and _cache_file.exists():
+        try:
+            with open(_cache_file, 'r') as f:
+                _embedding_cache = json.load(f)
+            print(f"[EMBED] Loaded {len(_embedding_cache)} cached embeddings", file=__import__('sys').stderr)
+        except Exception as e:
+            print(f"[EMBED] Cache load error: {e}", file=__import__('sys').stderr)
+            _embedding_cache = {}
+
+
+def save_cache() -> None:
+    """Save cache to disk."""
+    global _cache_dirty
+    if _cache_file and _cache_dirty:
+        try:
+            _cache_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(_cache_file, 'w') as f:
+                json.dump(_embedding_cache, f)
+            _cache_dirty = False
+        except Exception as e:
+            print(f"[EMBED] Cache save error: {e}", file=__import__('sys').stderr)
+
+
+def get_embedding(text: str, use_cache: bool = True) -> Optional[List[float]]:
+    """Get embedding vector for text using Ollama. Uses cache if available."""
+    global _cache_dirty
+
+    # Check cache first
+    if use_cache:
+        key = _text_hash(text)
+        if key in _embedding_cache:
+            return _embedding_cache[key]
+
     try:
         req_data = json.dumps({"model": EMBEDDING_MODEL, "input": text}).encode('utf-8')
         req = urllib.request.Request(
@@ -25,7 +79,15 @@ def get_embedding(text: str) -> Optional[List[float]]:
         )
         with urllib.request.urlopen(req, timeout=30) as response:
             data = json.loads(response.read().decode('utf-8'))
-            return data.get("embeddings", [[]])[0]
+            embedding = data.get("embeddings", [[]])[0]
+
+            # Store in cache
+            if use_cache and embedding:
+                key = _text_hash(text)
+                _embedding_cache[key] = embedding
+                _cache_dirty = True
+
+            return embedding
     except Exception as e:
         print(f"Embedding error: {e}")
         return None
@@ -99,6 +161,7 @@ def check_novelty(
     """
     Check if new code is novel enough compared to existing code.
     Returns (is_novel, max_similarity).
+    Uses cache for efficiency - subsequent calls with same texts are instant.
     """
     new_emb = get_embedding(new_code)
     if not new_emb:
@@ -110,6 +173,9 @@ def check_novelty(
         if existing_emb:
             sim = cosine_similarity(new_emb, existing_emb)
             max_sim = max(max_sim, sim)
+
+    # Save cache after checking (batched save)
+    save_cache()
 
     return max_sim < threshold, max_sim
 

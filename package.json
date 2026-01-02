@@ -1,13 +1,16 @@
 {
   "name": "claude-evolve",
-  "version": "1.8.51",
+  "version": "1.9.10",
   "bin": {
     "claude-evolve": "bin/claude-evolve",
     "claude-evolve-main": "bin/claude-evolve-main",
     "claude-evolve-setup": "bin/claude-evolve-setup",
     "claude-evolve-ideate": "bin/claude-evolve-ideate",
+    "claude-evolve-ideate-py": "bin/claude-evolve-ideate-py",
     "claude-evolve-run": "bin/claude-evolve-run",
+    "claude-evolve-run-py": "bin/claude-evolve-run-py",
     "claude-evolve-worker": "bin/claude-evolve-worker",
+    "claude-evolve-worker-py": "bin/claude-evolve-worker-py",
     "claude-evolve-analyze": "bin/claude-evolve-analyze",
     "claude-evolve-config": "bin/claude-evolve-config",
     "claude-evolve-killall": "bin/claude-evolve-killall"

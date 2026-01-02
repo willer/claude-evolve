@@ -558,6 +558,354 @@ class EvolutionCSV:
         """Check if there are any pending candidates. Used by dispatcher."""
         return self.count_pending_candidates() > 0
 
+    def get_top_performers(self, n: int = 10, include_novel: bool = True) -> List[Dict[str, Any]]:
+        """
+        Get top performing candidates sorted by performance score.
+
+        Args:
+            n: Number of top performers to return
+            include_novel: If True, also include candidates from recent generations
+                          even if they're not top performers (for diversity)
+
+        Returns:
+            List of dicts with id, basedOnId, description, performance, status
+        """
+        rows = self._read_csv()
+        if not rows:
+            return []
+
+        has_header = rows and rows[0] and rows[0][0].lower() == 'id'
+        start_idx = 1 if has_header else 0
+
+        candidates = []
+        for row in rows[start_idx:]:
+            if not self.is_valid_candidate_row(row):
+                continue
+
+            candidate_id = row[0].strip().strip('"')
+            status = row[4].strip().lower() if len(row) > 4 else ''
+
+            # Only include completed candidates with valid performance
+            if status != 'complete':
+                continue
+
+            performance_str = row[3].strip() if len(row) > 3 else ''
+            if not performance_str:
+                continue
+
+            try:
+                performance = float(performance_str)
+            except ValueError:
+                continue
+
+            candidates.append({
+                'id': candidate_id,
+                'basedOnId': row[1].strip() if len(row) > 1 else '',
+                'description': row[2].strip() if len(row) > 2 else '',
+                'performance': performance,
+                'status': status
+            })
+
+        # Sort by performance (descending)
+        candidates.sort(key=lambda x: x['performance'], reverse=True)
+
+        # Get top n
+        top_n = candidates[:n]
+
+        # Optionally include novel candidates from recent generations
+        if include_novel and len(candidates) > n:
+            # Find the highest generation number
+            max_gen = 0
+            for c in candidates:
+                gen_match = c['id'].split('-')[0] if '-' in c['id'] else ''
+                if gen_match.startswith('gen'):
+                    try:
+                        gen_num = int(gen_match[3:])
+                        max_gen = max(max_gen, gen_num)
+                    except ValueError:
+                        pass
+
+            # Include recent candidates not already in top_n
+            top_ids = {c['id'] for c in top_n}
+            for c in candidates:
+                if c['id'] in top_ids:
+                    continue
+                gen_match = c['id'].split('-')[0] if '-' in c['id'] else ''
+                if gen_match.startswith('gen'):
+                    try:
+                        gen_num = int(gen_match[3:])
+                        # Include from last 2 generations
+                        if gen_num >= max_gen - 1:
+                            top_n.append(c)
+                    except ValueError:
+                        pass
+
+        return top_n
+
+    def get_generation_stats(self) -> Dict[str, Dict[str, int]]:
+        """
+        Get statistics per generation.
+
+        Returns:
+            Dict mapping generation (e.g., "gen01") to stats dict with:
+            - total: total candidates
+            - pending: pending candidates
+            - complete: completed candidates
+            - failed: failed candidates
+        """
+        rows = self._read_csv()
+        if not rows:
+            return {}
+
+        has_header = rows and rows[0] and rows[0][0].lower() == 'id'
+        start_idx = 1 if has_header else 0
+
+        stats: Dict[str, Dict[str, int]] = {}
+
+        for row in rows[start_idx:]:
+            if not self.is_valid_candidate_row(row):
+                continue
+
+            candidate_id = row[0].strip().strip('"')
+            status = row[4].strip().lower() if len(row) > 4 else 'pending'
+
+            # Extract generation from ID (e.g., "gen01-001" -> "gen01")
+            if '-' in candidate_id:
+                generation = candidate_id.split('-')[0]
+            elif candidate_id.startswith('baseline'):
+                generation = 'baseline'
+            else:
+                generation = 'unknown'
+
+            if generation not in stats:
+                stats[generation] = {'total': 0, 'pending': 0, 'complete': 0, 'failed': 0}
+
+            stats[generation]['total'] += 1
+
+            if status == 'complete':
+                stats[generation]['complete'] += 1
+            elif status.startswith('failed'):
+                stats[generation]['failed'] += 1
+            elif status in ('pending', 'running', '') or status.startswith('failed-retry'):
+                stats[generation]['pending'] += 1
+
+        return stats
+
+    def get_all_descriptions(self) -> List[str]:
+        """
+        Get all candidate descriptions for novelty checking.
+
+        Returns:
+            List of description strings
+        """
+        rows = self._read_csv()
+        if not rows:
+            return []
+
+        has_header = rows and rows[0] and rows[0][0].lower() == 'id'
+        start_idx = 1 if has_header else 0
+
+        descriptions = []
+        for row in rows[start_idx:]:
+            if not self.is_valid_candidate_row(row):
+                continue
+
+            description = row[2].strip() if len(row) > 2 else ''
+            if description:
+                descriptions.append(description)
+
+        return descriptions
+
+    def get_highest_generation(self) -> int:
+        """
+        Get the highest generation number in the CSV.
+
+        Returns:
+            Highest generation number (0 if none found)
+        """
+        rows = self._read_csv()
+        if not rows:
+            return 0
+
+        has_header = rows and rows[0] and rows[0][0].lower() == 'id'
+        start_idx = 1 if has_header else 0
+
+        max_gen = 0
+        for row in rows[start_idx:]:
+            if not self.is_valid_candidate_row(row):
+                continue
+
+            candidate_id = row[0].strip().strip('"')
+            if '-' in candidate_id:
+                gen_part = candidate_id.split('-')[0]
+                if gen_part.startswith('gen'):
+                    try:
+                        gen_num = int(gen_part[3:])
+                        max_gen = max(max_gen, gen_num)
+                    except ValueError:
+                        pass
+
+        return max_gen
+
+    def get_next_id(self, generation: int) -> str:
+        """
+        Get the next available ID for a generation.
+
+        Args:
+            generation: Generation number (e.g., 1 for gen01)
+
+        Returns:
+            Next ID string (e.g., "gen01-005")
+        """
+        rows = self._read_csv()
+        gen_prefix = f"gen{generation:02d}"
+
+        max_id = 0
+        has_header = rows and rows[0] and rows[0][0].lower() == 'id'
+        start_idx = 1 if has_header else 0
+
+        for row in rows[start_idx:]:
+            if not self.is_valid_candidate_row(row):
+                continue
+
+            candidate_id = row[0].strip().strip('"')
+            if candidate_id.startswith(gen_prefix + '-'):
+                try:
+                    id_num = int(candidate_id.split('-')[1])
+                    max_id = max(max_id, id_num)
+                except (ValueError, IndexError):
+                    pass
+
+        return f"{gen_prefix}-{max_id + 1:03d}"
+
+    def get_next_ids(self, generation: int, count: int, claimed_ids: Optional[List[str]] = None) -> List[str]:
+        """
+        Get multiple next available IDs for a generation.
+
+        Args:
+            generation: Generation number
+            count: Number of IDs to generate
+            claimed_ids: Optional list of IDs already claimed in this session
+                        (not yet written to CSV). Prevents duplicate IDs.
+
+        Returns:
+            List of ID strings
+
+        AIDEV-NOTE: The claimed_ids parameter is critical for ideation where
+        multiple strategies run before writing to CSV. Without it, each strategy
+        would get overlapping IDs like gen75-001, gen75-002 for each strategy.
+        """
+        rows = self._read_csv()
+        gen_prefix = f"gen{generation:02d}"
+
+        max_id = 0
+        has_header = rows and rows[0] and rows[0][0].lower() == 'id'
+        start_idx = 1 if has_header else 0
+
+        # Check CSV for existing IDs
+        for row in rows[start_idx:]:
+            if not self.is_valid_candidate_row(row):
+                continue
+
+            candidate_id = row[0].strip().strip('"')
+            if candidate_id.startswith(gen_prefix + '-'):
+                try:
+                    id_num = int(candidate_id.split('-')[1])
+                    max_id = max(max_id, id_num)
+                except (ValueError, IndexError):
+                    pass
+
+        # Also check claimed IDs (not yet in CSV)
+        if claimed_ids:
+            for claimed_id in claimed_ids:
+                if claimed_id.startswith(gen_prefix + '-'):
+                    try:
+                        id_num = int(claimed_id.split('-')[1])
+                        max_id = max(max_id, id_num)
+                    except (ValueError, IndexError):
+                        pass
+
+        return [f"{gen_prefix}-{max_id + 1 + i:03d}" for i in range(count)]
+
+    def append_candidates(self, candidates: List[Dict[str, str]]) -> int:
+        """
+        Append multiple candidates to the CSV.
+
+        Args:
+            candidates: List of dicts with keys: id, basedOnId, description
+                       Optional keys: performance, status, idea-LLM, run-LLM
+
+        Returns:
+            Number of candidates appended
+        """
+        if not candidates:
+            return 0
+
+        rows = self._read_csv()
+
+        # Ensure header exists
+        if not rows:
+            rows = [['id', 'basedOnId', 'description', 'performance', 'status', 'idea-LLM', 'run-LLM']]
+        elif rows[0][0].lower() != 'id':
+            # Add header if missing
+            rows.insert(0, ['id', 'basedOnId', 'description', 'performance', 'status', 'idea-LLM', 'run-LLM'])
+
+        # Append candidates
+        for candidate in candidates:
+            row = [
+                candidate.get('id', ''),
+                candidate.get('basedOnId', ''),
+                candidate.get('description', ''),
+                candidate.get('performance', ''),
+                candidate.get('status', 'pending'),
+                candidate.get('idea-LLM', ''),
+                candidate.get('run-LLM', '')
+            ]
+            rows.append(row)
+
+        self._write_csv(rows)
+        return len(candidates)
+
+    def get_csv_stats(self) -> Dict[str, int]:
+        """
+        Get overall CSV statistics.
+
+        Returns:
+            Dict with total, pending, complete, failed counts
+
+        AIDEV-NOTE: Uses is_pending_candidate() for pending count to ensure
+        consistency between stats and what workers actually find.
+        """
+        rows = self._read_csv()
+        if not rows:
+            return {'total': 0, 'pending': 0, 'complete': 0, 'failed': 0, 'running': 0}
+
+        has_header = rows and rows[0] and rows[0][0].lower() == 'id'
+        start_idx = 1 if has_header else 0
+
+        stats = {'total': 0, 'pending': 0, 'complete': 0, 'failed': 0, 'running': 0}
+
+        for row in rows[start_idx:]:
+            if not self.is_valid_candidate_row(row):
+                continue
+
+            stats['total'] += 1
+
+            # Use is_pending_candidate for consistency with workers
+            if self.is_pending_candidate(row):
+                stats['pending'] += 1
+            else:
+                status = row[4].strip().lower() if len(row) > 4 else ''
+                if status == 'complete':
+                    stats['complete'] += 1
+                elif status == 'running':
+                    stats['running'] += 1
+                elif status.startswith('failed'):
+                    stats['failed'] += 1
+                # Anything else that's not pending gets counted as failed/other
+
+        return stats
+
 
 def main():
     """Command line interface for testing."""

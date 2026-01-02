@@ -196,9 +196,17 @@ ideate)
   shift
   exec "$SCRIPT_DIR/claude-evolve-ideate" "$@"
   ;;
+ideate-py)
+  shift
+  exec "$SCRIPT_DIR/claude-evolve-ideate-py" "$@"
+  ;;
 run)
   shift
   exec "$SCRIPT_DIR/claude-evolve-run" "$@"
+  ;;
+run-py)
+  shift
+  exec "$SCRIPT_DIR/claude-evolve-run-py" "$@"
   ;;
 analyze)
   shift
@@ -231,6 +239,10 @@ config)
 killall)
   shift
   exec "$SCRIPT_DIR/claude-evolve-killall" "$@"
+  ;;
+worker-py)
+  shift
+  exec "$SCRIPT_DIR/claude-evolve-worker-py" "$@"
   ;;
 *)
   echo "Unknown command: ${1:-}"

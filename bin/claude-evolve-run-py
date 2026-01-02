@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+"""
+Python implementation of claude-evolve-run.
+Test this alongside the shell version before switching.
+"""
+import sys
+import os
+
+# Add lib to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'lib'))
+
+from evolve_run import main
+
+if __name__ == '__main__':
+    sys.exit(main())

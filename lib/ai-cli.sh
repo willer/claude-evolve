@@ -123,8 +123,14 @@ $prompt"
       ;;
     gemini-3-pro-preview)
       local ai_output
-      # Gemini v3 Pro Preview via OpenRouter (30 minute timeout)
+      # Gemini v3 Pro Preview via OpenRouter (30 minute timeout) - EXPENSIVE
       ai_output=$(timeout -k 30 1800 opencode -m openrouter/google/gemini-3-pro-preview run "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    gemini-3-flash)
+      local ai_output
+      # Gemini 3 Flash - fast, cheap, strong thinker
+      ai_output=$(timeout -k 30 600 opencode -m openrouter/google/gemini-3-flash-preview run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     cursor-sonnet)
@@ -139,13 +145,13 @@ $prompt"
       ;;
     glm-openrouter)
       local ai_output
-      ai_output=$(timeout -k 30 600 opencode -m openrouter/z-ai/glm-4.6 run "$prompt" 2>&1)
+      ai_output=$(timeout -k 30 600 opencode -m openrouter/z-ai/glm-4.7 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     glm-zai)
       # GLM -- can be slow sometimes
       local ai_output
-      ai_output=$(timeout -k 30 1800 opencode -m zai-coding-plan/glm-4.6 run "$prompt" 2>&1)
+      ai_output=$(timeout -k 30 1800 opencode -m zai-coding-plan/glm-4.7 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     deepseek-openrouter)
@@ -160,7 +166,14 @@ $prompt"
       ;;
     grok-4-openrouter)
       local ai_output
+      # EXPENSIVE - consider grok-4.1-fast instead
       ai_output=$(timeout -k 30 600 opencode -m openrouter/x-ai/grok-4 run "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    grok-4.1-fast)
+      local ai_output
+      # Grok 4.1 Fast - close to Grok 4 quality, much cheaper
+      ai_output=$(timeout -k 30 600 opencode -m openrouter/x-ai/grok-4.1-fast run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     opus-openrouter)
