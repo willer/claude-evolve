@@ -1,0 +1,59 @@
+;; macOS sandbox profile for claude-evolve evaluations
+;;
+;; Security model:
+;; - File READ: Allowed everywhere (Python needs many system files)
+;; - File WRITE: Only evolution directory, temp dirs, and cache dirs
+;; - Network: BLOCKED completely
+;;
+;; Parameters (passed via -D):
+;;   EVOLUTION_DIR - directory containing evolution files (read/write allowed)
+;;   HOME - user's home directory (for cache paths)
+;;
+;; Usage: sandbox-exec -f sandbox.sb -D EVOLUTION_DIR=/path -D HOME=/Users/you python3 script.py
+
+(version 1)
+
+;; Start with deny-all policy
+(deny default)
+
+;; Allow basic system operations (required for any process)
+(allow signal)
+(allow sysctl-read)
+(allow mach-lookup)
+(allow process-exec)
+(allow process-fork)
+
+;; BLOCK all network access - this is the main security feature
+;; Prevents evolved code from exfiltrating data or downloading malware
+(deny network*)
+
+;; Allow reading any file (Python needs many system files to work)
+;; This is a tradeoff: more permissive reads, but still blocks writes and network
+(allow file-read*)
+
+;; Allow writes to /dev/null (common for redirection)
+(allow file-write* (literal "/dev/null"))
+
+;; Allow writes ONLY to:
+;; 1. The evolution directory (where the algorithm runs)
+;; 2. Temp directories (Python needs these for various operations)
+;; 3. Cache directories (libraries like transformers, huggingface, etc.)
+(allow file-write*
+    (subpath (param "EVOLUTION_DIR"))
+    (subpath "/tmp")
+    (subpath "/private/tmp")
+    (subpath "/var/folders")
+    (subpath "/private/var/folders")
+)
+
+;; Allow writes to user cache directories (for ML libraries, etc.)
+;; AIDEV-NOTE: Many Python libraries write to ~/.cache or ~/Library/Caches
+(allow file-write*
+    (subpath (string-append (param "HOME") "/.cache"))
+    (subpath (string-append (param "HOME") "/Library/Caches"))
+)
+
+;; Allow file ioctl operations for the evolution directory
+(allow file-ioctl
+    (subpath (param "EVOLUTION_DIR"))
+)

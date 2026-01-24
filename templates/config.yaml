@@ -46,11 +46,26 @@ auto_ideate: true
 # Maximum number of retries for failed candidates before marking as permanently failed
 max_retries: 3
 
-# Memory protection configuration
-# Memory limit in MB for evaluation processes (0 = no limit)  
-# This prevents runaway algorithms from consuming all system memory
-# Default: 12GB (reasonable for ML workloads, adjust based on your system RAM)
-# Recommendation: Set to ~50-75% of available system RAM
+# Sandbox configuration
+# Provides isolation for evolved algorithm evaluation
+sandbox:
+  # Enable macOS sandbox-exec isolation (restricts file access, blocks network)
+  # On non-macOS systems, only resource limits are applied
+  enabled: true
+
+  # Memory limit in MB for evaluation processes (0 = no limit)
+  # This prevents runaway algorithms from consuming all system memory
+  # Default: 12GB (reasonable for ML workloads, adjust based on your system RAM)
+  # Recommendation: Set to ~50-75% of available system RAM
+  memory_limit_mb: 12288
+
+  # CPU time limit in seconds (0 = no limit)
+  # Kernel-enforced limit on CPU time consumption
+  # Useful for preventing infinite loops
+  cpu_limit_seconds: 300
+
+# Legacy memory_limit_mb (deprecated - use sandbox.memory_limit_mb instead)
+# Kept for backwards compatibility
 memory_limit_mb: 12288
 
 # Worker refresh configuration

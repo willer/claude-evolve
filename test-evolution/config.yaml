@@ -15,6 +15,12 @@ ideation_strategies:
 python_cmd: "python3"
 auto_ideate: false
 
+# Sandbox configuration for testing
+sandbox:
+  enabled: true
+  memory_limit_mb: 512  # 512MB for tests
+  cpu_limit_seconds: 60  # 1 minute for tests
+
 parallel:
   enabled: false
 

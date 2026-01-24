@@ -52,9 +52,12 @@ class Config:
     brief_path: str
     python_cmd: str = "python3"
     memory_limit_mb: int = 0
+    cpu_limit_seconds: int = 0  # CPU time limit (0 = unlimited)
     timeout_seconds: int = 600
     max_candidates: int = 5
     max_validation_retries: int = 3  # Max attempts to fix validation errors (if validator.py exists)
+    # Sandbox configuration
+    sandbox_enabled: bool = True  # Enable macOS sandbox-exec isolation
     # Retry configuration with exponential backoff
     max_rounds: int = 10
     initial_wait: int = 60
@@ -381,43 +384,48 @@ python validator.py {target_basename}
 
     def _run_evaluator(self, candidate_id: str, is_baseline: bool) -> Tuple[Optional[float], Dict[str, Any]]:
         """
-        Run the evaluator.
+        Run the evaluator with sandboxing.
+
+        AIDEV-NOTE: Uses sandbox_wrapper.py for isolation:
+        - macOS sandbox-exec: restricts file access to evolution_dir, blocks network
+        - Memory limits: kills process if exceeded
+        - CPU limits: kernel-enforced time limit
 
         Returns:
             Tuple of (score, extra_data_dict) or (None, {}) on failure
         """
+        from lib.sandbox_wrapper import run_sandboxed, sandbox_exec_available
+
         eval_arg = "" if is_baseline else candidate_id
+        eval_cmd = [self.config.python_cmd, self.config.evaluator_path]
+        if eval_arg:
+            eval_cmd.append(eval_arg)
 
-        cmd = [self.config.python_cmd]
+        # Check sandbox availability
+        use_sandbox = self.config.sandbox_enabled and sandbox_exec_available()
+        if self.config.sandbox_enabled and not sandbox_exec_available():
+            log_warn("Sandbox requested but sandbox-exec not available (non-macOS?)")
 
-        # Add memory wrapper if configured
-        if self.config.memory_limit_mb > 0:
-            wrapper_path = SCRIPT_DIR / "memory_limit_wrapper.py"
-            cmd.extend([str(wrapper_path), str(self.config.memory_limit_mb)])
-
-        cmd.extend([self.config.evaluator_path, eval_arg])
-
-        log(f"Running evaluator: {' '.join(cmd)}")
+        log(f"Running evaluator: {' '.join(eval_cmd)}")
+        log(f"Sandbox: {'enabled' if use_sandbox else 'disabled'}, Memory: {self.config.memory_limit_mb}MB, CPU: {self.config.cpu_limit_seconds}s")
 
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=self.config.timeout_seconds,
-                cwd=self.config.evolution_dir
+            returncode, stdout, stderr = run_sandboxed(
+                command=eval_cmd,
+                evolution_dir=self.config.evolution_dir,
+                memory_mb=self.config.memory_limit_mb,
+                cpu_seconds=self.config.cpu_limit_seconds,
+                timeout_seconds=self.config.timeout_seconds,
+                use_sandbox=use_sandbox
             )
 
-            if result.returncode != 0:
-                log_error(f"Evaluator failed: {result.stderr}")
+            if returncode != 0:
+                log_error(f"Evaluator failed (code {returncode}): {stderr}")
                 return None, {}
 
-            output = result.stdout + result.stderr
+            output = stdout + stderr
             return self._parse_evaluator_output(output)
 
-        except subprocess.TimeoutExpired:
-            log_error("Evaluator timed out")
-            return None, {}
         except Exception as e:
             log_error(f"Evaluator error: {e}")
             return None, {}
@@ -709,6 +717,7 @@ def load_config_from_yaml(config_path: Optional[str] = None) -> Config:
         return str(p.resolve())
 
     ideation = data.get('ideation', {})
+    sandbox = data.get('sandbox', {})
 
     return Config(
         csv_path=resolve(data.get('csv_file', 'evolution.csv')),
@@ -718,10 +727,12 @@ def load_config_from_yaml(config_path: Optional[str] = None) -> Config:
         evaluator_path=resolve(data.get('evaluator_file', 'evaluator.py')),
         brief_path=resolve(data.get('brief_file', 'BRIEF.md')),
         python_cmd=data.get('python_cmd', 'python3'),
-        memory_limit_mb=data.get('memory_limit_mb', 0),
+        memory_limit_mb=sandbox.get('memory_limit_mb', data.get('memory_limit_mb', 0)),
+        cpu_limit_seconds=sandbox.get('cpu_limit_seconds', 0),
         timeout_seconds=data.get('timeout_seconds', 600),
         max_candidates=data.get('worker_max_candidates', 5),
         max_validation_retries=data.get('max_validation_retries', 3),
+        sandbox_enabled=sandbox.get('enabled', True),
         max_rounds=ideation.get('max_rounds', 10),
         initial_wait=ideation.get('initial_wait', 60),
         max_wait=ideation.get('max_wait', 600)

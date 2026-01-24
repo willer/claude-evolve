@@ -149,3 +149,8 @@ fi
 - Support both relative and absolute paths in config files
 - Make path resolution work regardless of working directory
 - Always validate configuration before use
+
+
+Don't forget to change package.json if the list of files to be published changes!
+
+
