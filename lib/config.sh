@@ -58,11 +58,12 @@ DEFAULT_MEMORY_LIMIT_MB=12288
 DEFAULT_WORKER_MAX_CANDIDATES=3
 
 # Default LLM CLI configuration
-DEFAULT_LLM_RUN="glm-zai glm-zai glm-zai glm-zai glm-zai kimi-coder gemini-3-flash codex-oss-local haiku"
+# Run: Kimi K2.5 is now the primary model (stronger than GLM-4.7 as of Jan 2025)
+DEFAULT_LLM_RUN="kimi-k2.5 kimi-k2.5 kimi-k2.5 glm-zai glm-zai gemini-3-flash codex-oss-local haiku"
 # Ideate: Commercial models for idea generation + local fallback
-# Removed: gemini-3-pro-preview (expensive), grok-4-openrouter (expensive)
-# Added: gemini-3-flash (cheap thinker), grok-4.1-fast (cheaper than grok-4)
-DEFAULT_LLM_IDEATE="opus-think kimi-k2-openrouter gemini-3-flash gpt5high grok-4.1-fast deepseek-openrouter glm-zai"
+# Removed: gemini-3-pro-preview (expensive), grok-4-openrouter (expensive), kimi-k2-openrouter (replaced by k2.5)
+# Added: kimi-k2.5 (strongest open model), gemini-3-flash (cheap thinker), grok-4.1-fast (cheaper than grok-4)
+DEFAULT_LLM_IDEATE="opus-think kimi-k2.5 gemini-3-flash gpt5high grok-4.1-fast deepseek-openrouter"
 
 # Load configuration from a YAML file and update variables
 _load_yaml_config() {

@@ -200,6 +200,13 @@ $prompt"
       ai_output=$(timeout -k 30 600 kimi --print -y -m kimi-for-coding -c "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
+    kimi-k2.5)
+      local ai_output
+      # Kimi K2.5 - Moonshot's most powerful model (Jan 2025)
+      # Native multimodal agentic model, stronger than GLM-4.7
+      ai_output=$(timeout -k 30 600 opencode -m openrouter/moonshotai/kimi-k2.5 run "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
     codex-oss-local)
       # Codex-OSS via Codex CLI with Ollama backend
       local ai_output
