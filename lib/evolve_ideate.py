@@ -25,6 +25,11 @@ sys.path.insert(0, str(SCRIPT_DIR.parent))
 from lib.evolution_csv import EvolutionCSV
 from lib.ai_cli import call_ai_with_backoff, get_git_protection_warning, AIError
 from lib.embedding import check_novelty as check_embedding_novelty, get_embedding, set_cache_file, save_cache
+from lib.log import init_file_logging, log as _log_base
+
+def _log(msg: str):
+    """Log with IDEATE prefix."""
+    _log_base(msg, prefix="IDEATE")
 
 
 def sample_parent_powerlaw(parents: List[Dict], alpha: float = 1.0) -> Dict:
@@ -159,11 +164,12 @@ class IdeationStrategy(ABC):
         if claimed_ids is None:
             claimed_ids = []
 
-        print(f"[IDEATE] Running {self.name} strategy for {count} ideas", file=sys.stderr, flush=True)
+        print(f"[IDEATE] Running {self.name} strategy for {count} ideas...", file=sys.stderr, flush=True)
 
         # Get next IDs, avoiding any already claimed in this ideation run
         ids = self.csv.get_next_ids(context.generation, count, claimed_ids=claimed_ids)
         print(f"[IDEATE] Using IDs: {', '.join(ids)}", file=sys.stderr, flush=True)
+        print(f"[IDEATE] Calling AI...", file=sys.stderr, flush=True)
 
         # Immediately claim these IDs (even if AI fails, don't reuse them)
         claimed_ids.extend(ids)
@@ -178,34 +184,67 @@ class IdeationStrategy(ABC):
                 parent = self._get_default_parent(context)
                 f.write(f'{id},{parent},"[PLACEHOLDER: Replace with algorithmic idea]",,pending\n')
 
+        # AIDEV-NOTE: Retry loop for when AI "succeeds" but doesn't edit the file
+        # Non-agentic models (kimi, grok) return text but can't edit files
+        max_parse_retries = 3
         try:
-            # Build prompt
-            prompt = self.build_prompt(context, ids, temp_csv.name)
+            for parse_attempt in range(max_parse_retries):
+                try:
+                    # Build prompt
+                    prompt = self.build_prompt(context, ids, temp_csv.name)
 
-            # Call AI with round-based retry and backoff
-            output, model = call_ai_with_backoff(
-                prompt,
-                command="ideate",
-                working_dir=self.config.evolution_dir,
-                max_rounds=max_rounds,
-                initial_wait=initial_wait,
-                max_wait=max_wait
-            )
+                    # Call AI with round-based retry and backoff
+                    output, model = call_ai_with_backoff(
+                        prompt,
+                        command="ideate",
+                        working_dir=self.config.evolution_dir,
+                        max_rounds=max_rounds,
+                        initial_wait=initial_wait,
+                        max_wait=max_wait
+                    )
 
-            # Parse results from modified CSV
-            ideas = self._parse_results(temp_csv, ids)
+                    # Parse results from modified CSV
+                    ideas = self._parse_results(temp_csv, ids)
 
-            if ideas:
-                # Record model used
-                for idea in ideas:
-                    idea.strategy = f"{self.name} ({model})"
-                return ideas
-            else:
-                print(f"[IDEATE] AI completed but no ideas parsed from output", file=sys.stderr)
-                return []
+                    if ideas:
+                        # Record model used
+                        for idea in ideas:
+                            idea.strategy = f"{self.name} ({model})"
+                        return ideas
+                    else:
+                        # AI returned but didn't edit the file - show what it returned
+                        if output:
+                            all_lines = output.split('\n')
+                            if len(all_lines) > 5:
+                                # Show last 5 lines (first lines are usually just the git warning banner)
+                                lines = all_lines[-5:]
+                                output_preview = f"... ({len(output)} chars total)\n" + '\n'.join(lines)
+                            else:
+                                output_preview = output[:500]
+                        else:
+                            output_preview = "(empty)"
 
-        except AIError as e:
-            print(f"[IDEATE] All retries exhausted in {self.name}: {e}", file=sys.stderr)
+                        if parse_attempt < max_parse_retries - 1:
+                            print(f"[IDEATE] {model} didn't edit file (attempt {parse_attempt + 1}/{max_parse_retries})", file=sys.stderr, flush=True)
+                            print(f"[IDEATE] AI output: {output_preview}", file=sys.stderr, flush=True)
+                            # Reset temp CSV for next attempt
+                            shutil.copy(self.config.csv_path, temp_csv)
+                            with open(temp_csv, 'a') as f:
+                                for id in ids:
+                                    parent = self._get_default_parent(context)
+                                    f.write(f'{id},{parent},"[PLACEHOLDER: Replace with algorithmic idea]",,pending\n')
+                            continue
+                        else:
+                            print(f"[IDEATE] AI completed but no ideas parsed after {max_parse_retries} attempts", file=sys.stderr, flush=True)
+                            print(f"[IDEATE] Last AI output: {output_preview}", file=sys.stderr, flush=True)
+                            return []
+
+                except AIError as e:
+                    print(f"[IDEATE] All retries exhausted in {self.name}: {e}", file=sys.stderr)
+                    return []
+
+            # Should not reach here
+            print(f"[IDEATE] {self.name} failed after all attempts", file=sys.stderr)
             return []
 
         finally:
@@ -427,7 +466,21 @@ class Ideator:
         with EvolutionCSV(self.config.csv_path) as csv:
             top_performers = csv.get_top_performers(self.config.num_elites)
             existing_descriptions = csv.get_all_descriptions()
-            generation = csv.get_highest_generation() + 1
+
+            # AIDEV-NOTE: Check if highest generation is complete before creating new one
+            # This prevents sparse generations from accumulating
+            highest_gen = csv.get_highest_generation()
+            if highest_gen > 0:
+                gen_count = csv.get_generation_count(highest_gen)
+                if gen_count < self.config.total_ideas:
+                    # Continue incomplete generation
+                    generation = highest_gen
+                    print(f"[IDEATE] Continuing incomplete gen{highest_gen} ({gen_count}/{self.config.total_ideas} items)", file=sys.stderr)
+                else:
+                    # Start new generation
+                    generation = highest_gen + 1
+            else:
+                generation = 1
 
         # Read brief
         brief_content = ""
@@ -479,9 +532,10 @@ class Ideator:
 
     def run(self) -> int:
         """Run ideation. Returns number of ideas generated."""
+        print(f"[IDEATE] Building context...", file=sys.stderr, flush=True)
         context = self.get_context()
-        print(f"[IDEATE] Starting generation {context.generation}", file=sys.stderr)
-        print(f"[IDEATE] Top performers: {len(context.top_performers)}", file=sys.stderr)
+        print(f"[IDEATE] Starting generation {context.generation}", file=sys.stderr, flush=True)
+        print(f"[IDEATE] Top performers: {len(context.top_performers)}", file=sys.stderr, flush=True)
 
         all_ideas: List[Idea] = []
         claimed_ids: List[str] = []  # Track IDs claimed across all strategies
@@ -604,6 +658,9 @@ def main():
 
     try:
         config = load_config(args.config)
+
+        # Initialize file logging in the evolution directory
+        init_file_logging(config.evolution_dir)
 
         ideator = Ideator(config)
         count = ideator.run()

@@ -55,6 +55,7 @@ EOF
 call_ai_model_configured() {
   local model_name="$1"
   local prompt="$2"
+  local codex_gpt5_model="${CODEX_GPT5_MODEL:-gpt-5.2}"
   
   # Record start time
   local start_time=$(date +%s)
@@ -74,19 +75,21 @@ call_ai_model_configured() {
     sonnet-think)
       local ai_output
       # Use extended thinking with sonnet 4.5 - prepend ultrathink instruction
+      # AIDEV-NOTE: Extended thinking needs 30 min timeout - can take long for complex ideation
       local think_prompt="ultrathink
 
 $prompt"
-      ai_output=$(timeout -k 30 600 claude --dangerously-skip-permissions --mcp-config '' --model sonnet -p "$think_prompt" 2>&1)
+      ai_output=$(timeout -k 30 1800 claude --dangerously-skip-permissions --mcp-config '' --model sonnet -p "$think_prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     opus-think)
       local ai_output
       # Use extended thinking with opus - prepend ultrathink instruction
+      # AIDEV-NOTE: Extended thinking needs 30 min timeout - can take long for complex ideation
       local think_prompt="ultrathink
 
 $prompt"
-      ai_output=$(timeout -k 30 600 claude --dangerously-skip-permissions --mcp-config '' --model opus -p "$think_prompt" 2>&1)
+      ai_output=$(timeout -k 30 1800 claude --dangerously-skip-permissions --mcp-config '' --model opus -p "$think_prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     haiku)
@@ -96,12 +99,12 @@ $prompt"
       ;;
     gpt5high)
       local ai_output
-      ai_output=$(timeout -k 30 600 codex exec -m gpt-5.2 -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      ai_output=$(timeout -k 30 600 codex exec -m "$codex_gpt5_model" -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     gpt5)
       local ai_output
-      ai_output=$(timeout -k 30 600 codex exec -m gpt-5.2 --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      ai_output=$(timeout -k 30 600 codex exec -m "$codex_gpt5_model" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     o3high)
@@ -148,10 +151,24 @@ $prompt"
       ai_output=$(timeout -k 30 600 opencode -m openrouter/z-ai/glm-4.7 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
+    glm-5)
+      local ai_output
+      # GLM-5: 744B MoE model, very cheap ($0.80/$2.56 per 1M tokens), 200K context
+      # Released Feb 2026 - scores 77.8% SWE-bench, MIT license
+      ai_output=$(timeout -k 30 600 opencode -m openrouter/z-ai/glm-5 run "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
     glm-zai)
-      # GLM -- can be slow sometimes
+      # GLM 4.7 via Z.AI agentic mode -- can be slow sometimes
       local ai_output
       ai_output=$(timeout -k 30 1800 opencode -m zai-coding-plan/glm-4.7 run "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    glm-5-zai)
+      # GLM-5 via Z.AI agentic mode - supports file editing for ideation
+      # 744B MoE, strong reasoning, can edit files
+      local ai_output
+      ai_output=$(timeout -k 30 1800 opencode -m zai-coding-plan/glm-5 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     deepseek-openrouter)
@@ -294,13 +311,13 @@ clean_ai_output() {
   echo "$output"
 }
 
-# Get models for a specific command (run or ideate)
+# Get primary models for a specific command (run or ideate)
 # Usage: get_models_for_command <command>
-# Returns: Array of model names
+# Returns: Space-separated list of model names
 get_models_for_command() {
   local command="$1"
   local model_list=""
-  
+
   case "$command" in
     run)
       model_list="$LLM_RUN"
@@ -313,8 +330,30 @@ get_models_for_command() {
       return 1
       ;;
   esac
-  
-  # Convert space-separated list to array
+
+  echo "$model_list"
+}
+
+# Get fallback models for a specific command (run or ideate)
+# Usage: get_fallback_models_for_command <command>
+# Returns: Space-separated list of fallback model names
+get_fallback_models_for_command() {
+  local command="$1"
+  local model_list=""
+
+  case "$command" in
+    run)
+      model_list="$LLM_RUN_FALLBACK"
+      ;;
+    ideate)
+      model_list="$LLM_IDEATE_FALLBACK"
+      ;;
+    *)
+      echo "[ERROR] Unknown command: $command" >&2
+      return 1
+      ;;
+  esac
+
   echo "$model_list"
 }
 

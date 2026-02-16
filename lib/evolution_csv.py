@@ -747,6 +747,39 @@ class EvolutionCSV:
 
         return max_gen
 
+    def get_generation_count(self, generation: int) -> int:
+        """
+        Count the number of items in a specific generation.
+
+        Args:
+            generation: Generation number
+
+        Returns:
+            Number of items in that generation
+        """
+        rows = self._read_csv()
+        if not rows:
+            return 0
+
+        gen_prefix = f"gen{generation:02d}" if generation < 100 else f"gen{generation}"
+        has_header = rows and rows[0] and rows[0][0].lower() == 'id'
+        start_idx = 1 if has_header else 0
+
+        count = 0
+        for row in rows[start_idx:]:
+            if not self.is_valid_candidate_row(row):
+                continue
+
+            candidate_id = row[0].strip().strip('"')
+            # Must match exactly gen{N}- to avoid gen92 matching gen920
+            if candidate_id.startswith(gen_prefix + '-'):
+                # Extra check: ensure the part after gen prefix is the dash
+                gen_part = candidate_id.split('-')[0]
+                if gen_part == gen_prefix:
+                    count += 1
+
+        return count
+
     def get_next_id(self, generation: int) -> str:
         """
         Get the next available ID for a generation.

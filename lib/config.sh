@@ -57,13 +57,20 @@ DEFAULT_MEMORY_LIMIT_MB=12288
 # Workers will exit after processing this many candidates to pick up library updates
 DEFAULT_WORKER_MAX_CANDIDATES=3
 
-# Default LLM CLI configuration
-# Run: Kimi K2.5 is now the primary model (stronger than GLM-4.7 as of Jan 2025)
-DEFAULT_LLM_RUN="kimi-k2.5 kimi-k2.5 kimi-k2.5 glm-zai glm-zai gemini-3-flash codex-oss-local haiku"
-# Ideate: Commercial models for idea generation + local fallback
-# Removed: gemini-3-pro-preview (expensive), grok-4-openrouter (expensive), kimi-k2-openrouter (replaced by k2.5)
-# Added: kimi-k2.5 (strongest open model), gemini-3-flash (cheap thinker), grok-4.1-fast (cheaper than grok-4)
-DEFAULT_LLM_IDEATE="opus-think kimi-k2.5 gemini-3-flash gpt5high grok-4.1-fast deepseek-openrouter"
+# Default LLM CLI configuration - tiered fallback system
+# Primary: Strong models used in normal operation
+# Fallback: Cheap/backup models used only when primary tier exhausted
+#
+# Run: GLM-5 is now the primary model (744B MoE, $0.80/M tokens, 77.8% SWE-bench)
+DEFAULT_LLM_RUN="glm-5 glm-5 glm-5 kimi-k2.5 kimi-k2.5"
+DEFAULT_LLM_RUN_FALLBACK="gemini-3-flash codex-oss-local haiku"
+#
+# Ideate: Only agentic models that can edit files reliably
+# AIDEV-NOTE: Ideation REQUIRES file editing - non-agentic models (opencode run, codex) return text
+# but don't actually edit files. Only use claude/gemini CLI, cursor-agent, or zai-coding-plan models.
+# OpenRouter models (via opencode) are chat-only and CANNOT edit files for ideation.
+DEFAULT_LLM_IDEATE="opus-think sonnet-think glm-5-zai gemini-pro kimi-coder"
+DEFAULT_LLM_IDEATE_FALLBACK="sonnet glm-zai haiku"
 
 # Load configuration from a YAML file and update variables
 _load_yaml_config() {
@@ -140,10 +147,12 @@ _load_yaml_config() {
         lock_timeout) LOCK_TIMEOUT="$value" ;;
       esac
     elif [[ $in_llm_cli_section == true ]]; then
-      if [[ $key == "run" || $key == "ideate" ]]; then
+      if [[ $key == "run" || $key == "ideate" || $key == "run_fallback" || $key == "ideate_fallback" ]]; then
         case $key in
           run) LLM_RUN="$value" ;;
+          run_fallback) LLM_RUN_FALLBACK="$value" ;;
           ideate) LLM_IDEATE="$value" ;;
+          ideate_fallback) LLM_IDEATE_FALLBACK="$value" ;;
         esac
       else
         value=$(echo "$value" | sed "s/^'//;s/'$//")
@@ -214,7 +223,9 @@ load_config() {
   WORKER_MAX_CANDIDATES="$DEFAULT_WORKER_MAX_CANDIDATES"
   
   LLM_RUN="$DEFAULT_LLM_RUN"
+  LLM_RUN_FALLBACK="$DEFAULT_LLM_RUN_FALLBACK"
   LLM_IDEATE="$DEFAULT_LLM_IDEATE"
+  LLM_IDEATE_FALLBACK="$DEFAULT_LLM_IDEATE_FALLBACK"
 
   # Determine local config file path relative to EVOLUTION_DIR
   local local_config_file="$EVOLUTION_DIR/config.yaml"
@@ -318,5 +329,7 @@ show_config() {
     fi
   done
   echo "  LLM for run: $LLM_RUN"
+  echo "  LLM for run (fallback): $LLM_RUN_FALLBACK"
   echo "  LLM for ideate: $LLM_IDEATE"
+  echo "  LLM for ideate (fallback): $LLM_IDEATE_FALLBACK"
 }

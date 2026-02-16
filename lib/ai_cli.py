@@ -166,7 +166,7 @@ def call_ai(
 
 def get_models_for_command(command: str) -> List[str]:
     """
-    Get the list of available models for a command.
+    Get the list of primary models for a command.
 
     Args:
         command: Either "run" or "ideate"
@@ -180,6 +180,41 @@ def get_models_for_command(command: str) -> List[str]:
         case "$1" in
             run) echo "$LLM_RUN" ;;
             ideate) echo "$LLM_IDEATE" ;;
+        esac
+    '''
+
+    result = subprocess.run(
+        ["bash", "-c", bash_script, "bash", command],
+        capture_output=True,
+        text=True
+    )
+
+    if result.returncode != 0:
+        return []
+
+    model_list = result.stdout.strip()
+    if not model_list:
+        return []
+
+    return model_list.split()
+
+
+def get_fallback_models_for_command(command: str) -> List[str]:
+    """
+    Get the list of fallback models for a command.
+
+    Args:
+        command: Either "run" or "ideate"
+
+    Returns:
+        List of fallback model names
+    """
+    bash_script = f'''
+        source "{SCRIPT_DIR}/config.sh"
+        load_config
+        case "$1" in
+            run) echo "$LLM_RUN_FALLBACK" ;;
+            ideate) echo "$LLM_IDEATE_FALLBACK" ;;
         esac
     '''
 
@@ -268,51 +303,31 @@ def call_ai_model(
         raise AIError(f"Failed to call AI: {e}")
 
 
-def call_ai_with_backoff(
+def _try_models_with_backoff(
     prompt: str,
-    command: str = "ideate",
-    working_dir: Optional[str] = None,
-    env_vars: Optional[dict] = None,
-    max_rounds: int = 10,
-    initial_wait: int = 60,
-    max_wait: int = 600
-) -> Tuple[str, str]:
+    models: List[str],
+    tier_name: str,
+    working_dir: Optional[str],
+    env_vars: Optional[dict],
+    max_rounds: int,
+    initial_wait: int,
+    max_wait: int
+) -> Tuple[Optional[str], Optional[str], dict]:
     """
-    Call AI with round-based retries and exponential backoff.
-
-    AIDEV-NOTE: This is the robust retry mechanism for handling rate limits.
-    - Tries each model in the pool (shuffled order)
-    - If all models fail in a round, waits with exponential backoff
-    - Keeps going until success or max_rounds exhausted
-
-    Args:
-        prompt: The prompt to send
-        command: "run" or "ideate" - determines model pool
-        working_dir: Directory for file operations
-        env_vars: Additional environment variables
-        max_rounds: Maximum number of full rounds to attempt
-        initial_wait: Initial wait time in seconds after first failed round
-        max_wait: Maximum wait time in seconds between rounds
+    Try a list of models with round-based retries and exponential backoff.
 
     Returns:
-        Tuple of (output, model_name)
-
-    Raises:
-        AIError: If all rounds exhausted without success
+        Tuple of (output, model_name, last_errors)
+        output/model_name are None if all models failed
     """
-    models = get_models_for_command(command)
-    if not models:
-        raise AIError(f"No models configured for command: {command}")
-
     wait_time = initial_wait
     last_errors = {}
 
     for round_num in range(max_rounds):
-        # Shuffle models each round for fairness
         shuffled_models = models.copy()
         random.shuffle(shuffled_models)
 
-        _log(f"Round {round_num + 1}/{max_rounds}: trying {len(shuffled_models)} models")
+        _log(f"{tier_name} round {round_num + 1}/{max_rounds}: trying {len(shuffled_models)} models")
 
         for model in shuffled_models:
             try:
@@ -322,22 +337,89 @@ def call_ai_with_backoff(
                     _log(f"Succeeded on round {round_num + 1} with {model}")
                 else:
                     _log(f"Success with {model}")
-                return output, model_name
+                return output, model_name, last_errors
             except AIError as e:
                 _log(f"{model} failed: {str(e)[:60]}...")
                 last_errors[model] = str(e)
-                # Continue to next model
 
         # All models failed in this round
         if round_num < max_rounds - 1:
-            _log(f"All models failed in round {round_num + 1}, waiting {wait_time}s...")
+            _log(f"All {tier_name} models failed in round {round_num + 1}, waiting {wait_time}s...")
             time.sleep(wait_time)
-            # Exponential backoff: 60 -> 120 -> 240 -> 480 (capped at max_wait)
             wait_time = min(wait_time * 2, max_wait)
 
-    # All rounds exhausted
-    error_summary = "; ".join(f"{m}: {e[:50]}" for m, e in list(last_errors.items())[:3])
-    raise AIError(f"All {max_rounds} rounds exhausted. Last errors: {error_summary}")
+    return None, None, last_errors
+
+
+def call_ai_with_backoff(
+    prompt: str,
+    command: str = "ideate",
+    working_dir: Optional[str] = None,
+    env_vars: Optional[dict] = None,
+    max_rounds: int = 10,
+    initial_wait: int = 60,
+    max_wait: int = 600,
+    use_fallback: bool = True
+) -> Tuple[str, str]:
+    """
+    Call AI with tiered fallback and round-based retries with exponential backoff.
+
+    AIDEV-NOTE: Tiered fallback system:
+    1. First tries all primary models with backoff
+    2. If primary exhausted and use_fallback=True, tries fallback models
+    3. Fallback models are cheaper/simpler backups (haiku, flash, etc.)
+
+    Args:
+        prompt: The prompt to send
+        command: "run" or "ideate" - determines model pool
+        working_dir: Directory for file operations
+        env_vars: Additional environment variables
+        max_rounds: Maximum number of full rounds per tier
+        initial_wait: Initial wait time in seconds after first failed round
+        max_wait: Maximum wait time in seconds between rounds
+        use_fallback: Whether to try fallback tier if primary fails
+
+    Returns:
+        Tuple of (output, model_name)
+
+    Raises:
+        AIError: If all tiers exhausted without success
+    """
+    # Try primary tier first
+    primary_models = get_models_for_command(command)
+    if not primary_models:
+        raise AIError(f"No primary models configured for command: {command}")
+
+    output, model_name, primary_errors = _try_models_with_backoff(
+        prompt, primary_models, "Primary",
+        working_dir, env_vars, max_rounds, initial_wait, max_wait
+    )
+
+    if output is not None:
+        return output, model_name
+
+    # Primary exhausted - try fallback if enabled
+    if use_fallback:
+        fallback_models = get_fallback_models_for_command(command)
+        if fallback_models:
+            _log(f"Primary tier exhausted, trying {len(fallback_models)} fallback models...")
+
+            output, model_name, fallback_errors = _try_models_with_backoff(
+                prompt, fallback_models, "Fallback",
+                working_dir, env_vars, max_rounds, initial_wait, max_wait
+            )
+
+            if output is not None:
+                return output, model_name
+
+            # Both tiers exhausted
+            all_errors = {**primary_errors, **fallback_errors}
+            error_summary = "; ".join(f"{m}: {e[:50]}" for m, e in list(all_errors.items())[:3])
+            raise AIError(f"All tiers exhausted ({max_rounds} rounds each). Last errors: {error_summary}")
+
+    # Primary exhausted, no fallback
+    error_summary = "; ".join(f"{m}: {e[:50]}" for m, e in list(primary_errors.items())[:3])
+    raise AIError(f"Primary tier exhausted ({max_rounds} rounds). Last errors: {error_summary}")
 
 
 def call_ai_for_file_edit(

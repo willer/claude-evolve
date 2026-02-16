@@ -59,6 +59,7 @@ USAGE:
 
 COMMANDS:
     setup              Initialize evolution workspace
+    check              Test all configured AI models (health check)
     ideate             Generate new algorithm ideas
     run                Execute evolution candidates
     analyze            Analyze evolution results
@@ -95,14 +96,15 @@ show_menu() {
   echo "What would you like to do?"
   echo
   echo "  1) setup           - Initialize evolution workspace"
-  echo "  2) ideate          - Generate new algorithm ideas"
-  echo "  3) run             - Execute evolution candidates"
-  echo "  4) analyze         - Analyze evolution results"
-  echo "  5) edit            - Manage candidate statuses by generation"
-  echo "  6) status          - Show evolution progress and current leader"
-  echo "  7) autostatus      - Auto-updating status display (real-time)"
-  echo "  8) clean-corrupted - Remove corrupted records from CSV"
-  echo "  9) config          - Manage configuration settings"
+  echo "  2) check           - Test all configured AI models"
+  echo "  3) ideate          - Generate new algorithm ideas"
+  echo "  4) run             - Execute evolution candidates"
+  echo "  5) analyze         - Analyze evolution results"
+  echo "  6) edit            - Manage candidate statuses by generation"
+  echo "  7) status          - Show evolution progress and current leader"
+  echo "  8) autostatus      - Auto-updating status display (real-time)"
+  echo "  9) clean-corrupted - Remove corrupted records from CSV"
+  echo "  c) config          - Manage configuration settings"
   echo "  k) killall         - Kill all running evolution processes"
   echo "  h) help            - Show help message"
   echo "  0) exit            - Exit"
@@ -156,18 +158,19 @@ check_for_updates
 # Main logic
 if [[ $# -eq 0 ]]; then
   show_menu
-  read -r -p "Enter your choice (1-9, k, h, 0): " choice
+  read -r -p "Enter your choice (1-9, c, k, h, 0): " choice
 
   case $choice in
   1) exec "$SCRIPT_DIR/claude-evolve-setup" ;;
-  2) exec "$SCRIPT_DIR/claude-evolve-ideate" ;;
-  3) exec "$SCRIPT_DIR/claude-evolve-run" ;;
-  4) exec "$SCRIPT_DIR/claude-evolve-analyze" ;;
-  5) exec "$SCRIPT_DIR/claude-evolve-edit" ;;
-  6) exec "$SCRIPT_DIR/claude-evolve-status" ;;
-  7) exec "$SCRIPT_DIR/claude-evolve-autostatus" ;;
-  8) exec "$SCRIPT_DIR/claude-evolve-clean-corrupted" ;;
-  9) exec "$SCRIPT_DIR/claude-evolve-config" ;;
+  2) exec "$SCRIPT_DIR/claude-evolve-check" ;;
+  3) exec "$SCRIPT_DIR/claude-evolve-ideate" ;;
+  4) exec "$SCRIPT_DIR/claude-evolve-run" ;;
+  5) exec "$SCRIPT_DIR/claude-evolve-analyze" ;;
+  6) exec "$SCRIPT_DIR/claude-evolve-edit" ;;
+  7) exec "$SCRIPT_DIR/claude-evolve-status" ;;
+  8) exec "$SCRIPT_DIR/claude-evolve-autostatus" ;;
+  9) exec "$SCRIPT_DIR/claude-evolve-clean-corrupted" ;;
+  c|C) exec "$SCRIPT_DIR/claude-evolve-config" ;;
   k|K) exec "$SCRIPT_DIR/claude-evolve-killall" ;;
   h|H) show_help ;;
   0)
@@ -175,7 +178,7 @@ if [[ $# -eq 0 ]]; then
     exit 0
     ;;
   *)
-    echo -e "${RED}Invalid choice. Please select 1-9, k, h, or 0.${NC}"
+    echo -e "${RED}Invalid choice. Please select 1-9, c, k, h, or 0.${NC}"
     exit 1
     ;;
   esac
@@ -191,6 +194,10 @@ case "${1:-}" in
 setup)
   shift
   exec "$SCRIPT_DIR/claude-evolve-setup" "$@"
+  ;;
+check)
+  shift
+  exec "$SCRIPT_DIR/claude-evolve-check" "$@"
   ;;
 ideate)
   shift

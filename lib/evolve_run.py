@@ -26,7 +26,7 @@ SCRIPT_DIR = Path(__file__).parent
 sys.path.insert(0, str(SCRIPT_DIR.parent))
 
 from lib.evolution_csv import EvolutionCSV
-from lib.log import log, log_error, log_warn, set_prefix
+from lib.log import log, log_error, log_warn, set_prefix, init_file_logging
 from lib.meta_learning import process_new_generations
 set_prefix("RUN")
 
@@ -220,22 +220,30 @@ class EvolutionRunner:
             cmd.extend(['--config', self.config.config_path])
 
         try:
-            result = subprocess.run(
+            # Stream output in real-time instead of buffering
+            # AIDEV-NOTE: Using Popen to stream stderr so user sees which model is being called
+            process = subprocess.Popen(
                 cmd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                cwd=self.config.evolution_dir
+                cwd=self.config.evolution_dir,
+                bufsize=1  # Line buffered
             )
 
-            # Forward ideation output (already has timestamps from ideate module)
-            if result.stdout:
-                for line in result.stdout.strip().split('\n'):
-                    print(line, file=sys.stderr, flush=True)
-            if result.stderr:
-                for line in result.stderr.strip().split('\n'):
-                    print(line, file=sys.stderr, flush=True)
+            # Stream stderr in real-time (where ideation logs go)
+            # readline() blocks until a full line is available, which is what we want
+            for line in iter(process.stderr.readline, ''):
+                print(line.rstrip(), file=sys.stderr, flush=True)
 
-            return result.returncode == 0
+            # Wait for process to finish and get stdout
+            stdout, _ = process.communicate()
+            if stdout:
+                for line in stdout.strip().split('\n'):
+                    if line:
+                        print(line, file=sys.stderr, flush=True)
+
+            return process.returncode == 0
 
         except Exception as e:
             log_error(f"Ideation failed: {e}")
@@ -387,6 +395,9 @@ def main():
 
     try:
         config = load_config(args.config)
+
+        # Initialize file logging in the evolution directory
+        init_file_logging(config.evolution_dir)
 
         if args.sequential:
             config.max_workers = 1

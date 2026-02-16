@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# claude-evolve-check - Health check for AI model configurations
+# Tests all configured AI models to verify they're working before starting evolution runs
+
+set -e
+
+# Colors for output
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+RED='\033[0;31m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)"
+LIB_DIR="$(dirname "$SCRIPT_DIR")/lib"
+
+# Source configuration to get model lists
+source "$LIB_DIR/config.sh"
+load_config
+
+# Test timeout in seconds (short to fail fast)
+TEST_TIMEOUT=30
+
+# Simple test prompt
+TEST_PROMPT="Say hello in exactly 3 words."
+
+echo -e "${CYAN}🔍 Claude Evolve - AI Model Health Check${NC}"
+echo "============================================"
+echo
+
+# Collect all unique models into a simple list
+ALL_MODELS=""
+for model in $LLM_RUN $LLM_RUN_FALLBACK $LLM_IDEATE $LLM_IDEATE_FALLBACK; do
+  # Check if model already in list
+  if ! echo "$ALL_MODELS" | grep -q -w "$model"; then
+    ALL_MODELS="$ALL_MODELS $model"
+  fi
+done
+ALL_MODELS=$(echo "$ALL_MODELS" | xargs)  # Trim whitespace
+
+echo "Models to test: $ALL_MODELS"
+echo
+
+# Track results
+PASSED=0
+FAILED=0
+FAILED_MODELS=""
+TIMEOUT_MODELS=""
+
+# Direct CLI test for each model - no wrappers, just raw commands
+test_model() {
+  local model="$1"
+  local prompt="$2"
+
+  case "$model" in
+    opus|sonnet|haiku)
+      timeout -k 5 $TEST_TIMEOUT claude --dangerously-skip-permissions --mcp-config '' --model "$model" -p "$prompt" 2>&1
+      ;;
+    opus-think|sonnet-think)
+      local base_model="${model%-think}"
+      timeout -k 5 $TEST_TIMEOUT claude --dangerously-skip-permissions --mcp-config '' --model "$base_model" -p "ultrathink
+
+$prompt" 2>&1
+      ;;
+    gemini-pro)
+      timeout -k 5 $TEST_TIMEOUT gemini -y -m gemini-3-pro-preview -p "$prompt" 2>&1
+      ;;
+    gemini-flash|gemini-3-flash)
+      timeout -k 5 $TEST_TIMEOUT gemini -y -m gemini-2.5-flash -p "$prompt" 2>&1
+      ;;
+    kimi-coder)
+      timeout -k 5 $TEST_TIMEOUT kimi --print -y -m kimi-for-coding -c "$prompt" 2>&1
+      ;;
+    kimi-k2.5)
+      timeout -k 5 $TEST_TIMEOUT opencode -m openrouter/moonshotai/kimi-k2.5 run "$prompt" 2>&1
+      ;;
+    glm-5)
+      timeout -k 5 $TEST_TIMEOUT opencode -m openrouter/z-ai/glm-5 run "$prompt" 2>&1
+      ;;
+    glm-5-zai)
+      timeout -k 5 $TEST_TIMEOUT opencode -m zai-coding-plan/glm-5 run "$prompt" 2>&1
+      ;;
+    glm-zai)
+      timeout -k 5 $TEST_TIMEOUT opencode -m zai-coding-plan/glm-4.7 run "$prompt" 2>&1
+      ;;
+    codex-oss-local)
+      timeout -k 5 $TEST_TIMEOUT codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss --local-provider=ollama "$prompt" 2>&1
+      ;;
+    gpt5|gpt5high)
+      timeout -k 5 $TEST_TIMEOUT codex exec --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1
+      ;;
+    *)
+      echo "Unknown model: $model"
+      return 1
+      ;;
+  esac
+}
+
+# Test each model
+for model in $ALL_MODELS; do
+  echo -n "Testing $model... "
+
+  START_TIME=$(date +%s)
+
+  set +e
+  OUTPUT=$(test_model "$model" "$TEST_PROMPT")
+  EXIT_CODE=$?
+  set -e
+
+  END_TIME=$(date +%s)
+  DURATION=$((END_TIME - START_TIME))
+
+  # Check result
+  if [[ $EXIT_CODE -eq 0 ]] && [[ -n "$OUTPUT" ]] && [[ ${#OUTPUT} -gt 10 ]]; then
+    echo -e "${GREEN}✓ OK${NC} (${DURATION}s, ${#OUTPUT} chars)"
+    ((PASSED++))
+  elif [[ $EXIT_CODE -eq 124 ]]; then
+    echo -e "${RED}✗ TIMEOUT${NC} (${TEST_TIMEOUT}s - likely permission dialog or hanging)"
+    TIMEOUT_MODELS="$TIMEOUT_MODELS $model"
+    ((FAILED++))
+  else
+    echo -e "${RED}✗ FAILED${NC} (exit=$EXIT_CODE, ${#OUTPUT} chars)"
+    if [[ -n "$OUTPUT" ]] && [[ ${#OUTPUT} -lt 200 ]]; then
+      echo "    Output: $OUTPUT"
+    fi
+    FAILED_MODELS="$FAILED_MODELS $model"
+    ((FAILED++))
+  fi
+done
+
+echo
+echo "============================================"
+echo -e "${CYAN}Summary${NC}"
+echo "============================================"
+echo -e "Passed: ${GREEN}$PASSED${NC}"
+echo -e "Failed: ${RED}$FAILED${NC}"
+echo
+
+# Show model lists with status
+echo "Model Configuration:"
+echo -e "  LLM_RUN: $LLM_RUN"
+echo -e "  LLM_RUN_FALLBACK: $LLM_RUN_FALLBACK"
+echo -e "  LLM_IDEATE: $LLM_IDEATE"
+echo -e "  LLM_IDEATE_FALLBACK: $LLM_IDEATE_FALLBACK"
+echo
+
+# Recommendations
+if [[ $FAILED -gt 0 ]]; then
+  echo -e "${YELLOW}⚠️  Recommendations:${NC}"
+  for model in $TIMEOUT_MODELS; do
+    echo "  - $model: Check for permission dialogs (try running interactively first)"
+  done
+  for model in $FAILED_MODELS; do
+    echo "  - $model: Check authentication and CLI installation"
+  done
+  echo
+  echo "Consider reordering your model lists to put working models first."
+  exit 1
+else
+  echo -e "${GREEN}✅ All models are working!${NC}"
+  exit 0
+fi

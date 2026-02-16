@@ -30,7 +30,7 @@ from typing import Optional, Tuple, Dict, Any
 SCRIPT_DIR = Path(__file__).parent
 sys.path.insert(0, str(SCRIPT_DIR.parent))
 
-from lib.log import log, log_error, log_warn, log_debug, set_prefix
+from lib.log import log, log_error, log_warn, log_debug, set_prefix, init_file_logging
 set_prefix("WORKER")
 
 from lib.evolution_csv import EvolutionCSV
@@ -749,6 +749,9 @@ def main():
         config = load_config_from_yaml(args.config)
         if args.timeout:
             config.timeout_seconds = args.timeout
+
+        # Initialize file logging in the evolution directory
+        init_file_logging(config.evolution_dir)
 
         worker = Worker(config)
         sys.exit(worker.run())

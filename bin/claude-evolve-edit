@@ -31,6 +31,7 @@ USAGE:
 
 OPTIONS:
   --recent-generations=N  Limit operations to the most recent N generations only
+  --force                 Skip confirmation prompts (for delete action)
 
 SELECTORS:
   gen01, gen02, etc.  Target specific generation
@@ -80,6 +81,7 @@ EOF
 
 # Parse arguments
 recent_generations=""
+force_delete=""
 args=()
 
 while [[ $# -gt 0 ]]; do
@@ -90,6 +92,10 @@ while [[ $# -gt 0 ]]; do
         echo "[ERROR] --recent-generations must be a positive integer" >&2
         exit 1
       fi
+      shift
+      ;;
+    --force|-f)
+      force_delete="true"
       shift
       ;;
     --help|-h)
@@ -633,13 +639,15 @@ case "$ACTION" in
     echo "[INFO] Reboot complete: files deleted, scores cleared, status set to pending"
     ;;
   delete)
-    # Ask for confirmation
-    read -p "[WARNING] This will permanently delete candidates matching '$SELECTOR' from CSV and remove their .py files. Are you sure? (yes/no): " confirmation
-    if [[ "$confirmation" != "yes" ]]; then
-      echo "[INFO] Delete operation cancelled"
-      exit 0
+    # Ask for confirmation unless --force is specified
+    if [[ "$force_delete" != "true" ]]; then
+      read -p "[WARNING] This will permanently delete candidates matching '$SELECTOR' from CSV and remove their .py files. Are you sure? (yes/no): " confirmation
+      if [[ "$confirmation" != "yes" ]]; then
+        echo "[INFO] Delete operation cancelled"
+        exit 0
+      fi
     fi
-    
+
     echo "[INFO] Performing delete of '$SELECTOR'..."
     delete_evolution_files "$SELECTOR"
     delete_candidates_from_csv "$SELECTOR"
