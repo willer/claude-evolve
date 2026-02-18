@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
 Python wrapper around ai-cli.sh for AI model invocation.
-AIDEV-NOTE: This keeps ai-cli.sh as the source of truth for model configs and timeouts.
+AIDEV-NOTE: ai-cli.sh handles model commands, Python handles timeouts.
+Timeouts were moved from bash to Python because the bash `timeout` command
+causes claude CLI and gemini CLI to hang in nested subprocess contexts.
 """
 
 import os
 import random
+import signal
 import subprocess
 import sys
 import tempfile
@@ -234,6 +237,29 @@ def get_fallback_models_for_command(command: str) -> List[str]:
     return model_list.split()
 
 
+# AIDEV-NOTE: Model timeout lookup. Timeouts are handled here in Python, not
+# in bash, because the bash `timeout` command causes claude CLI (and sometimes
+# gemini CLI) to hang when called from nested subprocess contexts.
+MODEL_TIMEOUTS = {
+    # Claude models - 5 minutes for standard, 30 minutes for thinking
+    'opus': 300, 'sonnet': 300, 'haiku': 300,
+    'opus-think': 1800, 'sonnet-think': 1800,
+    # Gemini - 30 min for pro (streams while working), 20 min for flash
+    'gemini-pro': 1800, 'gemini-flash': 1200, 'gemini-3-flash': 600,
+    'gemini-3-pro-preview': 1800,
+    # Z.AI agentic modes - 30 min (can be slow)
+    'glm-zai': 1800, 'glm-5-zai': 1800,
+    # Codex local - 40 min (local inference can be slow)
+    'codex-oss-local': 2400,
+}
+DEFAULT_MODEL_TIMEOUT = 600  # 10 minutes for everything else
+
+
+def get_model_timeout(model_name: str) -> int:
+    """Get the timeout in seconds for a given model."""
+    return MODEL_TIMEOUTS.get(model_name, DEFAULT_MODEL_TIMEOUT)
+
+
 def call_ai_model(
     prompt: str,
     model_name: str,
@@ -242,6 +268,10 @@ def call_ai_model(
 ) -> Tuple[str, str]:
     """
     Call a specific AI model.
+
+    AIDEV-NOTE: Timeouts are handled here in Python using subprocess.Popen +
+    process group kill. The bash timeout command was removed because it causes
+    claude CLI and gemini CLI to hang in nested subprocess contexts.
 
     Args:
         prompt: The prompt to send to the AI
@@ -268,18 +298,34 @@ def call_ai_model(
     if env_vars:
         env.update(env_vars)
 
+    timeout_secs = get_model_timeout(model_name)
+
     try:
-        result = subprocess.run(
+        # Use Popen with process group so we can kill all children on timeout
+        proc = subprocess.Popen(
             ["bash", "-c", bash_script, "bash", model_name, prompt],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             cwd=working_dir,
-            env=env
+            env=env,
+            start_new_session=True,  # Creates new process group
         )
 
-        output = result.stdout
-        stderr = result.stderr
-        exit_code = result.returncode
+        try:
+            output, stderr = proc.communicate(timeout=timeout_secs)
+            exit_code = proc.returncode
+        except subprocess.TimeoutExpired:
+            # Kill the entire process group
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                time.sleep(2)
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+            proc.kill()
+            proc.wait()
+            raise TimeoutError(f"AI call timed out (model: {model_name})")
 
         # Print stderr (contains debug info)
         if stderr:
@@ -299,7 +345,9 @@ def call_ai_model(
 
         return output, model_name
 
-    except subprocess.SubprocessError as e:
+    except (subprocess.SubprocessError, OSError) as e:
+        if isinstance(e, subprocess.TimeoutExpired):
+            raise TimeoutError(f"AI call timed out (model: {model_name})")
         raise AIError(f"Failed to call AI: {e}")
 
 

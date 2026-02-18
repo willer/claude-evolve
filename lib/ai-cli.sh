@@ -1,13 +1,11 @@
 #!/bin/bash
 # Centralized AI CLI invocation library for claude-evolve
 #
-# AIDEV-NOTE: All timeout commands use -k flag to ensure process termination
-# The -k flag sends SIGKILL if the process doesn't respond to SIGTERM within
-# the grace period (30 seconds). This prevents AI CLI processes from hanging
-# indefinitely when they ignore the initial SIGTERM signal.
-# Example: timeout -k 30 600 means:
-#   - Wait 600 seconds, then send SIGTERM
-#   - If still running after 30 more seconds, send SIGKILL (force kill)
+# AIDEV-NOTE: Timeouts are now handled by the Python caller (ai_cli.py), not by
+# bash timeout commands. This allows for better control and monitoring of AI CLI
+# processes from the Python layer, including graceful timeout handling and
+# proper error recovery. The bash functions here focus on clean command execution
+# without timeout wrapping.
 
 # Source config to get LLM_CLI array and model lists
 # This will be sourced after config.sh in the main scripts
@@ -64,183 +62,183 @@ call_ai_model_configured() {
   case "$model_name" in
     opus)
       local ai_output
-      ai_output=$(timeout -k 30 300 claude --dangerously-skip-permissions --mcp-config '' --model opus -p "$prompt" 2>&1)
+      ai_output=$(claude --dangerously-skip-permissions --mcp-config '' --model opus -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     sonnet)
       local ai_output
-      ai_output=$(timeout -k 30 300 claude --dangerously-skip-permissions --mcp-config '' --model sonnet -p "$prompt" 2>&1)
+      ai_output=$(claude --dangerously-skip-permissions --mcp-config '' --model sonnet -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     sonnet-think)
       local ai_output
       # Use extended thinking with sonnet 4.5 - prepend ultrathink instruction
-      # AIDEV-NOTE: Extended thinking needs 30 min timeout - can take long for complex ideation
+      # AIDEV-NOTE: Extended thinking can take long for complex ideation
       local think_prompt="ultrathink
 
 $prompt"
-      ai_output=$(timeout -k 30 1800 claude --dangerously-skip-permissions --mcp-config '' --model sonnet -p "$think_prompt" 2>&1)
+      ai_output=$(claude --dangerously-skip-permissions --mcp-config '' --model sonnet -p "$think_prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     opus-think)
       local ai_output
       # Use extended thinking with opus - prepend ultrathink instruction
-      # AIDEV-NOTE: Extended thinking needs 30 min timeout - can take long for complex ideation
+      # AIDEV-NOTE: Extended thinking can take long for complex ideation
       local think_prompt="ultrathink
 
 $prompt"
-      ai_output=$(timeout -k 30 1800 claude --dangerously-skip-permissions --mcp-config '' --model opus -p "$think_prompt" 2>&1)
+      ai_output=$(claude --dangerously-skip-permissions --mcp-config '' --model opus -p "$think_prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     haiku)
       local ai_output
-      ai_output=$(timeout -k 30 300 claude --dangerously-skip-permissions --mcp-config '' --model haiku -p "$prompt" 2>&1)
+      ai_output=$(claude --dangerously-skip-permissions --mcp-config '' --model haiku -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     gpt5high)
       local ai_output
-      ai_output=$(timeout -k 30 600 codex exec -m "$codex_gpt5_model" -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      ai_output=$(codex exec -m "$codex_gpt5_model" -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     gpt5)
       local ai_output
-      ai_output=$(timeout -k 30 600 codex exec -m "$codex_gpt5_model" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      ai_output=$(codex exec -m "$codex_gpt5_model" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     o3high)
       local ai_output
-      ai_output=$(timeout -k 30 600 codex exec -m o3-mini -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      ai_output=$(codex exec -m o3-mini -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     gemini-pro)
       local ai_output
-      # Gemini needs longer timeout as it streams output while working (20 minutes)
-      ai_output=$(timeout -k 30 1800 gemini -y -m gemini-3-pro-preview -p "$prompt" 2>&1)
+      # Gemini streams output while working
+      ai_output=$(gemini -y -m gemini-3-pro-preview -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     gemini-flash)
       local ai_output
-      # Gemini needs longer timeout as it streams output while working (20 minutes)
-      ai_output=$(timeout -k 30 1200 gemini -y -m gemini-2.5-flash -p "$prompt" 2>&1)
+      # Gemini streams output while working
+      ai_output=$(gemini -y -m gemini-2.5-flash -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     gemini-3-pro-preview)
       local ai_output
-      # Gemini v3 Pro Preview via OpenRouter (30 minute timeout) - EXPENSIVE
-      ai_output=$(timeout -k 30 1800 opencode -m openrouter/google/gemini-3-pro-preview run "$prompt" 2>&1)
+      # Gemini v3 Pro Preview via OpenRouter - EXPENSIVE
+      ai_output=$(opencode -m openrouter/google/gemini-3-pro-preview run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     gemini-3-flash)
       local ai_output
       # Gemini 3 Flash - fast, cheap, strong thinker
-      ai_output=$(timeout -k 30 600 opencode -m openrouter/google/gemini-3-flash-preview run "$prompt" 2>&1)
+      ai_output=$(opencode -m openrouter/google/gemini-3-flash-preview run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     cursor-sonnet)
       local ai_output
-      ai_output=$(timeout -k 30 600 cursor-agent sonnet-4.5 -p "$prompt" 2>&1)
+      ai_output=$(cursor-agent sonnet-4.5 -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     cursor-opus)
       local ai_output
-      ai_output=$(timeout -k 30 600 cursor-agent opus -p "$prompt" 2>&1)
+      ai_output=$(cursor-agent opus -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     glm-openrouter)
       local ai_output
-      ai_output=$(timeout -k 30 600 opencode -m openrouter/z-ai/glm-4.7 run "$prompt" 2>&1)
+      ai_output=$(opencode -m openrouter/z-ai/glm-4.7 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     glm-5)
       local ai_output
       # GLM-5: 744B MoE model, very cheap ($0.80/$2.56 per 1M tokens), 200K context
       # Released Feb 2026 - scores 77.8% SWE-bench, MIT license
-      ai_output=$(timeout -k 30 600 opencode -m openrouter/z-ai/glm-5 run "$prompt" 2>&1)
+      ai_output=$(opencode -m openrouter/z-ai/glm-5 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     glm-zai)
       # GLM 4.7 via Z.AI agentic mode -- can be slow sometimes
       local ai_output
-      ai_output=$(timeout -k 30 1800 opencode -m zai-coding-plan/glm-4.7 run "$prompt" 2>&1)
+      ai_output=$(opencode -m zai-coding-plan/glm-4.7 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     glm-5-zai)
       # GLM-5 via Z.AI agentic mode - supports file editing for ideation
       # 744B MoE, strong reasoning, can edit files
       local ai_output
-      ai_output=$(timeout -k 30 1800 opencode -m zai-coding-plan/glm-5 run "$prompt" 2>&1)
+      ai_output=$(opencode -m zai-coding-plan/glm-5 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     deepseek-openrouter)
       local ai_output
-      ai_output=$(timeout -k 30 600 opencode -m openrouter/deepseek/deepseek-v3.2 run "$prompt" 2>&1)
+      ai_output=$(opencode -m openrouter/deepseek/deepseek-v3.2 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     grok-code-fast-openrouter)
       local ai_output
-      ai_output=$(timeout -k 30 600 opencode -m openrouter/x-ai/grok-code-fast-1 run "$prompt" 2>&1)
+      ai_output=$(opencode -m openrouter/x-ai/grok-code-fast-1 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     grok-4-openrouter)
       local ai_output
       # EXPENSIVE - consider grok-4.1-fast instead
-      ai_output=$(timeout -k 30 600 opencode -m openrouter/x-ai/grok-4 run "$prompt" 2>&1)
+      ai_output=$(opencode -m openrouter/x-ai/grok-4 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     grok-4.1-fast)
       local ai_output
       # Grok 4.1 Fast - close to Grok 4 quality, much cheaper
-      ai_output=$(timeout -k 30 600 opencode -m openrouter/x-ai/grok-4.1-fast run "$prompt" 2>&1)
+      ai_output=$(opencode -m openrouter/x-ai/grok-4.1-fast run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     opus-openrouter)
       local ai_output
-      ai_output=$(timeout -k 30 600 opencode -m openrouter/anthropic/claude-opus-4.1 run "$prompt" 2>&1)
+      ai_output=$(opencode -m openrouter/anthropic/claude-opus-4.1 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     kimi-k2-openrouter)
       local ai_output
       # Kimi K2 Thinking via OpenRouter (no separate auth needed)
-      ai_output=$(timeout -k 30 600 opencode -m openrouter/moonshotai/kimi-k2-thinking run "$prompt" 2>&1)
+      ai_output=$(opencode -m openrouter/moonshotai/kimi-k2-thinking run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     kimi-k2-think-moonshot)
       local ai_output
       # Use kimi CLI directly (assumes kimi is installed and configured)
-      ai_output=$(timeout -k 30 600 kimi --print -c "$prompt" 2>&1)
+      ai_output=$(kimi --print -c "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     kimi-coder)
       local ai_output
       # Kimi for Coding model via kimi CLI (fast coding-focused model)
       # Use --print to see agent actions while still allowing file modifications
-      ai_output=$(timeout -k 30 600 kimi --print -y -m kimi-for-coding -c "$prompt" 2>&1)
+      ai_output=$(kimi --print -y -m kimi-for-coding -c "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     kimi-k2.5)
       local ai_output
       # Kimi K2.5 - Moonshot's most powerful model (Jan 2025)
       # Native multimodal agentic model, stronger than GLM-4.7
-      ai_output=$(timeout -k 30 600 opencode -m openrouter/moonshotai/kimi-k2.5 run "$prompt" 2>&1)
+      ai_output=$(opencode -m openrouter/moonshotai/kimi-k2.5 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     qwen)
       local ai_output
       # Qwen latest - Alibaba's flagship model (currently qwen3.5-plus)
       # Linear attention + sparse MoE, strong multimodal capabilities
-      ai_output=$(timeout -k 30 600 opencode -m openrouter/qwen/qwen3.5-plus-02-15 run "$prompt" 2>&1)
+      ai_output=$(opencode -m openrouter/qwen/qwen3.5-plus-02-15 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     codex-oss-local)
       # Codex-OSS via Codex CLI with Ollama backend
       local ai_output
-      ai_output=$(timeout -k 30 2400 codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss --local-provider=ollama "$prompt" 2>&1)
+      ai_output=$(codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss --local-provider=ollama "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     deepseek-v3-llamacloud)
       # Deepseek via Codex CLI with Ollama cloud backend
       local ai_output
-      ai_output=$(timeout -k 30 600 codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss -m deepseek-v3.1:671b-cloud "$prompt" 2>&1)
+      ai_output=$(codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss -m deepseek-v3.1:671b-cloud "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
   esac
