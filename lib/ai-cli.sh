@@ -224,6 +224,13 @@ $prompt"
       ai_output=$(timeout -k 30 600 opencode -m openrouter/moonshotai/kimi-k2.5 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
+    qwen)
+      local ai_output
+      # Qwen latest - Alibaba's flagship model (currently qwen3.5-plus)
+      # Linear attention + sparse MoE, strong multimodal capabilities
+      ai_output=$(timeout -k 30 600 opencode -m openrouter/qwen/qwen3.5-plus-02-15 run "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
     codex-oss-local)
       # Codex-OSS via Codex CLI with Ollama backend
       local ai_output

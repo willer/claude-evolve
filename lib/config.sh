@@ -61,16 +61,19 @@ DEFAULT_WORKER_MAX_CANDIDATES=3
 # Primary: Strong models used in normal operation
 # Fallback: Cheap/backup models used only when primary tier exhausted
 #
-# Run: GLM-5 is now the primary model (744B MoE, $0.80/M tokens, 77.8% SWE-bench)
-DEFAULT_LLM_RUN="glm-5 glm-5 glm-5 kimi-k2.5 kimi-k2.5"
-DEFAULT_LLM_RUN_FALLBACK="gemini-3-flash codex-oss-local haiku"
+# Run: Primary models for code generation
+# Sonnet 4.6: 79.6% SWE-bench, $3/$15 per M tokens
+# GLM-5: 744B MoE, $0.80/M tokens, 77.8% SWE-bench
+# Qwen: hybrid linear attention + sparse MoE, strong reasoning
+DEFAULT_LLM_RUN="sonnet glm-5 glm-5 qwen kimi-k2.5"
+DEFAULT_LLM_RUN_FALLBACK="gemini-3-flash codex-oss-local"
 #
 # Ideate: Only agentic models that can edit files reliably
 # AIDEV-NOTE: Ideation REQUIRES file editing - non-agentic models (opencode run, codex) return text
 # but don't actually edit files. Only use claude/gemini CLI, cursor-agent, or zai-coding-plan models.
 # OpenRouter models (via opencode) are chat-only and CANNOT edit files for ideation.
 DEFAULT_LLM_IDEATE="opus-think sonnet-think glm-5-zai gemini-pro kimi-coder"
-DEFAULT_LLM_IDEATE_FALLBACK="sonnet glm-zai haiku"
+DEFAULT_LLM_IDEATE_FALLBACK="sonnet glm-5-zai"
 
 # Load configuration from a YAML file and update variables
 _load_yaml_config() {
