@@ -202,7 +202,7 @@ CRITICAL: If you do not know how to implement what was asked for, or if the requ
                     return True, model
                 else:
                     # AIDEV-NOTE: Log output so we can diagnose why file wasn't modified
-                    preview = output[:300] if output else "(empty)"
+                    preview = output[-300:] if output else "(empty)"
                     log(f"Bandit model {selected_model} completed but didn't modify file ({len(output)} chars), trying fallback...")
                     log(f"AI output preview: {preview}")
 
