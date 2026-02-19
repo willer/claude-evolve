@@ -201,7 +201,10 @@ CRITICAL: If you do not know how to implement what was asked for, or if the requ
                     self._model_used = model  # Track for bandit update
                     return True, model
                 else:
-                    log(f"Bandit model {selected_model} completed but didn't modify file, trying fallback...")
+                    # AIDEV-NOTE: Log output so we can diagnose why file wasn't modified
+                    preview = output[:300] if output else "(empty)"
+                    log(f"Bandit model {selected_model} completed but didn't modify file ({len(output)} chars), trying fallback...")
+                    log(f"AI output preview: {preview}")
 
             except AIError as e:
                 log(f"Bandit model {selected_model} failed: {e}, trying fallback...")
@@ -225,7 +228,10 @@ CRITICAL: If you do not know how to implement what was asked for, or if the requ
                 self._model_used = model  # Track for bandit update
                 return True, model
             else:
-                log(f"AI completed but did not modify file")
+                # AIDEV-NOTE: Log output so we can diagnose why file wasn't modified
+                preview = output[:300] if output else "(empty)"
+                log(f"AI completed but did not modify file ({len(output)} chars)")
+                log(f"AI output preview: {preview}")
                 return False, model
 
         except AIError as e:
