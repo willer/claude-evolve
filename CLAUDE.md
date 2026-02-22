@@ -151,6 +151,11 @@ fi
 - Always validate configuration before use
 
 
+## Publishing
+
+- Increment the version in `package.json` every time before running `npm publish`
+- Commit all changes before publishing
+
 Don't forget to change package.json if the list of files to be published changes!
 
 
