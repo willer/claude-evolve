@@ -90,30 +90,41 @@ parallel:
 llm_cli:
   # What to run for each sub-command
   # Models are tried in order, with round-robin distribution across candidates
-  # You can repeat models for weighted selection (e.g., "sonnet sonnet gemini" for 2:1 ratio)
+  # You can repeat models for weighted selection (e.g., "gemini-pro gemini-pro sonnet" for 2:1 ratio)
 
-  # Default configuration: 50/50 split between glm-zai and kimi-coder, commercial ideation
+  # Default configuration: sonnet at ~11%, rest doubled for cost savings
   # Commented out because these change over time; uncomment to override
-  #run: glm-zai kimi-coder glm-zai kimi-coder glm-zai kimi-coder codex-oss-local
-  #ideate: opus-openrouter kimi-k2-openrouter gemini-pro sonnet-think gpt5high grok-4-openrouter deepseek-openrouter glm-zai
+  #run: gemini-pro gemini-pro glm-5-zai glm-5-zai kimi-coder kimi-coder gpt-5-codex gpt-5-codex sonnet
+  #ideate: opus-think glm-5-zai gemini-pro kimi-coder gpt-5.2 gpt-5.3-codex
+  #run_fallback: haiku glm-5-zai gemini-5-flash gpt-5.3-codex-spark
+  #ideate_fallback: haiku glm-5-zai gemini-5-flash gpt-5.3-codex-spark
 
   # Available models:
-  # - sonnet: Claude 3.5 Sonnet via Claude CLI
-  # - sonnet-think: Claude 3.5 Sonnet with extended thinking (ultrathink prompt)
-  # - opus: Claude 3 Opus via Claude CLI
-  # - opus-think: Claude 3 Opus with extended thinking (ultrathink prompt)
-  # - gemini: Gemini via Gemini CLI
-  # - gpt5: GPT-5 via Codex CLI (standard)
+  # Claude (subscription-based, watch usage limits):
+  # - sonnet: Claude Sonnet via Claude CLI
+  # - sonnet-think: Claude Sonnet with extended thinking (ultrathink prompt)
+  # - opus: Claude Opus via Claude CLI
+  # - opus-think: Claude Opus with extended thinking (ultrathink prompt)
+  # - haiku: Claude Haiku via Claude CLI (cheap fallback)
+  #
+  # Codex/OpenAI (subscription-based):
+  # - gpt-5-codex: GPT-5 Codex (code-specialized) via Codex CLI
+  # - gpt-5.2: GPT-5.2 via Codex CLI
+  # - gpt-5.3-codex: GPT-5.3 Codex via Codex CLI
+  # - gpt-5.3-codex-spark: GPT-5.3 Codex Spark (lightweight fallback) via Codex CLI
+  # - gpt5: GPT-5 via Codex CLI (legacy alias)
   # - gpt5high: GPT-5 via Codex CLI (high reasoning)
   # - o3high: O3 via Codex CLI (high reasoning)
-  # - cursor-sonnet: Claude 3.5 Sonnet via Cursor Agent CLI
-  # - cursor-opus: Claude 3 Opus via Cursor Agent CLI
-  # - glm: GLM-4.6 via OpenCode CLI
-  # - grok-code-fast: Grok Code Fast 1 via OpenRouter
-  # - grok-4: Grok 4 via OpenRouter
-  # - opus-openrouter: Claude Opus 4.1 via OpenRouter
-  # - kimi-k2-openrouter: Kimi K2 Thinking via OpenRouter (RECOMMENDED - no separate auth)
-  # - kimi-k2-think-moonshot: Kimi K2 Thinking via Moonshot CLI (requires separate kimi CLI setup)
-  # - kimi-coder: Kimi for Coding model via kimi CLI (fast, good for code generation)
-  # - codex-qwen3: Qwen3-Coder via Codex + Ollama (local, free, RECOMMENDED)
-  # - aider-qwen3: Qwen3-Coder via Aider + Ollama (local, free, experimental)
+  #
+  # Gemini (free tier available):
+  # - gemini-pro: Gemini 3 Pro Preview via Gemini CLI
+  # - gemini-5-flash: Gemini 5 Flash via Gemini CLI (cheap fallback)
+  # - gemini-flash: Gemini 2.5 Flash via Gemini CLI (legacy)
+  #
+  # Other free/cheap models:
+  # - glm-5-zai: GLM-5 via Z.AI agentic mode
+  # - kimi-coder: Kimi for Coding via kimi CLI (fast, good for code gen)
+  # - kimi-k2-openrouter: Kimi K2 Thinking via OpenRouter
+  # - codex-oss-local: Local model via Codex + Ollama
+  # - cursor-sonnet: Claude Sonnet via Cursor Agent CLI
+  # - cursor-opus: Claude Opus via Cursor Agent CLI

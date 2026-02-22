@@ -141,6 +141,36 @@ SCRIPT
 exec codex exec --dangerously-bypass-approvals-and-sandbox "$1"
 SCRIPT
       ;;
+    gpt-5-codex)
+      cat > "$test_script" << 'SCRIPT'
+#!/usr/bin/env bash
+exec codex exec -m gpt-5-codex --dangerously-bypass-approvals-and-sandbox "$1"
+SCRIPT
+      ;;
+    gpt-5.2)
+      cat > "$test_script" << 'SCRIPT'
+#!/usr/bin/env bash
+exec codex exec -m gpt-5.2 --dangerously-bypass-approvals-and-sandbox "$1"
+SCRIPT
+      ;;
+    gpt-5.3-codex)
+      cat > "$test_script" << 'SCRIPT'
+#!/usr/bin/env bash
+exec codex exec -m gpt-5.3-codex --dangerously-bypass-approvals-and-sandbox "$1"
+SCRIPT
+      ;;
+    gpt-5.3-codex-spark)
+      cat > "$test_script" << 'SCRIPT'
+#!/usr/bin/env bash
+exec codex exec -m gpt-5.3-codex-spark --dangerously-bypass-approvals-and-sandbox "$1"
+SCRIPT
+      ;;
+    gemini-5-flash)
+      cat > "$test_script" << 'SCRIPT'
+#!/usr/bin/env bash
+exec gemini -y -m gemini-5-flash -p "$1"
+SCRIPT
+      ;;
     qwen)
       cat > "$test_script" << 'SCRIPT'
 #!/usr/bin/env bash

@@ -63,13 +63,13 @@ DEFAULT_WORKER_MAX_CANDIDATES=3
 #
 # Run: Subscription-based agentic models for code generation
 # All CLI tools (opencode, claude, gemini, kimi) are agentic and can edit files
-DEFAULT_LLM_RUN="sonnet glm-5-zai kimi-coder gemini-pro"
-DEFAULT_LLM_RUN_FALLBACK="codex-oss-local"
+DEFAULT_LLM_RUN="gemini-pro gemini-pro glm-5-zai glm-5-zai kimi-coder kimi-coder gpt-5-codex gpt-5-codex sonnet"
+DEFAULT_LLM_RUN_FALLBACK="haiku glm-5-zai gemini-5-flash gpt-5.3-codex-spark"
 #
 # Ideate: Agentic models that can edit files for ideation
 # All CLI tools (opencode, claude, gemini, kimi) are agentic and can edit files
-DEFAULT_LLM_IDEATE="opus-think sonnet-think glm-5-zai gemini-pro kimi-coder"
-DEFAULT_LLM_IDEATE_FALLBACK="sonnet glm-5-zai"
+DEFAULT_LLM_IDEATE="opus-think glm-5-zai gemini-pro kimi-coder gpt-5.2 gpt-5.3-codex"
+DEFAULT_LLM_IDEATE_FALLBACK="haiku glm-5-zai gemini-5-flash gpt-5.3-codex-spark"
 
 # Load configuration from a YAML file and update variables
 _load_yaml_config() {
@@ -318,7 +318,7 @@ show_config() {
   echo "  Worker max candidates: $WORKER_MAX_CANDIDATES"
   echo "  LLM configuration:"
   # Show LLM configurations using dynamic variable names
-  for model in gpt5high o3high codex gemini opus opus_think sonnet sonnet_think cursor_sonnet cursor_opus glm deepseek; do
+  for model in gpt5high o3high gpt_5_codex gpt_5_2 gpt_5_3_codex gpt_5_3_codex_spark codex gemini gemini_5_flash opus opus_think sonnet sonnet_think cursor_sonnet cursor_opus glm deepseek; do
     var_name="LLM_CLI_${model}"
     var_value=$(eval echo "\$$var_name")
     if [[ -n "$var_value" ]]; then

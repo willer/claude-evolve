@@ -105,6 +105,30 @@ $prompt"
       ai_output=$(codex exec -m "$codex_gpt5_model" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
+    gpt-5-codex)
+      local ai_output
+      # GPT-5 Codex - code-specialized variant via Codex CLI
+      ai_output=$(codex exec -m gpt-5-codex --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    gpt-5.2)
+      local ai_output
+      # GPT-5.2 via Codex CLI
+      ai_output=$(codex exec -m gpt-5.2 --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    gpt-5.3-codex)
+      local ai_output
+      # GPT-5.3 Codex via Codex CLI
+      ai_output=$(codex exec -m gpt-5.3-codex --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    gpt-5.3-codex-spark)
+      local ai_output
+      # GPT-5.3 Codex Spark - lightweight fallback via Codex CLI
+      ai_output=$(codex exec -m gpt-5.3-codex-spark --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
     o3high)
       local ai_output
       ai_output=$(codex exec -m o3-mini -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
@@ -120,6 +144,12 @@ $prompt"
       local ai_output
       # Gemini streams output while working
       ai_output=$(gemini -y -m gemini-2.5-flash -p "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    gemini-5-flash)
+      local ai_output
+      # Gemini 5 Flash - cheap fallback model
+      ai_output=$(gemini -y -m gemini-5-flash -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     gemini-3-pro-preview)
