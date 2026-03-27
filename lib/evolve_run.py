@@ -71,7 +71,11 @@ class WorkerPool:
         try:
             # Don't capture output - let it stream directly to terminal
             # This provides real-time visibility into which models are being used
-            proc = subprocess.Popen(cmd)
+            # AIDEV-NOTE: Explicitly pass stdin=DEVNULL so workers don't inherit
+            # a closed/bad stdin FD from parent (e.g. when run via nohup or after
+            # terminal disconnect). Without this, Python workers crash at startup
+            # with "OSError: [Errno 9] Bad file descriptor" on sys stream init.
+            proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL)
             self.workers[proc.pid] = proc
             log(f"Spawned worker {proc.pid}")
             return proc.pid
