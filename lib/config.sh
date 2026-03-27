@@ -68,7 +68,7 @@ DEFAULT_LLM_RUN_FALLBACK="haiku glm-5-zai gemini-5-flash gpt-5.3-codex-spark"
 #
 # Ideate: Agentic models that can edit files for ideation
 # All CLI tools (opencode, claude, gemini, kimi) are agentic and can edit files
-DEFAULT_LLM_IDEATE="opus-think glm-5-zai gemini-pro kimi-coder gpt-5.2 gpt-5.3-codex"
+DEFAULT_LLM_IDEATE="opus-think glm-5-zai gemini-pro kimi-coder gpt-5.2 gpt-5.3-codex qwen-openrouter"
 DEFAULT_LLM_IDEATE_FALLBACK="haiku glm-5-zai gemini-5-flash gpt-5.3-codex-spark"
 
 # Load configuration from a YAML file and update variables

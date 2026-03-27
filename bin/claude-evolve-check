@@ -171,7 +171,7 @@ SCRIPT
 exec gemini -y -m gemini-5-flash -p "$1"
 SCRIPT
       ;;
-    qwen)
+    qwen-openrouter)
       cat > "$test_script" << 'SCRIPT'
 #!/usr/bin/env bash
 exec opencode -m openrouter/qwen/qwen3.5-plus-02-15 run "$1"

@@ -252,7 +252,7 @@ $prompt"
       ai_output=$(opencode -m openrouter/moonshotai/kimi-k2.5 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
-    qwen)
+    qwen-openrouter)
       local ai_output
       # Qwen latest - Alibaba's flagship model (currently qwen3.5-plus)
       # Linear attention + sparse MoE, strong multimodal capabilities
@@ -288,8 +288,8 @@ $prompt"
     echo "[AI] Raw output from $model_name:" >&2
     echo "----------------------------------------" >&2
     if [[ ${#ai_output} -gt 2000 ]]; then
-      echo "$ai_output" | head -50 >&2
-      echo "... (truncated from ${#ai_output} characters to first 50 lines) ..." >&2
+      echo "... (truncated from ${#ai_output} characters to last 50 lines) ..." >&2
+      echo "$ai_output" | tail -50 >&2
     else
       echo "$ai_output" >&2
     fi

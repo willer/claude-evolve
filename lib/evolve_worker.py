@@ -205,9 +205,15 @@ CRITICAL: If you do not know how to implement what was asked for, or if the requ
                     preview = output[-300:] if output else "(empty)"
                     log(f"Bandit model {selected_model} completed but didn't modify file ({len(output)} chars), trying fallback...")
                     log(f"AI output preview: {preview}")
+                    # AIDEV-NOTE: Report no-modification as failure to bandit
+                    self.bandit.update(selected_model, child_score=None, parent_score=self._parent_score)
+                    log(f"Bandit update: {selected_model} no file modification")
 
             except AIError as e:
                 log(f"Bandit model {selected_model} failed: {e}, trying fallback...")
+                # AIDEV-NOTE: Report AI-level failure to bandit so it learns to avoid broken models
+                self.bandit.update(selected_model, child_score=None, parent_score=self._parent_score)
+                log(f"Bandit update: {selected_model} AI call failed")
 
         # Fallback to round-based retry with all models
         try:
@@ -229,7 +235,7 @@ CRITICAL: If you do not know how to implement what was asked for, or if the requ
                 return True, model
             else:
                 # AIDEV-NOTE: Log output so we can diagnose why file wasn't modified
-                preview = output[:300] if output else "(empty)"
+                preview = output[-300:] if output else "(empty)"
                 log(f"AI completed but did not modify file ({len(output)} chars)")
                 log(f"AI output preview: {preview}")
                 return False, model

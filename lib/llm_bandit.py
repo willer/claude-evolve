@@ -86,6 +86,12 @@ class LLMBandit:
         # Baseline score for normalizing improvements
         self._baseline_score: float = 0.0
 
+        # AIDEV-NOTE: Decay counter - only apply decay every N updates to prevent
+        # aggressive memory loss. With decay_factor=0.95 applied every update,
+        # n_completed floors at 1 after ~50 updates and the bandit can't learn.
+        self._updates_since_decay: int = 0
+        self._decay_interval: int = 50  # Apply decay every 50 updates
+
         # Load existing state if available
         if state_file and Path(state_file).exists():
             self.load()
@@ -215,13 +221,23 @@ class LLMBandit:
         return improvement
 
     def _apply_decay(self) -> None:
-        """Apply decay to reduce influence of old observations."""
+        """Apply decay to reduce influence of old observations.
+
+        AIDEV-NOTE: Only applies every _decay_interval updates to prevent
+        aggressive memory loss. The int() truncation on n_completed was
+        destroying the bandit's ability to learn from failures.
+        """
+        self._updates_since_decay += 1
+        if self._updates_since_decay < self._decay_interval:
+            return
+
+        self._updates_since_decay = 0
         for stats in self.models.values():
-            # Decay both counts and totals proportionally
+            # Decay totals to reduce influence of old observations
             stats.total_improvement *= self.decay_factor
-            # Don't decay counts below a small floor to preserve some memory
-            if stats.n_completed > 1:
-                stats.n_completed = max(1, int(stats.n_completed * self.decay_factor))
+            # Decay counts but preserve enough memory to differentiate models
+            if stats.n_completed > 2:
+                stats.n_completed = max(2, int(stats.n_completed * self.decay_factor))
 
     def save(self) -> None:
         """Persist state to file."""
