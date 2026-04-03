@@ -90,7 +90,7 @@ SCRIPT
     gemini-pro)
       cat > "$test_script" << 'SCRIPT'
 #!/usr/bin/env bash
-exec gemini -y -m gemini-3-pro-preview -p "$1"
+exec gemini -y -m auto-gemini-3 -p "$1"
 SCRIPT
       ;;
     gemini-flash|gemini-3-flash)
@@ -141,10 +141,22 @@ SCRIPT
 exec codex exec --dangerously-bypass-approvals-and-sandbox "$1"
 SCRIPT
       ;;
-    gpt-5-codex)
+    codex-think)
       cat > "$test_script" << 'SCRIPT'
 #!/usr/bin/env bash
-exec codex exec -m gpt-5-codex --dangerously-bypass-approvals-and-sandbox "$1"
+exec codex exec -m gpt-5.4 -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox "$1"
+SCRIPT
+      ;;
+    codex-coding)
+      cat > "$test_script" << 'SCRIPT'
+#!/usr/bin/env bash
+exec codex exec -m gpt-5.4 -c model_reasoning_effort="medium" --dangerously-bypass-approvals-and-sandbox "$1"
+SCRIPT
+      ;;
+    gpt-5.4)
+      cat > "$test_script" << 'SCRIPT'
+#!/usr/bin/env bash
+exec codex exec -m gpt-5.4 --dangerously-bypass-approvals-and-sandbox "$1"
 SCRIPT
       ;;
     gpt-5.2)
@@ -159,22 +171,22 @@ SCRIPT
 exec codex exec -m gpt-5.3-codex --dangerously-bypass-approvals-and-sandbox "$1"
 SCRIPT
       ;;
-    gpt-5.3-codex-spark)
+    codex-spark|gpt-5.1-codex-mini)
       cat > "$test_script" << 'SCRIPT'
 #!/usr/bin/env bash
-exec codex exec -m gpt-5.3-codex-spark --dangerously-bypass-approvals-and-sandbox "$1"
+exec codex exec -m gpt-5.1-codex-mini --dangerously-bypass-approvals-and-sandbox "$1"
 SCRIPT
       ;;
     gemini-5-flash)
       cat > "$test_script" << 'SCRIPT'
 #!/usr/bin/env bash
-exec gemini -y -m gemini-5-flash -p "$1"
+exec gemini -y -m gemini-3-flash-preview -p "$1"
 SCRIPT
       ;;
     qwen-openrouter)
       cat > "$test_script" << 'SCRIPT'
 #!/usr/bin/env bash
-exec opencode -m openrouter/qwen/qwen3.5-plus-02-15 run "$1"
+exec opencode -m openrouter/qwen/qwen3.6-plus:free run "$1"
 SCRIPT
       ;;
     *)

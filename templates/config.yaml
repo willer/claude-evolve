@@ -94,10 +94,10 @@ llm_cli:
 
   # Default configuration: sonnet at ~11%, rest doubled for cost savings
   # Commented out because these change over time; uncomment to override
-  #run: gemini-pro gemini-pro glm-5-zai glm-5-zai kimi-coder kimi-coder gpt-5-codex gpt-5-codex sonnet
-  #ideate: opus-think glm-5-zai gemini-pro kimi-coder gpt-5.2 gpt-5.3-codex
-  #run_fallback: haiku glm-5-zai gemini-5-flash gpt-5.3-codex-spark
-  #ideate_fallback: haiku glm-5-zai gemini-5-flash gpt-5.3-codex-spark
+  #run: gemini-pro gemini-pro glm-5-zai glm-5-zai kimi-coder kimi-coder codex-coding codex-coding sonnet
+  #ideate: opus-think glm-5-zai gemini-pro kimi-coder gpt-5.2 codex-think qwen-openrouter
+  #run_fallback: haiku glm-5-zai gemini-5-flash codex-spark
+  #ideate_fallback: haiku glm-5-zai gemini-5-flash codex-spark
 
   # Available models:
   # Claude (subscription-based, watch usage limits):
@@ -108,10 +108,12 @@ llm_cli:
   # - haiku: Claude Haiku via Claude CLI (cheap fallback)
   #
   # Codex/OpenAI (subscription-based):
-  # - gpt-5-codex: GPT-5 Codex (code-specialized) via Codex CLI
+  # - codex-think: GPT-5.4 high reasoning effort (ideation)
+  # - codex-coding: GPT-5.4 medium reasoning effort (coding/run)
+  # - codex-spark: GPT-5.1 Codex Mini (lightweight fallback)
+  # - gpt-5.4: GPT-5.4 no reasoning effort override via Codex CLI
   # - gpt-5.2: GPT-5.2 via Codex CLI
-  # - gpt-5.3-codex: GPT-5.3 Codex via Codex CLI
-  # - gpt-5.3-codex-spark: GPT-5.3 Codex Spark (lightweight fallback) via Codex CLI
+  # - gpt-5.3-codex: GPT-5.3 Codex (code-specialized) via Codex CLI
   # - gpt5: GPT-5 via Codex CLI (legacy alias)
   # - gpt5high: GPT-5 via Codex CLI (high reasoning)
   # - o3high: O3 via Codex CLI (high reasoning)

@@ -105,10 +105,22 @@ $prompt"
       ai_output=$(codex exec -m "$codex_gpt5_model" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
-    gpt-5-codex)
+    codex-think)
       local ai_output
-      # GPT-5 Codex - code-specialized variant via Codex CLI
-      ai_output=$(codex exec -m gpt-5-codex --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      # GPT-5.4 high reasoning - for ideation tasks requiring deep thinking
+      ai_output=$(codex exec -m gpt-5.4 -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    codex-coding)
+      local ai_output
+      # GPT-5.4 medium reasoning - for coding/implementation tasks
+      ai_output=$(codex exec -m gpt-5.4 -c model_reasoning_effort="medium" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    gpt-5.4)
+      local ai_output
+      # GPT-5.4 - latest frontier agentic coding model via Codex CLI
+      ai_output=$(codex exec -m gpt-5.4 --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     gpt-5.2)
@@ -123,10 +135,10 @@ $prompt"
       ai_output=$(codex exec -m gpt-5.3-codex --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
-    gpt-5.3-codex-spark)
+    codex-spark|gpt-5.1-codex-mini)
       local ai_output
-      # GPT-5.3 Codex Spark - lightweight fallback via Codex CLI
-      ai_output=$(codex exec -m gpt-5.3-codex-spark --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      # GPT-5.1 Codex Mini - cheap/fast lightweight fallback via Codex CLI
+      ai_output=$(codex exec -m gpt-5.1-codex-mini --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     o3high)
@@ -136,8 +148,8 @@ $prompt"
       ;;
     gemini-pro)
       local ai_output
-      # Gemini streams output while working
-      ai_output=$(gemini -y -m gemini-3-pro-preview -p "$prompt" 2>&1)
+      # Gemini 3 auto-routing (gemini-3.1-pro / gemini-3-flash) - streams output while working
+      ai_output=$(gemini -y -m auto-gemini-3 -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     gemini-flash)
@@ -149,7 +161,7 @@ $prompt"
     gemini-5-flash)
       local ai_output
       # Gemini 5 Flash - cheap fallback model
-      ai_output=$(gemini -y -m gemini-5-flash -p "$prompt" 2>&1)
+      ai_output=$(gemini -y -m gemini-3-flash-preview -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     gemini-3-pro-preview)
@@ -254,9 +266,9 @@ $prompt"
       ;;
     qwen-openrouter)
       local ai_output
-      # Qwen latest - Alibaba's flagship model (currently qwen3.5-plus)
+      # Qwen latest - Alibaba's flagship model (currently qwen3.6-plus, free promotional tier)
       # Linear attention + sparse MoE, strong multimodal capabilities
-      ai_output=$(opencode -m openrouter/qwen/qwen3.5-plus-02-15 run "$prompt" 2>&1)
+      ai_output=$(opencode -m openrouter/qwen/qwen3.6-plus:free run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     codex-oss-local)

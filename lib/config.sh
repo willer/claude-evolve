@@ -63,13 +63,13 @@ DEFAULT_WORKER_MAX_CANDIDATES=3
 #
 # Run: Subscription-based agentic models for code generation
 # All CLI tools (opencode, claude, gemini, kimi) are agentic and can edit files
-DEFAULT_LLM_RUN="gemini-pro gemini-pro glm-5-zai glm-5-zai kimi-coder kimi-coder gpt-5-codex gpt-5-codex sonnet"
-DEFAULT_LLM_RUN_FALLBACK="haiku glm-5-zai gemini-5-flash gpt-5.3-codex-spark"
+DEFAULT_LLM_RUN="gemini-pro gemini-pro glm-5-zai glm-5-zai kimi-coder kimi-coder codex-coding codex-coding sonnet"
+DEFAULT_LLM_RUN_FALLBACK="haiku glm-5-zai gemini-5-flash codex-spark"
 #
 # Ideate: Agentic models that can edit files for ideation
 # All CLI tools (opencode, claude, gemini, kimi) are agentic and can edit files
-DEFAULT_LLM_IDEATE="opus-think glm-5-zai gemini-pro kimi-coder gpt-5.2 gpt-5.3-codex qwen-openrouter"
-DEFAULT_LLM_IDEATE_FALLBACK="haiku glm-5-zai gemini-5-flash gpt-5.3-codex-spark"
+DEFAULT_LLM_IDEATE="opus-think glm-5-zai gemini-pro kimi-coder gpt-5.2 codex-think qwen-openrouter"
+DEFAULT_LLM_IDEATE_FALLBACK="haiku glm-5-zai gemini-5-flash codex-spark"
 
 # Load configuration from a YAML file and update variables
 _load_yaml_config() {

@@ -248,8 +248,9 @@ MODEL_TIMEOUTS = {
     'gemini-pro': 1800, 'gemini-flash': 1200, 'gemini-3-flash': 600,
     'gemini-3-pro-preview': 1800, 'gemini-5-flash': 600,
     # Codex/OpenAI models - 10 min standard
-    'gpt-5-codex': 600, 'gpt-5.2': 600, 'gpt-5.3-codex': 600,
-    'gpt-5.3-codex-spark': 300,
+    'codex-think': 900, 'codex-coding': 600, 'codex-spark': 300,
+    'gpt-5.4': 600, 'gpt-5.2': 600, 'gpt-5.3-codex': 600,
+    'gpt-5.1-codex-mini': 300,
     # Z.AI agentic modes - 30 min (can be slow)
     'glm-zai': 1800, 'glm-5-zai': 1800,
     # Codex local - 40 min (local inference can be slow)
