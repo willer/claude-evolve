@@ -53,13 +53,16 @@ EOF
 call_ai_model_configured() {
   local model_name="$1"
   local prompt="$2"
-  local codex_gpt5_model="${CODEX_GPT5_MODEL:-gpt-5.2}"
+  local codex_gpt_model="${CODEX_GPT_MODEL:-${CODEX_GPT5_MODEL:-gpt-5.2}}"
   
   # Record start time
   local start_time=$(date +%s)
   
   # Build command directly based on model
+  # AIDEV-NOTE: Model names are role-based, never versioned. When upgrading a model,
+  # update the model ID in the command below, not the case label.
   case "$model_name" in
+    # --- Claude (subscription) ---
     opus)
       local ai_output
       ai_output=$(claude --dangerously-skip-permissions --mcp-config '' --model opus -p "$prompt" 2>&1)
@@ -70,110 +73,30 @@ call_ai_model_configured() {
       ai_output=$(claude --dangerously-skip-permissions --mcp-config '' --model sonnet -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
-    sonnet-think)
+    haiku)
       local ai_output
-      # Use extended thinking with sonnet 4.5 - prepend ultrathink instruction
-      # AIDEV-NOTE: Extended thinking can take long for complex ideation
-      local think_prompt="ultrathink
-
-$prompt"
-      ai_output=$(claude --dangerously-skip-permissions --mcp-config '' --model sonnet -p "$think_prompt" 2>&1)
+      ai_output=$(claude --dangerously-skip-permissions --mcp-config '' --model haiku -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     opus-think)
       local ai_output
-      # Use extended thinking with opus - prepend ultrathink instruction
-      # AIDEV-NOTE: Extended thinking can take long for complex ideation
       local think_prompt="ultrathink
 
 $prompt"
       ai_output=$(claude --dangerously-skip-permissions --mcp-config '' --model opus -p "$think_prompt" 2>&1)
       local ai_exit_code=$?
       ;;
-    haiku)
+    sonnet-think)
       local ai_output
-      ai_output=$(claude --dangerously-skip-permissions --mcp-config '' --model haiku -p "$prompt" 2>&1)
+      local think_prompt="ultrathink
+
+$prompt"
+      ai_output=$(claude --dangerously-skip-permissions --mcp-config '' --model sonnet -p "$think_prompt" 2>&1)
       local ai_exit_code=$?
       ;;
-    gpt5high)
+    opus-openrouter)
       local ai_output
-      ai_output=$(codex exec -m "$codex_gpt5_model" -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
-      local ai_exit_code=$?
-      ;;
-    gpt5)
-      local ai_output
-      ai_output=$(codex exec -m "$codex_gpt5_model" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
-      local ai_exit_code=$?
-      ;;
-    codex-think)
-      local ai_output
-      # GPT-5.4 high reasoning - for ideation tasks requiring deep thinking
-      ai_output=$(codex exec -m gpt-5.4 -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
-      local ai_exit_code=$?
-      ;;
-    codex-coding)
-      local ai_output
-      # GPT-5.4 medium reasoning - for coding/implementation tasks
-      ai_output=$(codex exec -m gpt-5.4 -c model_reasoning_effort="medium" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
-      local ai_exit_code=$?
-      ;;
-    gpt-5.4)
-      local ai_output
-      # GPT-5.4 - latest frontier agentic coding model via Codex CLI
-      ai_output=$(codex exec -m gpt-5.4 --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
-      local ai_exit_code=$?
-      ;;
-    gpt-5.2)
-      local ai_output
-      # GPT-5.2 via Codex CLI
-      ai_output=$(codex exec -m gpt-5.2 --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
-      local ai_exit_code=$?
-      ;;
-    gpt-5.3-codex)
-      local ai_output
-      # GPT-5.3 Codex via Codex CLI
-      ai_output=$(codex exec -m gpt-5.3-codex --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
-      local ai_exit_code=$?
-      ;;
-    codex-spark|gpt-5.1-codex-mini)
-      local ai_output
-      # GPT-5.1 Codex Mini - cheap/fast lightweight fallback via Codex CLI
-      ai_output=$(codex exec -m gpt-5.1-codex-mini --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
-      local ai_exit_code=$?
-      ;;
-    o3high)
-      local ai_output
-      ai_output=$(codex exec -m o3-mini -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
-      local ai_exit_code=$?
-      ;;
-    gemini-pro)
-      local ai_output
-      # Gemini 3 auto-routing (gemini-3.1-pro / gemini-3-flash) - streams output while working
-      ai_output=$(gemini -y -m auto-gemini-3 -p "$prompt" 2>&1)
-      local ai_exit_code=$?
-      ;;
-    gemini-flash)
-      local ai_output
-      # Gemini streams output while working
-      ai_output=$(gemini -y -m gemini-2.5-flash -p "$prompt" 2>&1)
-      local ai_exit_code=$?
-      ;;
-    gemini-5-flash)
-      local ai_output
-      # Gemini 5 Flash - cheap fallback model
-      ai_output=$(gemini -y -m gemini-3-flash-preview -p "$prompt" 2>&1)
-      local ai_exit_code=$?
-      ;;
-    gemini-3-pro-preview)
-      local ai_output
-      # Gemini v3 Pro Preview via OpenRouter - EXPENSIVE
-      ai_output=$(opencode -m openrouter/google/gemini-3-pro-preview run "$prompt" 2>&1)
-      local ai_exit_code=$?
-      ;;
-    gemini-3-flash)
-      local ai_output
-      # Gemini 3 Flash - fast, cheap, strong thinker
-      ai_output=$(opencode -m openrouter/google/gemini-3-flash-preview run "$prompt" 2>&1)
+      ai_output=$(opencode -m openrouter/anthropic/claude-opus-4.1 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     cursor-sonnet)
@@ -186,101 +109,162 @@ $prompt"
       ai_output=$(cursor-agent opus -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
-    glm-openrouter)
+    # --- Codex/GPT (subscription) ---
+    gpt)
       local ai_output
-      ai_output=$(opencode -m openrouter/z-ai/glm-4.7 run "$prompt" 2>&1)
+      ai_output=$(codex exec -m "$codex_gpt_model" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
-    glm-5)
+    gpt-high)
       local ai_output
-      # GLM-5: 744B MoE model, very cheap ($0.80/$2.56 per 1M tokens), 200K context
-      # Released Feb 2026 - scores 77.8% SWE-bench, MIT license
-      ai_output=$(opencode -m openrouter/z-ai/glm-5 run "$prompt" 2>&1)
+      ai_output=$(codex exec -m "$codex_gpt_model" -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    codex-think)
+      local ai_output
+      # High reasoning - for ideation tasks requiring deep thinking
+      ai_output=$(codex exec -m gpt-5.4 -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    codex-coding)
+      local ai_output
+      # Medium reasoning - for coding/implementation tasks
+      ai_output=$(codex exec -m gpt-5.4 -c model_reasoning_effort="medium" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    codex-spark)
+      local ai_output
+      # Cheap/fast lightweight fallback
+      ai_output=$(codex exec -m gpt-5.1-codex-mini --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    # --- Gemini (subscription) ---
+    gemini-pro)
+      local ai_output
+      # Auto-routing to best Gemini model - streams output while working
+      ai_output=$(gemini -y -m auto-gemini-3 -p "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    gemini-flash)
+      local ai_output
+      ai_output=$(gemini -y -m gemini-2.5-flash -p "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    gemini-cheap)
+      local ai_output
+      # Fast cheap fallback via gemini CLI
+      ai_output=$(gemini -y -m gemini-3-flash-preview -p "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    gemini-pro-openrouter)
+      local ai_output
+      # Gemini Pro via OpenRouter - EXPENSIVE
+      ai_output=$(opencode -m openrouter/google/gemini-3-pro-preview run "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    # --- GLM / Z.AI ---
+    glm)
+      local ai_output
+      # Latest GLM flagship via OpenRouter
+      ai_output=$(opencode -m openrouter/z-ai/glm-5.1 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     glm-zai)
-      # GLM 4.7 via Z.AI agentic mode -- can be slow sometimes
       local ai_output
-      ai_output=$(opencode -m zai-coding-plan/glm-4.7 run "$prompt" 2>&1)
-      local ai_exit_code=$?
-      ;;
-    glm-5-zai)
-      # GLM-5 via Z.AI agentic mode - supports file editing for ideation
-      # 744B MoE, strong reasoning, can edit files
-      local ai_output
+      # Latest GLM via Z.AI agentic mode (may lag OpenRouter by one version)
       ai_output=$(opencode -m zai-coding-plan/glm-5 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
-    deepseek-openrouter)
+    # --- Qwen / Alibaba ---
+    qwen)
       local ai_output
+      # Latest Qwen flagship via OpenRouter
+      ai_output=$(opencode -m openrouter/qwen/qwen3.6-plus run "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    qwen-coder)
+      local ai_output
+      # Qwen coding specialist - large MoE
+      ai_output=$(opencode -m openrouter/qwen/qwen3-coder run "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    # --- DeepSeek ---
+    deepseek)
+      local ai_output
+      # Latest DeepSeek via OpenRouter
       ai_output=$(opencode -m openrouter/deepseek/deepseek-v3.2 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
-    grok-code-fast-openrouter)
+    deepseek-local)
       local ai_output
-      ai_output=$(opencode -m openrouter/x-ai/grok-code-fast-1 run "$prompt" 2>&1)
+      # DeepSeek via Codex CLI with Ollama cloud backend
+      ai_output=$(codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss -m deepseek-v3.1:671b-cloud "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
-    grok-4-openrouter)
-      local ai_output
-      # EXPENSIVE - consider grok-4.1-fast instead
-      ai_output=$(opencode -m openrouter/x-ai/grok-4 run "$prompt" 2>&1)
-      local ai_exit_code=$?
-      ;;
-    grok-4.1-fast)
-      local ai_output
-      # Grok 4.1 Fast - close to Grok 4 quality, much cheaper
-      ai_output=$(opencode -m openrouter/x-ai/grok-4.1-fast run "$prompt" 2>&1)
-      local ai_exit_code=$?
-      ;;
-    opus-openrouter)
-      local ai_output
-      ai_output=$(opencode -m openrouter/anthropic/claude-opus-4.1 run "$prompt" 2>&1)
-      local ai_exit_code=$?
-      ;;
-    kimi-k2-openrouter)
-      local ai_output
-      # Kimi K2 Thinking via OpenRouter (no separate auth needed)
-      ai_output=$(opencode -m openrouter/moonshotai/kimi-k2-thinking run "$prompt" 2>&1)
-      local ai_exit_code=$?
-      ;;
-    kimi-k2-think-moonshot)
-      local ai_output
-      # Use kimi CLI directly (assumes kimi is installed and configured)
-      ai_output=$(kimi --print -c "$prompt" 2>&1)
-      local ai_exit_code=$?
-      ;;
+    # --- Kimi / Moonshot ---
     kimi-coder)
       local ai_output
-      # Kimi for Coding model via kimi CLI (fast coding-focused model)
-      # Use --print to see agent actions while still allowing file modifications
+      # Kimi coding model via kimi CLI
       ai_output=$(kimi --print -y -m kimi-for-coding -c "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
-    kimi-k2.5)
+    kimi-think)
       local ai_output
-      # Kimi K2.5 - Moonshot's most powerful model (Jan 2025)
-      # Native multimodal agentic model, stronger than GLM-4.7
+      # Kimi thinking via kimi CLI
+      ai_output=$(kimi --print -c "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    kimi-openrouter)
+      local ai_output
+      # Latest Kimi via OpenRouter
       ai_output=$(opencode -m openrouter/moonshotai/kimi-k2.5 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
-    qwen-openrouter)
+    # --- Grok / xAI ---
+    grok)
       local ai_output
-      # Qwen latest - Alibaba's flagship model (currently qwen3.6-plus, free promotional tier)
-      # Linear attention + sparse MoE, strong multimodal capabilities
-      ai_output=$(opencode -m openrouter/qwen/qwen3.6-plus:free run "$prompt" 2>&1)
+      # Latest Grok via OpenRouter - EXPENSIVE
+      ai_output=$(opencode -m openrouter/x-ai/grok-4 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
-    codex-oss-local)
-      # Codex-OSS via Codex CLI with Ollama backend
+    grok-fast)
+      local ai_output
+      # Grok fast variant - close to full quality, much cheaper
+      ai_output=$(opencode -m openrouter/x-ai/grok-4.1-fast run "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    # --- MiniMax ---
+    minimax)
+      local ai_output
+      # Latest MiniMax reasoning model via OpenRouter
+      ai_output=$(opencode -m openrouter/minimax/minimax-m2.7 run "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    # --- Ollama cloud models (subscription) ---
+    ollama-glm)
+      local ai_output
+      ai_output=$(codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss -m glm-5.1:cloud "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    ollama-gemma)
+      local ai_output
+      ai_output=$(codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss -m gemma4:31b-cloud "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    ollama-minimax)
+      local ai_output
+      ai_output=$(codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss -m minimax-m2.7:cloud "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    ollama-qwen)
+      local ai_output
+      ai_output=$(codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss -m qwen3.5:cloud "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
+    # --- Local inference ---
+    codex-local)
       local ai_output
       ai_output=$(codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss --local-provider=ollama "$prompt" 2>&1)
-      local ai_exit_code=$?
-      ;;
-    deepseek-v3-llamacloud)
-      # Deepseek via Codex CLI with Ollama cloud backend
-      local ai_output
-      ai_output=$(codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss -m deepseek-v3.1:671b-cloud "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
   esac
@@ -344,7 +328,7 @@ clean_ai_output() {
   local model_name="$2"
   
   # Handle codex-specific output format
-  if [[ "$model_name" == "codex" || "$model_name" == "o3high" || "$model_name" == "gpt5high" ]]; then
+  if [[ "$model_name" == "codex" || "$model_name" == "gpt" || "$model_name" == "gpt-high" ]]; then
     # Clean codex output - extract content between "codex" marker and "tokens used"
     if echo "$output" | grep -q "^\[.*\] codex$"; then
       # Extract content between "codex" line and "tokens used" line

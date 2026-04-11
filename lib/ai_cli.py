@@ -241,20 +241,33 @@ def get_fallback_models_for_command(command: str) -> List[str]:
 # in bash, because the bash `timeout` command causes claude CLI (and sometimes
 # gemini CLI) to hang when called from nested subprocess contexts.
 MODEL_TIMEOUTS = {
-    # Claude models - 5 minutes for standard, 30 minutes for thinking
+    # Claude - 5 min standard, 30 min thinking
     'opus': 300, 'sonnet': 300, 'haiku': 300,
     'opus-think': 1800, 'sonnet-think': 1800,
-    # Gemini - 30 min for pro (streams while working), 20 min for flash
-    'gemini-pro': 1800, 'gemini-flash': 1200, 'gemini-3-flash': 600,
-    'gemini-3-pro-preview': 1800, 'gemini-5-flash': 600,
-    # Codex/OpenAI models - 10 min standard
+    'opus-openrouter': 600, 'cursor-sonnet': 300, 'cursor-opus': 300,
+    # Codex/GPT - 10 min standard
+    'gpt': 600, 'gpt-high': 900,
     'codex-think': 900, 'codex-coding': 600, 'codex-spark': 300,
-    'gpt-5.4': 600, 'gpt-5.2': 600, 'gpt-5.3-codex': 600,
-    'gpt-5.1-codex-mini': 300,
-    # Z.AI agentic modes - 30 min (can be slow)
-    'glm-zai': 1800, 'glm-5-zai': 1800,
-    # Codex local - 40 min (local inference can be slow)
-    'codex-oss-local': 2400,
+    # Gemini - 30 min for pro (streams), 10 min for flash
+    'gemini-pro': 1800, 'gemini-flash': 1200,
+    'gemini-cheap': 600, 'gemini-pro-openrouter': 1800,
+    # GLM / Z.AI - 30 min (Z.AI can be slow)
+    'glm': 600, 'glm-zai': 1800,
+    # Qwen
+    'qwen': 600, 'qwen-coder': 1200,
+    # DeepSeek
+    'deepseek': 600, 'deepseek-local': 2400,
+    # Kimi
+    'kimi-coder': 600, 'kimi-think': 900, 'kimi-openrouter': 600,
+    # Grok
+    'grok': 600, 'grok-fast': 600,
+    # MiniMax
+    'minimax': 600,
+    # Ollama cloud
+    'ollama-glm': 1200, 'ollama-gemma': 1200,
+    'ollama-minimax': 1200, 'ollama-qwen': 1200,
+    # Local inference
+    'codex-local': 2400,
 }
 DEFAULT_MODEL_TIMEOUT = 600  # 10 minutes for everything else
 

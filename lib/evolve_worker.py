@@ -164,7 +164,7 @@ Important: Make meaningful changes that match the description. Don't just add co
 
 IMPORTANT: If you need to read Python (.py) or CSV files, read them in chunks using offset and limit parameters to avoid context overload
 Example: Read(file_path='evolution_gen01-001.py', offset=0, limit=100) then Read(offset=100, limit=100), etc.
-This is especially important for models with smaller context windows (like GLM).
+This is especially important for models with smaller context windows.
 
 CRITICAL: If you do not know how to implement what was asked for, or if the requested change is unclear or not feasible, you MUST refuse to make any changes. DO NOT modify the code if you are uncertain about the implementation. Simply respond that you cannot implement the requested change and explain why. It is better to refuse than to make incorrect or random changes."""
 

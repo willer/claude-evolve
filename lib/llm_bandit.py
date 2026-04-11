@@ -356,7 +356,7 @@ if __name__ == "__main__":
     # Test the bandit
     print("Testing LLM Bandit...")
 
-    models = ["opus", "sonnet", "gemini-pro", "gpt5"]
+    models = ["opus", "sonnet", "gemini-pro", "gpt"]
     bandit = LLMBandit(models, state_file="/tmp/test_bandit.json")
 
     # Simulate some runs
