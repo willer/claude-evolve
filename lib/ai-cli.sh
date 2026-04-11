@@ -198,7 +198,7 @@ $prompt"
     deepseek-local)
       local ai_output
       # DeepSeek via Codex CLI with Ollama cloud backend
-      ai_output=$(codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss -m deepseek-v3.1:671b-cloud "$prompt" 2>&1)
+      ai_output=$(codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss --local-provider=ollama -m deepseek-v3.1:671b-cloud "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     # --- Kimi / Moonshot ---
@@ -240,25 +240,25 @@ $prompt"
       ai_output=$(opencode -m openrouter/minimax/minimax-m2.7 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
-    # --- Ollama cloud models (subscription) ---
+    # --- Ollama cloud models (flat-rate subscription) ---
     ollama-glm)
       local ai_output
-      ai_output=$(codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss -m glm-5.1:cloud "$prompt" 2>&1)
+      ai_output=$(codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss --local-provider=ollama -m glm-5.1:cloud "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     ollama-gemma)
       local ai_output
-      ai_output=$(codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss -m gemma4:31b-cloud "$prompt" 2>&1)
+      ai_output=$(codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss --local-provider=ollama -m gemma4:31b-cloud "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     ollama-minimax)
       local ai_output
-      ai_output=$(codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss -m minimax-m2.7:cloud "$prompt" 2>&1)
+      ai_output=$(codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss --local-provider=ollama -m minimax-m2.7:cloud "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     ollama-qwen)
       local ai_output
-      ai_output=$(codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss -m qwen3.5:cloud "$prompt" 2>&1)
+      ai_output=$(codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss --local-provider=ollama -m qwen3.5:cloud "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     # --- Local inference ---
