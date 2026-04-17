@@ -96,12 +96,12 @@ $prompt"
       ;;
     opus-openrouter)
       local ai_output
-      ai_output=$(opencode -m openrouter/anthropic/claude-opus-4.1 run "$prompt" 2>&1)
+      ai_output=$(opencode -m openrouter/anthropic/claude-opus-4.7 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     cursor-sonnet)
       local ai_output
-      ai_output=$(cursor-agent sonnet-4.5 -p "$prompt" 2>&1)
+      ai_output=$(cursor-agent sonnet-4.6 -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     cursor-opus)
@@ -258,7 +258,7 @@ $prompt"
       ;;
     ollama-qwen)
       local ai_output
-      ai_output=$(codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss --local-provider=ollama -m qwen3.5:cloud "$prompt" 2>&1)
+      ai_output=$(codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss --local-provider=ollama -m qwen3.6:cloud "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     # --- Local inference ---
