@@ -95,7 +95,7 @@ llm_cli:
   # Default configuration: sonnet at ~11%, rest doubled for cost savings
   # Commented out because these change over time; uncomment to override
   #run: gemini-pro gemini-pro glm-5-zai glm-5-zai kimi-coder kimi-coder codex-coding codex-coding sonnet
-  #ideate: opus-think glm-5-zai gemini-pro kimi-coder gpt-5.2 codex-think qwen-openrouter
+  #ideate: opus-think glm-5-zai gemini-pro kimi-coder gpt-5.2 codex-think qwen-max
   #run_fallback: haiku glm-5-zai gemini-5-flash codex-spark
   #ideate_fallback: haiku glm-5-zai gemini-5-flash codex-spark
 
@@ -126,7 +126,10 @@ llm_cli:
   # Other free/cheap models:
   # - glm-5-zai: GLM-5 via Z.AI agentic mode
   # - kimi-coder: Kimi for Coding via kimi CLI (fast, good for code gen)
-  # - kimi-k2-openrouter: Kimi K2 Thinking via OpenRouter
+  # - kimi-openrouter: Kimi K2.6 via OpenRouter
+  # - qwen: Qwen 3.6 Plus via OpenRouter
+  # - qwen-max: Qwen 3.6 Max Preview via OpenRouter (strongest Qwen)
+  # - qwen-coder: Qwen coding specialist (large MoE) via OpenRouter
   # - codex-oss-local: Local model via Codex + Ollama
   # - cursor-sonnet: Claude Sonnet via Cursor Agent CLI
   # - cursor-opus: Claude Opus via Cursor Agent CLI

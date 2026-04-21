@@ -254,7 +254,7 @@ MODEL_TIMEOUTS = {
     # GLM / Z.AI - 30 min (Z.AI can be slow)
     'glm': 600, 'glm-zai': 1800,
     # Qwen
-    'qwen': 600, 'qwen-coder': 1200,
+    'qwen': 600, 'qwen-max': 900, 'qwen-coder': 1200,
     # DeepSeek
     'deepseek': 600, 'deepseek-local': 2400,
     # Kimi

@@ -182,6 +182,12 @@ $prompt"
       ai_output=$(opencode -m openrouter/qwen/qwen3.6-plus run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
+    qwen-max)
+      local ai_output
+      # Qwen 3.6 Max - strongest Qwen model, tops coding benchmarks
+      ai_output=$(opencode -m openrouter/qwen/qwen3.6-max-preview run "$prompt" 2>&1)
+      local ai_exit_code=$?
+      ;;
     qwen-coder)
       local ai_output
       # Qwen coding specialist - large MoE
@@ -217,7 +223,7 @@ $prompt"
     kimi-openrouter)
       local ai_output
       # Latest Kimi via OpenRouter
-      ai_output=$(opencode -m openrouter/moonshotai/kimi-k2.5 run "$prompt" 2>&1)
+      ai_output=$(opencode -m openrouter/moonshotai/kimi-k2.6 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     # --- Grok / xAI ---
