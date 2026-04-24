@@ -365,19 +365,21 @@ get_models_for_command() {
   echo "$model_list"
 }
 
-# Get fallback models for a specific command (run or ideate)
-# Usage: get_fallback_models_for_command <command>
-# Returns: Space-separated list of fallback model names
-get_fallback_models_for_command() {
+# Get escalation models for a specific command (run or ideate)
+# AIDEV-NOTE: Escalation models are big/commercial models used only when
+# cheap primary models produce code with syntax or validation errors.
+# Usage: get_escalation_models_for_command <command>
+# Returns: Space-separated list of escalation model names
+get_escalation_models_for_command() {
   local command="$1"
   local model_list=""
 
   case "$command" in
     run)
-      model_list="$LLM_RUN_FALLBACK"
+      model_list="$LLM_RUN_ESCALATION"
       ;;
     ideate)
-      model_list="$LLM_IDEATE_FALLBACK"
+      model_list="$LLM_IDEATE_ESCALATION"
       ;;
     *)
       echo "[ERROR] Unknown command: $command" >&2

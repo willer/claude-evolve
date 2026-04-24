@@ -35,8 +35,8 @@ set_prefix("WORKER")
 
 from lib.evolution_csv import EvolutionCSV
 from lib.ai_cli import (
-    call_ai_with_backoff, call_ai_model, get_models_for_command,
-    get_git_protection_warning, AIError
+    call_ai_with_backoff, call_ai_escalation, call_ai_model,
+    get_models_for_command, get_git_protection_warning, AIError
 )
 from lib.llm_bandit import LLMBandit
 
@@ -170,11 +170,12 @@ CRITICAL: If you do not know how to implement what was asked for, or if the requ
 
     def _call_ai_with_backoff(self, prompt: str, target_file: Path) -> Tuple[bool, str]:
         """
-        Call AI with bandit-based model selection and fallback.
+        Call AI with bandit-based model selection from the primary (cheap) tier.
 
         AIDEV-NOTE: First tries model selected by UCB bandit.
-        If that fails, falls back to round-robin retry approach.
-        The bandit learns which models produce better algorithm improvements.
+        If that fails, retries with round-robin across all primary models.
+        The bandit learns which cheap models produce better algorithm improvements.
+        Escalation to big models is handled separately on quality failures.
 
         Returns:
             Tuple of (success, model_name)
@@ -203,14 +204,14 @@ CRITICAL: If you do not know how to implement what was asked for, or if the requ
                 else:
                     # AIDEV-NOTE: Log output so we can diagnose why file wasn't modified
                     preview = output[-300:] if output else "(empty)"
-                    log(f"Bandit model {selected_model} completed but didn't modify file ({len(output)} chars), trying fallback...")
+                    log(f"Bandit model {selected_model} completed but didn't modify file ({len(output)} chars), trying other primary models...")
                     log(f"AI output preview: {preview}")
                     # AIDEV-NOTE: Report no-modification as failure to bandit
                     self.bandit.update(selected_model, child_score=None, parent_score=self._parent_score)
                     log(f"Bandit update: {selected_model} no file modification")
 
             except AIError as e:
-                log(f"Bandit model {selected_model} failed: {e}, trying fallback...")
+                log(f"Bandit model {selected_model} failed: {e}, trying other primary models...")
                 # AIDEV-NOTE: Report AI-level failure to bandit so it learns to avoid broken models
                 self.bandit.update(selected_model, child_score=None, parent_score=self._parent_score)
                 log(f"Bandit update: {selected_model} AI call failed")
@@ -242,6 +243,42 @@ CRITICAL: If you do not know how to implement what was asked for, or if the requ
 
         except AIError as e:
             log_error(f"All AI retries exhausted: {e}")
+            return False, ""
+
+    def _call_ai_escalated(self, prompt: str, target_file: Path) -> Tuple[bool, str]:
+        """
+        Call escalation-tier AI (big commercial models) to fix code quality issues.
+
+        AIDEV-NOTE: Quality-triggered escalation. Only called when cheap primary models
+        produced code with syntax or validation errors. Each escalation model gets one
+        shot — no backoff loops. If all escalation models fail, the candidate should be
+        marked failed-ai-retry (API limits) not failed-validation (bad idea).
+
+        Returns:
+            Tuple of (success, model_name)
+        """
+        hash_before = self._file_hash(target_file) if target_file.exists() else None
+
+        try:
+            output, model = call_ai_escalation(
+                prompt,
+                command="run",
+                working_dir=self.config.evolution_dir
+            )
+
+            hash_after = self._file_hash(target_file) if target_file.exists() else None
+
+            if hash_before != hash_after and hash_after is not None:
+                log(f"Escalation AI successfully modified file (model: {model})")
+                return True, model
+            else:
+                preview = output[-300:] if output else "(empty)"
+                log(f"Escalation AI completed but did not modify file ({len(output)} chars)")
+                log(f"AI output preview: {preview}")
+                return False, model
+
+        except AIError as e:
+            log_error(f"All escalation models failed: {e}")
             return False, ""
 
     def _file_hash(self, path: Path) -> Optional[str]:
@@ -550,59 +587,93 @@ python validator.py {target_basename}
                 with EvolutionCSV(self.config.csv_path) as csv:
                     csv.update_candidate_field(candidate.id, 'run-LLM', model)
 
+            # AIDEV-NOTE: Quality-triggered escalation system.
+            # Phase 1: Check syntax from cheap model output
+            # Phase 2: If syntax fails, escalate to big model with error context
+            # Phase 3: Validate, if fails escalate to big model with error context
+            # If escalation models also fail (API limits), mark failed-ai-retry.
+            # If escalation models produce code but it's still bad, mark failed-validation.
+
             # Check syntax
             if not self._check_syntax(target_file):
-                log_error("Syntax error in generated file")
-                target_file.unlink(missing_ok=True)
-                with EvolutionCSV(self.config.csv_path) as csv:
-                    csv.update_candidate_status(candidate.id, 'pending')
-                return 0  # Will retry
+                log("Syntax error from primary model, escalating to big model...")
+                # Get the syntax error details for context
+                syntax_result = subprocess.run(
+                    [self.config.python_cmd, "-m", "py_compile", str(target_file)],
+                    capture_output=True, text=True
+                )
+                syntax_error = syntax_result.stderr.strip()
 
-            # Run validator with retry loop
-            # AIDEV-NOTE: Validator catches structural errors before expensive full evaluation.
-            # If validation fails, we give the AI feedback and ask it to fix the code.
-            validation_passed = False
-            for validation_attempt in range(self.config.max_validation_retries + 1):
-                valid, error_info = self._run_validator(candidate.id)
-
-                if valid:
-                    validation_passed = True
-                    break
-
-                if validation_attempt >= self.config.max_validation_retries:
-                    log_error(f"Validation failed after {self.config.max_validation_retries} fix attempts")
-                    break
-
-                # Ask AI to fix the validation error
-                log(f"Validation failed (attempt {validation_attempt + 1}), asking AI to fix...")
-                fix_prompt = self._build_fix_prompt(candidate, target_file.name, error_info)
-                success, fix_model = self._call_ai_with_backoff(fix_prompt, target_file)
+                fix_prompt = self._build_fix_prompt(
+                    candidate, target_file.name,
+                    {'error_type': 'syntax', 'error': syntax_error}
+                )
+                success, fix_model = self._call_ai_escalated(fix_prompt, target_file)
 
                 if not success:
-                    log_error("AI failed to fix validation error")
-                    break
+                    log_error("Escalation models failed to fix syntax error")
+                    target_file.unlink(missing_ok=True)
+                    with EvolutionCSV(self.config.csv_path) as csv:
+                        csv.update_candidate_status(candidate.id, 'failed-ai-retry')
+                    return 77
 
-                # Record that we used an additional model call for fixing
+                # Record escalation model
                 if fix_model:
                     with EvolutionCSV(self.config.csv_path) as csv:
                         current_llm = csv.get_candidate_info(candidate.id).get('run-LLM', '')
-                        new_llm = f"{current_llm}+{fix_model}" if current_llm else fix_model
+                        new_llm = f"{current_llm}+ESC:{fix_model}" if current_llm else f"ESC:{fix_model}"
                         csv.update_candidate_field(candidate.id, 'run-LLM', new_llm)
 
-                # Re-check syntax after fix
+                # Re-check syntax after escalation fix
                 if not self._check_syntax(target_file):
-                    log_error("Fix introduced syntax error")
-                    # Don't break - try again if we have retries left
+                    log_error("Escalation model also produced syntax error — idea too hard")
+                    target_file.unlink(missing_ok=True)
+                    with EvolutionCSV(self.config.csv_path) as csv:
+                        csv.update_candidate_status(candidate.id, 'failed-validation')
+                    return 1
 
-            if not validation_passed:
-                # Validation failed after all retries
-                with EvolutionCSV(self.config.csv_path) as csv:
-                    csv.update_candidate_status(candidate.id, 'failed-validation')
-                    # Store the last error for debugging
-                    if error_info:
-                        error_summary = f"{error_info.get('error_type', 'unknown')}: {error_info.get('error', '')[:100]}"
-                        csv.update_candidate_field(candidate.id, 'validation_error', error_summary)
-                return 1
+            # Run validator with escalation on failure
+            # AIDEV-NOTE: Validator catches structural errors before expensive full evaluation.
+            # First attempt uses the code as-is from primary model. On failure, escalate once.
+            valid, error_info = self._run_validator(candidate.id)
+
+            if not valid:
+                log("Validation failed from primary model, escalating to big model...")
+                fix_prompt = self._build_fix_prompt(candidate, target_file.name, error_info)
+                success, fix_model = self._call_ai_escalated(fix_prompt, target_file)
+
+                if not success:
+                    log_error("Escalation models failed to fix validation error")
+                    target_file.unlink(missing_ok=True)
+                    with EvolutionCSV(self.config.csv_path) as csv:
+                        csv.update_candidate_status(candidate.id, 'failed-ai-retry')
+                    return 77
+
+                # Record escalation model
+                if fix_model:
+                    with EvolutionCSV(self.config.csv_path) as csv:
+                        current_llm = csv.get_candidate_info(candidate.id).get('run-LLM', '')
+                        new_llm = f"{current_llm}+ESC:{fix_model}" if current_llm else f"ESC:{fix_model}"
+                        csv.update_candidate_field(candidate.id, 'run-LLM', new_llm)
+
+                # Check syntax after escalation fix (escalation might break it)
+                if not self._check_syntax(target_file):
+                    log_error("Escalation fix introduced syntax error")
+                    target_file.unlink(missing_ok=True)
+                    with EvolutionCSV(self.config.csv_path) as csv:
+                        csv.update_candidate_status(candidate.id, 'failed-validation')
+                    return 1
+
+                # Re-validate after escalation fix
+                valid, error_info = self._run_validator(candidate.id)
+                if not valid:
+                    log_error("Validation still fails after escalation — idea too hard")
+                    with EvolutionCSV(self.config.csv_path) as csv:
+                        csv.update_candidate_status(candidate.id, 'failed-validation')
+                        if error_info:
+                            error_summary = f"{error_info.get('error_type', 'unknown')}: {error_info.get('error', '')[:100]}"
+                            csv.update_candidate_field(candidate.id, 'validation_error', error_summary)
+                    return 1
 
         # Run evaluator
         log("Running evaluator...")

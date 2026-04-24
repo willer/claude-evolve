@@ -86,47 +86,49 @@ parallel:
   # Timeout in seconds when waiting for CSV locks
   lock_timeout: 30
 
-# LLM/AI CLI configuration
+# LLM/AI CLI configuration — quality-triggered escalation system
+# AIDEV-NOTE: Two tiers for coding:
+#   Primary (run): Cheap/open models for normal code generation
+#   Escalation (run_escalation): Big models activated ONLY on syntax/validation failure
+# No fallback tier — if all primary models are down, fail fast so monitoring catches it.
 llm_cli:
-  # What to run for each sub-command
-  # Models are tried in order, with round-robin distribution across candidates
-  # You can repeat models for weighted selection (e.g., "gemini-pro gemini-pro sonnet" for 2:1 ratio)
+  # Models are selected randomly, repeat for weighted selection (e.g., "model model" = 2x weight)
+  # Commented out because defaults change over time; uncomment to override
 
-  # Default configuration: sonnet at ~11%, rest doubled for cost savings
-  # Commented out because these change over time; uncomment to override
-  #run: gemini-pro gemini-pro glm-5-zai glm-5-zai kimi-coder kimi-coder codex-coding codex-coding sonnet
-  #ideate: opus-think glm-5-zai gemini-pro kimi-coder gpt-5.2 codex-think qwen-openrouter
-  #run_fallback: haiku glm-5-zai gemini-5-flash codex-spark
-  #ideate_fallback: haiku glm-5-zai gemini-5-flash codex-spark
+  # Coding: cheap/open models (flat-rate or low per-token cost)
+  #run: ollama-glm ollama-glm ollama-qwen ollama-qwen ollama-minimax ollama-minimax ollama-gemma ollama-gemma kimi-coder kimi-coder glm-zai qwen-coder minimax
+
+  # Coding escalation: big commercial models, only used when primary produces bad code
+  #run_escalation: sonnet codex-coding gemini-pro
+
+  # Ideation: strong thinking models for creative work
+  #ideate: opus-think ollama-glm ollama-glm gemini-pro ollama-qwen ollama-minimax ollama-gemma kimi-coder gpt codex-think glm-zai qwen-coder minimax qwen
+
+  # Ideation escalation: not currently used
+  #ideate_escalation:
 
   # Available models:
-  # Claude (subscription-based, watch usage limits):
+  #
+  # --- Cheap/open (primary coding tier) ---
+  # Ollama cloud (flat-rate $20/mo subscription):
+  # - ollama-glm: GLM 5.1 via Ollama cloud
+  # - ollama-qwen: Qwen 3.6 via Ollama cloud
+  # - ollama-minimax: MiniMax M2.7 via Ollama cloud
+  # - ollama-gemma: Gemma 4 31B via Ollama cloud
+  #
+  # Low-cost APIs:
+  # - kimi-coder: Kimi for Coding via kimi CLI (subscription)
+  # - glm-zai: GLM 5 via Z.AI agentic mode
+  # - qwen-coder: Qwen 3 Coder via OpenRouter
+  # - minimax: MiniMax M2.7 via OpenRouter
+  # - qwen: Qwen 3.6 Plus via OpenRouter
+  #
+  # --- Big commercial (escalation tier) ---
   # - sonnet: Claude Sonnet via Claude CLI
-  # - sonnet-think: Claude Sonnet with extended thinking (ultrathink prompt)
-  # - opus: Claude Opus via Claude CLI
-  # - opus-think: Claude Opus with extended thinking (ultrathink prompt)
-  # - haiku: Claude Haiku via Claude CLI (cheap fallback)
+  # - codex-coding: GPT-5.4 medium reasoning via Codex CLI
+  # - gemini-pro: Gemini 3 Pro via Gemini CLI
   #
-  # Codex/OpenAI (subscription-based):
-  # - codex-think: GPT-5.4 high reasoning effort (ideation)
-  # - codex-coding: GPT-5.4 medium reasoning effort (coding/run)
-  # - codex-spark: GPT-5.1 Codex Mini (lightweight fallback)
-  # - gpt-5.4: GPT-5.4 no reasoning effort override via Codex CLI
-  # - gpt-5.2: GPT-5.2 via Codex CLI
-  # - gpt-5.3-codex: GPT-5.3 Codex (code-specialized) via Codex CLI
-  # - gpt5: GPT-5 via Codex CLI (legacy alias)
-  # - gpt5high: GPT-5 via Codex CLI (high reasoning)
-  # - o3high: O3 via Codex CLI (high reasoning)
-  #
-  # Gemini (free tier available):
-  # - gemini-pro: Gemini 3 Pro Preview via Gemini CLI
-  # - gemini-5-flash: Gemini 5 Flash via Gemini CLI (cheap fallback)
-  # - gemini-flash: Gemini 2.5 Flash via Gemini CLI (legacy)
-  #
-  # Other free/cheap models:
-  # - glm-5-zai: GLM-5 via Z.AI agentic mode
-  # - kimi-coder: Kimi for Coding via kimi CLI (fast, good for code gen)
-  # - kimi-k2-openrouter: Kimi K2 Thinking via OpenRouter
-  # - codex-oss-local: Local model via Codex + Ollama
-  # - cursor-sonnet: Claude Sonnet via Cursor Agent CLI
-  # - cursor-opus: Claude Opus via Cursor Agent CLI
+  # --- Ideation models ---
+  # - opus-think: Claude Opus with extended thinking
+  # - codex-think: GPT-5.4 high reasoning effort
+  # - gpt: GPT-5.4 via Codex CLI

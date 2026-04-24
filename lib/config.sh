@@ -57,20 +57,22 @@ DEFAULT_MEMORY_LIMIT_MB=12288
 # Workers will exit after processing this many candidates to pick up library updates
 DEFAULT_WORKER_MAX_CANDIDATES=3
 
-# Default LLM CLI configuration - tiered fallback system
-# Primary: Strong models used in normal operation
-# Fallback: Cheap/backup models used only when primary tier exhausted
+# Default LLM CLI configuration - quality-triggered escalation system
+# AIDEV-NOTE: Two-tier design for coding (run):
+#   Primary: Cheap/open models handle normal code generation
+#   Escalation: Big commercial models only activated on syntax/validation failure
+# Ideation keeps its own primary list (thinking models for creative work)
+# No fallback tier — if all models are down, fail fast so monitoring catches it.
 #
-# Run: Subscription-based agentic models for code generation
-# All CLI tools (opencode, claude, gemini, kimi) are agentic and can edit files
-# Ollama cloud models are flat-rate (subscription), so prefer them over per-token OpenRouter
-DEFAULT_LLM_RUN="gemini-pro gemini-pro ollama-glm ollama-glm ollama-qwen ollama-qwen ollama-minimax ollama-minimax ollama-gemma ollama-gemma kimi-coder kimi-coder codex-coding codex-coding glm-zai qwen-coder minimax sonnet"
-DEFAULT_LLM_RUN_FALLBACK="haiku ollama-glm ollama-gemma ollama-minimax ollama-qwen glm-zai gemini-cheap codex-spark qwen"
+# Run: Cheap/open models for code generation (flat-rate or low-cost)
+DEFAULT_LLM_RUN="ollama-glm ollama-glm ollama-qwen ollama-qwen ollama-minimax ollama-minimax ollama-gemma ollama-gemma kimi-coder kimi-coder glm-zai qwen-coder minimax"
+# Run escalation: Big models activated only when cheap models produce bad code
+DEFAULT_LLM_RUN_ESCALATION="sonnet codex-coding gemini-pro"
 #
-# Ideate: Agentic models that can edit files for ideation
-# All CLI tools (opencode, claude, gemini, kimi) are agentic and can edit files
+# Ideate: Strong models for creative ideation
 DEFAULT_LLM_IDEATE="opus-think ollama-glm ollama-glm gemini-pro ollama-qwen ollama-minimax ollama-gemma kimi-coder gpt codex-think glm-zai qwen-coder minimax qwen"
-DEFAULT_LLM_IDEATE_FALLBACK="haiku ollama-glm ollama-gemma ollama-minimax ollama-qwen glm-zai gemini-cheap codex-spark qwen"
+# Ideate escalation: not currently used but available for future use
+DEFAULT_LLM_IDEATE_ESCALATION=""
 
 # Load configuration from a YAML file and update variables
 _load_yaml_config() {
@@ -147,12 +149,16 @@ _load_yaml_config() {
         lock_timeout) LOCK_TIMEOUT="$value" ;;
       esac
     elif [[ $in_llm_cli_section == true ]]; then
-      if [[ $key == "run" || $key == "ideate" || $key == "run_fallback" || $key == "ideate_fallback" ]]; then
+      if [[ $key == "run" || $key == "ideate" || $key == "run_escalation" || $key == "ideate_escalation" || $key == "run_fallback" || $key == "ideate_fallback" ]]; then
         case $key in
           run) LLM_RUN="$value" ;;
-          run_fallback) LLM_RUN_FALLBACK="$value" ;;
+          run_escalation) LLM_RUN_ESCALATION="$value" ;;
+          # Legacy fallback keys map to escalation for backward compatibility
+          run_fallback) LLM_RUN_ESCALATION="$value" ;;
           ideate) LLM_IDEATE="$value" ;;
-          ideate_fallback) LLM_IDEATE_FALLBACK="$value" ;;
+          ideate_escalation) LLM_IDEATE_ESCALATION="$value" ;;
+          # Legacy fallback keys map to escalation for backward compatibility
+          ideate_fallback) LLM_IDEATE_ESCALATION="$value" ;;
         esac
       else
         value=$(echo "$value" | sed "s/^'//;s/'$//")
@@ -223,9 +229,9 @@ load_config() {
   WORKER_MAX_CANDIDATES="$DEFAULT_WORKER_MAX_CANDIDATES"
   
   LLM_RUN="$DEFAULT_LLM_RUN"
-  LLM_RUN_FALLBACK="$DEFAULT_LLM_RUN_FALLBACK"
+  LLM_RUN_ESCALATION="$DEFAULT_LLM_RUN_ESCALATION"
   LLM_IDEATE="$DEFAULT_LLM_IDEATE"
-  LLM_IDEATE_FALLBACK="$DEFAULT_LLM_IDEATE_FALLBACK"
+  LLM_IDEATE_ESCALATION="$DEFAULT_LLM_IDEATE_ESCALATION"
 
   # Determine local config file path relative to EVOLUTION_DIR
   local local_config_file="$EVOLUTION_DIR/config.yaml"
@@ -318,7 +324,7 @@ show_config() {
   echo "  Memory limit: ${MEMORY_LIMIT_MB}MB"
   echo "  Worker max candidates: $WORKER_MAX_CANDIDATES"
   echo "  LLM for run: $LLM_RUN"
-  echo "  LLM for run (fallback): $LLM_RUN_FALLBACK"
+  echo "  LLM for run (escalation): $LLM_RUN_ESCALATION"
   echo "  LLM for ideate: $LLM_IDEATE"
-  echo "  LLM for ideate (fallback): $LLM_IDEATE_FALLBACK"
+  echo "  LLM for ideate (escalation): $LLM_IDEATE_ESCALATION"
 }
