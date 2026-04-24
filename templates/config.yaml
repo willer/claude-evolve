@@ -130,5 +130,5 @@ llm_cli:
   #
   # --- Ideation models ---
   # - opus-think: Claude Opus with extended thinking
-  # - codex-think: GPT-5.4 high reasoning effort
-  # - gpt: GPT-5.4 via Codex CLI
+  # - codex-think: GPT-5.5 high reasoning effort
+  # - gpt: GPT-5.5 via Codex CLI
