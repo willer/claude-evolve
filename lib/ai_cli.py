@@ -202,22 +202,26 @@ def get_models_for_command(command: str) -> List[str]:
     return model_list.split()
 
 
-def get_fallback_models_for_command(command: str) -> List[str]:
+def get_escalation_models_for_command(command: str) -> List[str]:
     """
-    Get the list of fallback models for a command.
+    Get the list of escalation models for a command.
+
+    AIDEV-NOTE: Escalation models are big/commercial models (sonnet, codex, gemini)
+    used only when cheap primary models produce code with syntax or validation errors.
+    They are NOT for API-down situations — if primary is down, fail fast.
 
     Args:
         command: Either "run" or "ideate"
 
     Returns:
-        List of fallback model names
+        List of escalation model names
     """
     bash_script = f'''
         source "{SCRIPT_DIR}/config.sh"
         load_config
         case "$1" in
-            run) echo "$LLM_RUN_FALLBACK" ;;
-            ideate) echo "$LLM_IDEATE_FALLBACK" ;;
+            run) echo "$LLM_RUN_ESCALATION" ;;
+            ideate) echo "$LLM_IDEATE_ESCALATION" ;;
         esac
     '''
 
@@ -423,34 +427,30 @@ def call_ai_with_backoff(
     env_vars: Optional[dict] = None,
     max_rounds: int = 10,
     initial_wait: int = 60,
-    max_wait: int = 600,
-    use_fallback: bool = True
+    max_wait: int = 600
 ) -> Tuple[str, str]:
     """
-    Call AI with tiered fallback and round-based retries with exponential backoff.
+    Call AI with round-based retries and exponential backoff.
 
-    AIDEV-NOTE: Tiered fallback system:
-    1. First tries all primary models with backoff
-    2. If primary exhausted and use_fallback=True, tries fallback models
-    3. Fallback models are cheaper/simpler backups (haiku, flash, etc.)
+    AIDEV-NOTE: No fallback tier — if all primary models are down, fail fast
+    so monitoring catches it. Escalation to big models is handled separately
+    by evolve_worker when code quality issues are detected.
 
     Args:
         prompt: The prompt to send
         command: "run" or "ideate" - determines model pool
         working_dir: Directory for file operations
         env_vars: Additional environment variables
-        max_rounds: Maximum number of full rounds per tier
+        max_rounds: Maximum number of full rounds
         initial_wait: Initial wait time in seconds after first failed round
         max_wait: Maximum wait time in seconds between rounds
-        use_fallback: Whether to try fallback tier if primary fails
 
     Returns:
         Tuple of (output, model_name)
 
     Raises:
-        AIError: If all tiers exhausted without success
+        AIError: If all models exhausted without success
     """
-    # Try primary tier first
     primary_models = get_models_for_command(command)
     if not primary_models:
         raise AIError(f"No primary models configured for command: {command}")
@@ -463,28 +463,58 @@ def call_ai_with_backoff(
     if output is not None:
         return output, model_name
 
-    # Primary exhausted - try fallback if enabled
-    if use_fallback:
-        fallback_models = get_fallback_models_for_command(command)
-        if fallback_models:
-            _log(f"Primary tier exhausted, trying {len(fallback_models)} fallback models...")
-
-            output, model_name, fallback_errors = _try_models_with_backoff(
-                prompt, fallback_models, "Fallback",
-                working_dir, env_vars, max_rounds, initial_wait, max_wait
-            )
-
-            if output is not None:
-                return output, model_name
-
-            # Both tiers exhausted
-            all_errors = {**primary_errors, **fallback_errors}
-            error_summary = "; ".join(f"{m}: {e[:50]}" for m, e in list(all_errors.items())[:3])
-            raise AIError(f"All tiers exhausted ({max_rounds} rounds each). Last errors: {error_summary}")
-
-    # Primary exhausted, no fallback
+    # All models exhausted — fail fast, let monitoring catch it
     error_summary = "; ".join(f"{m}: {e[:50]}" for m, e in list(primary_errors.items())[:3])
-    raise AIError(f"Primary tier exhausted ({max_rounds} rounds). Last errors: {error_summary}")
+    raise AIError(f"All primary models exhausted ({max_rounds} rounds). Last errors: {error_summary}")
+
+
+def call_ai_escalation(
+    prompt: str,
+    command: str = "run",
+    working_dir: Optional[str] = None,
+    env_vars: Optional[dict] = None
+) -> Tuple[str, str]:
+    """
+    Try each escalation model once (no backoff). Used when cheap models produced
+    bad code (syntax/validation errors) and we need a smarter model to fix it.
+
+    AIDEV-NOTE: Quality-triggered escalation. Each model gets one shot.
+    If all escalation models fail (rate limits etc), raise AIError — the candidate
+    will be marked failed-ai-retry so it can be retried when limits reset.
+
+    Args:
+        prompt: The prompt to send (should include error context)
+        command: "run" or "ideate" - determines escalation model pool
+        working_dir: Directory for file operations
+        env_vars: Additional environment variables
+
+    Returns:
+        Tuple of (output, model_name)
+
+    Raises:
+        AIError: If no escalation models available or all failed
+    """
+    escalation_models = get_escalation_models_for_command(command)
+    if not escalation_models:
+        raise AIError(f"No escalation models configured for command: {command}")
+
+    # Shuffle so we don't always burn the same model first
+    models = escalation_models.copy()
+    random.shuffle(models)
+
+    last_errors = {}
+    for model in models:
+        try:
+            _log(f"Escalation: trying {model}...")
+            output, model_name = call_ai_model(prompt, model, working_dir, env_vars)
+            _log(f"Escalation succeeded with {model}")
+            return output, model_name
+        except AIError as e:
+            _log(f"Escalation {model} failed: {str(e)[:60]}...")
+            last_errors[model] = str(e)
+
+    error_summary = "; ".join(f"{m}: {e[:50]}" for m, e in last_errors.items())
+    raise AIError(f"All escalation models failed. Errors: {error_summary}")
 
 
 def call_ai_for_file_edit(

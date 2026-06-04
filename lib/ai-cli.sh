@@ -53,7 +53,7 @@ EOF
 call_ai_model_configured() {
   local model_name="$1"
   local prompt="$2"
-  local codex_gpt_model="${CODEX_GPT_MODEL:-${CODEX_GPT5_MODEL:-gpt-5.2}}"
+  local codex_gpt_model="${CODEX_GPT_MODEL:-${CODEX_GPT5_MODEL:-gpt-5.5}}"
   
   # Record start time
   local start_time=$(date +%s)
@@ -123,7 +123,7 @@ $prompt"
     codex-think)
       local ai_output
       # High reasoning - for ideation tasks requiring deep thinking
-      ai_output=$(codex exec -m gpt-5.4 -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      ai_output=$(codex exec -m gpt-5.5 -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     codex-coding)
@@ -135,7 +135,7 @@ $prompt"
     codex-spark)
       local ai_output
       # Cheap/fast lightweight fallback
-      ai_output=$(codex exec -m gpt-5.1-codex-mini --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      ai_output=$(codex exec -m gpt-5.4-mini --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     # --- Gemini (subscription) ---
@@ -371,19 +371,21 @@ get_models_for_command() {
   echo "$model_list"
 }
 
-# Get fallback models for a specific command (run or ideate)
-# Usage: get_fallback_models_for_command <command>
-# Returns: Space-separated list of fallback model names
-get_fallback_models_for_command() {
+# Get escalation models for a specific command (run or ideate)
+# AIDEV-NOTE: Escalation models are big/commercial models used only when
+# cheap primary models produce code with syntax or validation errors.
+# Usage: get_escalation_models_for_command <command>
+# Returns: Space-separated list of escalation model names
+get_escalation_models_for_command() {
   local command="$1"
   local model_list=""
 
   case "$command" in
     run)
-      model_list="$LLM_RUN_FALLBACK"
+      model_list="$LLM_RUN_ESCALATION"
       ;;
     ideate)
-      model_list="$LLM_IDEATE_FALLBACK"
+      model_list="$LLM_IDEATE_ESCALATION"
       ;;
     *)
       echo "[ERROR] Unknown command: $command" >&2
