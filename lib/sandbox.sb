@@ -23,9 +23,25 @@
 (allow process-exec)
 (allow process-fork)
 
-;; BLOCK all network access - this is the main security feature
-;; Prevents evolved code from exfiltrating data or downloading malware
-(deny network*)
+;; BLOCK remote network access - prevents evolved code from exfiltrating data
+;; or downloading malware. We must still allow LOCAL IPC (loopback + unix
+;; sockets) so Python multiprocessing Managers/Pools can bind; otherwise any
+;; strategy using process-shared state dies with "Operation not permitted" on
+;; socket bind. (deny default) keeps all real remote network blocked since no
+;; remote host other than localhost is allowed below.
+(allow network-bind (local ip "localhost:*"))
+(allow network-inbound (local ip "localhost:*"))
+(allow network-outbound (remote ip "localhost:*"))
+(allow network-bind (local unix-socket))
+(allow network-outbound (remote unix-socket))
+
+;; Allow IPC semaphores/shared-memory for Python multiprocessing & joblib.
+;; Without this, multiprocessing.Lock()/Manager() and joblib's startup probe
+;; fail with "[Errno 1] Operation not permitted" on sem_open, so joblib silently
+;; falls back to SERIAL mode -- throttling every evaluation to a single core.
+;; This is the difference between an eval finishing in minutes vs. timing out.
+(allow ipc-posix*)
+(allow ipc-sysv*)
 
 ;; Allow reading any file (Python needs many system files to work)
 ;; This is a tradeoff: more permissive reads, but still blocks writes and network

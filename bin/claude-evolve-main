@@ -27,6 +27,15 @@ get_version() {
 
 # Function to check for updates and auto-update if needed
 check_for_updates() {
+  # Skip self-update for local dev checkouts (npm link / git clone): an
+  # `npm update -g` would clobber the linked working tree and revert local
+  # changes (e.g. sandbox.sb fixes). Real npm installs have no .git, so they
+  # still auto-update normally.
+  local _self_root
+  _self_root="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")/.." && pwd)"
+  if [[ -d "$_self_root/.git" ]]; then
+    return 0
+  fi
   # Only check if we can reach npm registry quickly
   if timeout 2 npm view claude-evolve version >/dev/null 2>&1; then
     local current_version
