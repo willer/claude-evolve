@@ -1,0 +1,13 @@
+{
+  "name": "claude-evolve",
+  "owner": {
+    "name": "Steve Willer"
+  },
+  "plugins": [
+    {
+      "name": "claude-evolve",
+      "source": "./plugin",
+      "description": "Evolutionary algorithm search inside Claude Code. Ideate new algorithm variants (Opus), write their code (Sonnet), and score them against your evaluator (Haiku) — driven generation-by-generation off a single evolution.csv. The omnibus /evolve skill runs the whole loop as a self-respawning pool of background worker subagents."
+    }
+  ]
+}

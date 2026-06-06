@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# claude-evolve-batch: run `claude-evolve run` across many evolution dirs with a
+# global concurrency cap (avoids the meltdown of launching one process per dir).
+#
+# Usage:
+#   claude-evolve-batch [-j N] DIR [DIR ...]
+#   echo -e "dirA\ndirB" | claude-evolve-batch [-j N]
+#
+#   -j N   max dirs to run concurrently (default 4)
+#
+# Each dir runs `claude-evolve --working-dir=DIR run`; output goes to
+# logs/batch/<dir>.log under the current directory. Honors each dir's own
+# config.yaml (max_workers, auto_ideate, etc.). Inherits the caller's
+# environment, so activate your venv first.
+set -euo pipefail
+
+JOBS=4
+DIRS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -j) JOBS="$2"; shift 2;;
+    -j*) JOBS="${1#-j}"; shift;;
+    -h|--help) sed -n '2,14p' "$0"; exit 0;;
+    *) DIRS+=("$1"); shift;;
+  esac
+done
+# read dirs from stdin if none given as args
+if [[ ${#DIRS[@]} -eq 0 ]] && [[ ! -t 0 ]]; then
+  while IFS= read -r line; do [[ -n "$line" ]] && DIRS+=("$line"); done
+fi
+if [[ ${#DIRS[@]} -eq 0 ]]; then echo "no dirs given" >&2; exit 2; fi
+
+LOGDIR="$(pwd)/logs/batch"
+mkdir -p "$LOGDIR"
+echo "[batch] ${#DIRS[@]} dirs, -j${JOBS} concurrency"
+CE="$(command -v claude-evolve)"
+
+# NB: `claude-evolve run` resolves config from CWD (evolution/config.yaml or
+# config.yaml); its --working-dir flag is ignored by the run subcommand, so we
+# cd into each dir instead. Log path is absolute since we change directory.
+run_one() {
+  local d="$1" ce="$2" logdir="$3"
+  local log="$logdir/$(basename "$d").log"
+  echo "[batch] >>> start $d"
+  if ( cd "$d" && "$ce" run ) > "$log" 2>&1; then
+    echo "[batch] <<< done  $d"
+  else
+    echo "[batch] !!! FAIL $d (see $log)"
+  fi
+}
+export -f run_one
+
+printf '%s\n' "${DIRS[@]}" | xargs -P "$JOBS" -I{} bash -c 'run_one "$@"' _ {} "$CE" "$LOGDIR"
+echo "[batch] all done"
