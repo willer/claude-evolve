@@ -1,0 +1,52 @@
+{
+  "name": "evolve-greenhouse",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Evolve Greenhouse \u2014 Electron dashboard for claude-evolve workspaces (autostatus, come full circle)",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "start": "npm run build && electron .",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit",
+    "rebuild-native": "electron-rebuild -f -w node-pty",
+    "package": "npm run build && electron-builder --mac dir",
+    "dist": "npm run build && electron-builder --mac"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.1",
+    "electron": "^39.0.0",
+    "electron-builder": "^26.15.2",
+    "esbuild": "^0.27.0",
+    "typescript": "^5.9.0",
+    "vitest": "^4.0.0"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "js-yaml": "^4.1.0",
+    "node-pty": "^1.1.0"
+  },
+  "productName": "Evolve Greenhouse",
+  "build": {
+    "appId": "com.willer.evolve-greenhouse",
+    "productName": "Evolve Greenhouse",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "assets/icon.png",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "**/node_modules/node-pty/**"
+    ],
+    "mac": {
+      "icon": "assets/icon.icns",
+      "category": "public.app-category.developer-tools",
+      "identity": null
+    },
+    "publish": null
+  }
+}

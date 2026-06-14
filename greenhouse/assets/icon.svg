@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- App icon: dark dashboard panel + sprout + rising score sparkline.
+       Rendered to icon.png/icon.icns by scripts in the repo README of assets/. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1c2330"/>
+      <stop offset="1" stop-color="#0d1117"/>
+    </linearGradient>
+    <linearGradient id="leaf" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#2ea043"/>
+      <stop offset="1" stop-color="#56d364"/>
+    </linearGradient>
+  </defs>
+
+  <!-- macOS Big Sur canvas: 824×824 rounded square centered with margin -->
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)"/>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="none" stroke="#2d333b" stroke-width="6"/>
+
+  <!-- rising score sparkline -->
+  <polyline points="220,700 340,690 430,640 540,660 660,560 800,460"
+            fill="none" stroke="#58a6ff" stroke-width="26" stroke-linecap="round" stroke-linejoin="round" opacity="0.85"/>
+  <circle cx="800" cy="460" r="30" fill="#58a6ff"/>
+
+  <!-- sprout: stem + two leaves growing out of the chart -->
+  <path d="M 470 780 C 470 640 478 560 512 470" fill="none" stroke="#3fb950" stroke-width="34" stroke-linecap="round"/>
+  <path d="M 512 470 C 430 470 350 430 330 330 C 440 320 510 370 520 460 Z" fill="url(#leaf)"/>
+  <path d="M 516 500 C 600 500 680 450 700 340 C 580 330 510 390 504 490 Z" fill="url(#leaf)"/>
+
+  <!-- soil line -->
+  <path d="M 380 790 Q 470 760 560 790" fill="none" stroke="#8b949e" stroke-width="22" stroke-linecap="round" opacity="0.7"/>
+</svg>

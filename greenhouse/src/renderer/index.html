@@ -1,0 +1,373 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'" />
+  <title>Evolve Greenhouse</title>
+  <link rel="stylesheet" href="xterm.css" />
+  <style>
+    /* Dark palette is the base; the light palette rides prefers-color-scheme,
+       which Electron's nativeTheme drives from the theme pref (system/light/dark). */
+    :root {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --panel2: #1c2330;
+      --border: #2d333b;
+      --row-border: #1c2128;
+      --text: #e6edf3;
+      --dim: #8b949e;
+      --green: #3fb950;
+      --yellow: #d29922;
+      --red: #f85149;
+      --magenta: #d2a8ff;
+      --cyan: #58a6ff;
+      --green-bg: #12361c;
+      --yellow-bg: #3a2d10;
+      --red-bg: #48161a;
+      --magenta-bg: #2d1b47;
+      --stopped-bg: #21262d;
+      --mono: "SF Mono", ui-monospace, Menlo, monospace;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #ffffff;
+        --panel: #f6f8fa;
+        --panel2: #eaeef2;
+        --border: #d0d7de;
+        --row-border: #eaeef2;
+        --text: #1f2328;
+        --dim: #656d76;
+        --green: #1a7f37;
+        --yellow: #9a6700;
+        --red: #cf222e;
+        --magenta: #8250df;
+        --cyan: #0969da;
+        --green-bg: #dafbe1;
+        --yellow-bg: #fff8c5;
+        --red-bg: #ffebe9;
+        --magenta-bg: #fbefff;
+        --stopped-bg: #eaeef2;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 13px/1.45 -apple-system, "Segoe UI", sans-serif;
+      user-select: none;
+      padding-bottom: 34px; /* room for the fixed key-hint bar */
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 10px 16px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+    header .totals { color: var(--dim); font-size: 12px; }
+    header .totals b { color: var(--text); font-weight: 600; }
+    header .totals .t-red { color: var(--red); }
+    header .totals .t-yellow { color: var(--yellow); }
+    header .totals .t-magenta { color: var(--magenta); }
+    header .spacer { flex: 1; }
+    select, button, input {
+      background: var(--panel2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    button:hover { border-color: var(--cyan); }
+    button.primary { background: #1f6feb; border-color: #1f6feb; color: #ffffff; }
+    button.danger { background: var(--red-bg); border-color: var(--red); color: var(--red); }
+    button.yes { background: var(--green-bg); border-color: var(--green); color: var(--green); }
+    button.no { background: var(--red-bg); border-color: var(--red); color: var(--red); }
+    #tool-btns button.on { border-color: var(--green); color: var(--green); }
+    input { cursor: text; width: 420px; }
+
+    /* health chip — the one-glance verdict (shared by list, grid, detail) */
+    .hc {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+      padding: 1px 7px;
+      border-radius: 10px;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .hc.good { background: var(--green-bg); color: var(--green); }
+    .hc.plateau, .hc.idle { background: var(--yellow-bg); color: var(--yellow); }
+    .hc.failing, .hc.error { background: var(--red-bg); color: var(--red); }
+
+    .badge {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+      padding: 2px 7px;
+      border-radius: 10px;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .badge.working { background: var(--green-bg); color: var(--green); }
+    .badge.waiting { background: var(--yellow-bg); color: var(--yellow); }
+    .badge.asking { background: var(--magenta-bg); color: var(--magenta); }
+    .badge.stopped { background: var(--stopped-bg); color: var(--dim); }
+
+    .pos { color: var(--green); }
+    .neg { color: var(--red); }
+    .warn { color: var(--red); }
+    .stale { color: var(--red); }
+
+    /* ── list view ─────────────────────────────────────────────────────── */
+    #list { padding: 6px 16px 14px; }
+    #list table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12px; }
+    #list th {
+      color: var(--dim);
+      font-weight: 600;
+      text-align: left;
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 42px; /* under the sticky header */
+      background: var(--bg);
+      cursor: pointer;
+      white-space: nowrap;
+      z-index: 5;
+    }
+    #list th:hover { color: var(--text); }
+    #list td { padding: 4px 8px; white-space: nowrap; border-bottom: 1px solid var(--row-border); }
+    #list td.num, #list th.num { text-align: right; }
+    #list tr.row { cursor: pointer; }
+    #list tr.row:hover td { background: var(--panel); }
+    #list tr.row.selected td { background: var(--panel2); }
+    #list tr.row.selected td:first-child { box-shadow: inset 3px 0 0 var(--cyan); }
+    #list .name { font-weight: 600; font-family: -apple-system, "Segoe UI", sans-serif; }
+    #list .winner { color: var(--cyan); }
+    #list .score { font-weight: 700; }
+    #list td .actions { display: flex; gap: 5px; justify-content: flex-end; }
+    #list td .actions button { font-size: 11px; padding: 2px 8px; }
+    #list .star { color: var(--dim); cursor: pointer; }
+    #list .star.on { color: var(--yellow); }
+
+    /* ── grid view ─────────────────────────────────────────────────────── */
+    #grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+      gap: 12px;
+      padding: 14px 16px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px 10px;
+      cursor: pointer;
+      transition: border-color 0.15s;
+      position: relative;
+    }
+    .card:hover { border-color: var(--cyan); }
+    .card.selected { border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan); }
+    .card.asking { border-color: var(--magenta); box-shadow: 0 0 0 1px var(--magenta); }
+    .card .title-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .card .name { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .card .star { color: var(--dim); cursor: pointer; font-size: 14px; }
+    .card .star.on { color: var(--yellow); }
+    .card .leader { font-family: var(--mono); font-size: 12px; color: var(--cyan); margin-bottom: 2px; }
+    .card .leader .score { color: var(--text); font-weight: 700; }
+    .card .desc {
+      color: var(--dim);
+      font-size: 11px;
+      margin-bottom: 8px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .metrics { display: flex; gap: 14px; margin-bottom: 8px; flex-wrap: wrap; }
+    .metric { font-family: var(--mono); font-size: 11px; }
+    .metric .k { color: var(--dim); display: block; font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .metric .v { font-size: 12px; font-weight: 600; }
+    .metric .v.pos { color: var(--green); }
+    .metric .v.neg { color: var(--red); }
+    .spark { display: block; margin-bottom: 6px; }
+    /* per-period NAV small multiples — fixed-px tiles (JS-sized to the column) wrap to fill */
+    .nav-grid { display: flex; flex-wrap: wrap; }
+    .nav-fig { margin: 0; }
+    .nav-fig figcaption { font-family: var(--mono); font-size: 10px; color: var(--dim); margin-bottom: 2px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .card .foot { display: flex; align-items: center; gap: 10px; color: var(--dim); font-size: 11px; font-family: var(--mono); }
+    .card .actions { display: flex; gap: 14px; margin-top: 8px; }
+    .card .actions button { font-size: 11px; padding: 3px 9px; }
+    .card .act-grp { display: flex; align-items: center; gap: 6px; }
+    .card .act-lbl { color: var(--dim); font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+    /* ── peek popover (Space) ─────────────────────────────────────────── */
+    #peek {
+      display: none;
+      position: fixed;
+      top: 56px;
+      right: 20px;
+      width: 440px;
+      max-height: calc(100vh - 110px);
+      overflow: auto;
+      background: var(--panel);
+      border: 1px solid var(--cyan);
+      border-radius: 10px;
+      padding: 14px 16px;
+      z-index: 30;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
+    }
+    #peek h3 { margin: 0 0 2px; font-size: 14px; }
+    #peek .sub { color: var(--cyan); font-family: var(--mono); font-size: 12px; margin-bottom: 10px; }
+    #peek .sub .score { color: var(--text); font-weight: 700; }
+    #peek h4 { margin: 12px 0 6px; font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.6px; }
+    .metric-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(95px, 1fr)); gap: 8px; user-select: text; }
+
+    /* per-year return bars */
+    .ybar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-family: var(--mono); font-size: 12px; }
+    .ybar-row .yb-label { width: 38px; color: var(--dim); }
+    .ybar-row .yb-track { flex: 1; height: 12px; background: var(--panel2); border-radius: 3px; overflow: hidden; }
+    .ybar-row .yb-fill { height: 100%; border-radius: 3px; }
+    .ybar-row .yb-fill.pos { background: var(--green); }
+    .ybar-row .yb-fill.neg { background: var(--red); }
+    .ybar-row .yb-val { width: 64px; text-align: right; font-weight: 600; }
+
+    .legend { display: flex; gap: 14px; font-family: var(--mono); font-size: 11px; color: var(--dim); margin-top: 4px; }
+    .legend .sw { display: inline-block; width: 10px; height: 3px; vertical-align: middle; margin-right: 5px; border-radius: 2px; }
+
+    /* ── detail / tool / backtests views ─────────────────────────────── */
+    #detail, #tool, #bt { display: none; padding: 14px 16px; }
+    .bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+    .bar h2 { margin: 0; font-size: 16px; }
+    #detail .cols { display: flex; gap: 14px; align-items: flex-start; }
+    #detail .left { flex: 1.2; min-width: 0; }
+    #detail .right { flex: 1; min-width: 0; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin-bottom: 12px;
+    }
+    .panel h3 { margin: 0 0 8px; font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.6px; }
+    .panel table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 11px; }
+    .panel th, .panel td { text-align: left; padding: 3px 8px; white-space: nowrap; }
+    .panel th { color: var(--dim); font-weight: 600; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--panel); }
+    .panel td.num, .panel th.num { text-align: right; }
+    .panel tr.leader td { color: var(--green); font-weight: 600; }
+    .gen-table-wrap { max-height: 320px; overflow: auto; user-select: text; }
+
+    /* backtests view — algo panels keep their evolved-champion names verbatim */
+    #bt .caption { color: var(--dim); font-size: 11px; margin: -6px 0 12px; max-width: 900px; }
+    #bt .panel h3 { text-transform: none; letter-spacing: 0; font-size: 13px; color: var(--text); }
+    #bt .panel h3 .rank { color: var(--dim); font-weight: 600; }
+    #bt .panel h3 .score { font-weight: 700; }
+    #bt .panel h3 .qual { color: var(--dim); font-weight: 400; }
+    #bt .panel h3 a { color: var(--cyan); cursor: pointer; text-decoration: none; }
+    #bt .panel h3 a:hover { text-decoration: underline; }
+    #bt .panel table { user-select: text; }
+    .risk-bad { color: var(--red); font-weight: 700; }
+    /* period rows toggle their NAV chart (backtests view + detail bt panel) */
+    tr.bt-row { cursor: pointer; }
+    tr.bt-row:hover td { background: var(--panel2); }
+    tr.bt-row .caret { color: var(--dim); }
+    tr.bt-chart td { padding: 6px 8px 10px; }
+    #bt .panel.appendix h3 { color: var(--red); }
+    #bt .panel.appendix td.reasons { white-space: normal; color: var(--dim); }
+    /* live terminal wrap — multiple may exist (detail stacks evolution + adhoc) */
+    .term-wrap { background: #000; border-radius: 6px; padding: 4px; }
+    /* viewport-relative so more of the conversation shows on bigger windows;
+       min-height keeps them usable when the window is short */
+    .term-wrap.dual { height: 46vh; min-height: 300px; }  /* stacked detail panes */
+    .term-wrap.solo { height: 82vh; min-height: 480px; }  /* single tool-page terminal */
+    .term-ctl, #tool-term-hint { color: var(--dim); font-size: 11px; margin-top: 6px; display: flex; align-items: center; gap: 8px; }
+    .term-ctl .badge { flex: none; }
+    .term-launch { padding: 6px 14px; font-size: 13px; margin: 4px 0; }
+    .empty { color: var(--dim); padding: 40px; text-align: center; }
+
+    /* key hint bar */
+    #hints {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 5px 16px;
+      background: var(--panel);
+      border-top: 1px solid var(--border);
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: 11px;
+      z-index: 20;
+      white-space: nowrap;
+      overflow: hidden;
+    }
+    #hints b { color: var(--text); font-weight: 600; }
+
+    /* prefs dialog */
+    dialog {
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 18px;
+    }
+    dialog::backdrop { background: rgba(0,0,0,0.55); }
+    dialog label { display: block; margin-bottom: 6px; color: var(--dim); font-size: 12px; }
+    dialog .row { display: flex; gap: 8px; margin-top: 12px; justify-content: flex-end; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🌱 Evolve Greenhouse</h1>
+    <span class="totals" id="totals"></span>
+    <span class="spacer"></span>
+    <span id="tool-btns" style="display: contents"></span>
+    <button id="bt-btn" title="Backtest results dashboard (b)">📊 Backtests</button>
+    <select id="sort">
+      <option value="score">Sort: score</option>
+      <option value="bt">Sort: backtest score</option>
+      <option value="name">Sort: name</option>
+      <option value="health">Sort: health</option>
+      <option value="updated">Sort: updated</option>
+      <option value="state">Sort: activity</option>
+      <option value="gen">Sort: latest gen</option>
+      <option value="gens">Sort: gens since top</option>
+      <option value="rate">Sort: success rate</option>
+    </select>
+    <select id="theme" title="Theme">
+      <option value="system">◐ System</option>
+      <option value="dark">● Dark</option>
+      <option value="light">○ Light</option>
+    </select>
+    <button id="view-toggle" title="Toggle list/grid (v)">⊞ Grid</button>
+    <button id="prefs-btn" title="Configure workspace roots">⚙ Roots</button>
+    <button id="refresh">↻ Refresh</button>
+  </header>
+
+  <div id="list"></div>
+  <div id="grid"></div>
+  <div id="detail"></div>
+  <div id="tool"></div>
+  <div id="bt"></div>
+  <div id="peek"></div>
+
+  <div id="hints"></div>
+
+  <dialog id="prefs-dialog">
+    <label>Workspace roots (one per line) — each is scanned for subdirectories containing evolution.csv</label>
+    <textarea id="roots-input" rows="4" style="width: 480px; background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; font-family: var(--mono); font-size: 12px; padding: 8px;"></textarea>
+    <div class="row">
+      <button id="prefs-cancel">Cancel</button>
+      <button id="prefs-save" class="primary">Save</button>
+    </div>
+  </dialog>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
