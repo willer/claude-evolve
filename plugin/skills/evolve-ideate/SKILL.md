@@ -1,12 +1,12 @@
 ---
 name: evolve-ideate
-description: Run one generation of ideation for a claude-evolve workspace. Reads the top performers, BRIEF, and accumulated notes, then launches parallel Opus subagents — one per ideation strategy (novel exploration, hill climbing, structural mutation, crossover) — to propose new algorithm variants, and appends them as pending rows in evolution.csv. Use when the user says "ideate", "generate new ideas", "make the next generation", or when the omnibus evolve loop drains its pending queue. Run only ONE ideation at a time per workspace.
+description: Run one generation of ideation for a claude-evolve workspace. Reads the top performers, BRIEF, and accumulated notes, then launches parallel Opus subagents at high effort — one per ideation strategy (novel exploration, hill climbing, structural mutation, crossover) — to propose new algorithm variants, and appends them as pending rows in evolution.csv. Use when the user says "ideate", "generate new ideas", "make the next generation", or when the omnibus evolve loop drains its pending queue. Run only ONE ideation at a time per workspace.
 argument-hint: "[--working-dir DIR] [count]"
 ---
 
 # evolve-ideate
 
-Generate the next batch of candidate ideas for an evolution workspace. This is the **Opus-tier** creative step. It fans out parallel subagents (one per strategy), each proposing variants grounded in the current best performers and the BRIEF, then writes them to `evolution.csv` as `pending` rows for the coding/scoring loop to pick up.
+Generate the next batch of candidate ideas for an evolution workspace. This is the **Opus-tier** creative step (the run's smartest model, at high effort). It fans out parallel subagents (one per strategy), each proposing variants grounded in the current best performers and the BRIEF, then writes them to `evolution.csv` as `pending` rows for the coding/scoring loop to pick up.
 
 > **One at a time.** Two concurrent ideation runs would race on candidate IDs and generation numbering. This skill takes a lock and refuses to start if another ideation is in progress for the same workspace.
 
@@ -52,7 +52,7 @@ This returns the exact IDs to use (e.g. `["gen03-001", ...]`), already skipping 
 
 ## Step 3 — Fan out one Opus subagent per active strategy
 
-Launch the strategies **in parallel** — one `Agent` call per strategy, all in a single message, each with `model: "opus"` and `subagent_type: "general-purpose"`. Give each subagent: its assigned IDs, the relevant parents, the BRIEF excerpt, the accumulated notes, and the list of existing descriptions (so it avoids duplicates). Each must return **only** a JSON array of `{"id","basedOnId","description"}` — one object per assigned ID, using the exact IDs you gave it.
+Launch the strategies **in parallel** — one `Agent` call per strategy, all in a single message, each with `subagent_type: "claude-evolve:ideator"` (the plugin's ideator agent — Opus at high effort; do not pass a `model` override). Give each subagent: its assigned IDs, the relevant parents, the BRIEF excerpt, the accumulated notes, and the list of existing descriptions (so it avoids duplicates). Each must return **only** a JSON array of `{"id","basedOnId","description"}` — one object per assigned ID, using the exact IDs you gave it.
 
 Per-strategy instructions to put in each prompt:
 

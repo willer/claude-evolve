@@ -1,7 +1,7 @@
 {
   "name": "claude-evolve",
   "version": "0.1.0",
-  "description": "Evolutionary algorithm search inside Claude Code. Skills: evolve (omnibus run loop), evolve-ideate (Opus ideation), evolve-code (Sonnet code generation), evolve-score (Haiku evaluation). Reuses claude-evolve's CSV/sandbox engine; replaces external-CLI AI calls with Anthropic subagents.",
+  "description": "Evolutionary algorithm search inside Claude Code. Skills: evolve (omnibus run loop), evolve-ideate (Opus high ideation), evolve-code (codex-first coding, Sonnet judge/fallback), evolve-score (Haiku evaluation). Self-contained: bundles the CSV/sandbox engine (stdlib-only, no npm/pip) and runs the AI steps as Anthropic subagents.",
   "author": {
     "name": "Steve Willer"
   }

@@ -1,6 +1,6 @@
 ---
 name: evolve-code
-description: Write the code for one evolution candidate. Resolves the candidate's parent algorithm, copies it to evolution_<id>.py, then edits that file to implement the candidate's description from evolution.csv. Use when the user says "code gen02-003", "write the algorithm for this candidate", "implement idea <id>", or when a parent skill dispatches coding. This is the Sonnet-tier step of the loop: real algorithmic edits, following the idea's description exactly.
+description: Write the code for one evolution candidate. Resolves the candidate's parent algorithm, copies it to evolution_<id>.py, then implements the candidate's description from evolution.csv — codex (GPT-5.5) first, with you (Sonnet) judging the result and coding it yourself if codex falls short. Use when the user says "code gen02-003", "write the algorithm for this candidate", "implement idea <id>", or when a parent skill dispatches coding.
 argument-hint: "<candidate-id> [--working-dir DIR]"
 ---
 
@@ -8,7 +8,7 @@ argument-hint: "<candidate-id> [--working-dir DIR]"
 
 Implement one candidate's idea as working code. The candidate already exists in `evolution.csv` with a `description` (the idea) and a `basedOnId` (its parent). Your job: turn the description into a real, substantial code change on a copy of the parent algorithm.
 
-This is the **Sonnet-tier** step — it needs genuine coding judgment. Keep it isolated in a subagent when driven by the omnibus, so the file reads and edits don't flood the main conversation.
+Coding is **codex-first**: codex (GPT-5.5) takes the first pass, and you (Sonnet) judge whether it did the job — coding the candidate yourself when it didn't. It needs genuine coding judgment either way. (The omnibus `/evolve` loop runs this same protocol via the plugin's `claude-evolve:coder` agent, which adds claim/score looping; this skill is the standalone one-candidate path.)
 
 ## Resolve the plugin root
 
@@ -39,6 +39,30 @@ It prints one JSON line:
 
 ## Step 2 — Implement the idea (your real work)
 
+Code the candidate. **Try codex (GPT-5.5) first; fall back to coding it yourself** only if codex falls short.
+
+### Step 2a — codex first
+
+```bash
+python3 "$CLAUDE_PLUGIN_ROOT/scripts/code_with_codex.py" --working-dir "<WORKING_DIR>" <CANDIDATE_ID>
+```
+
+It runs codex on the prepared file (default `workspace-write` sandbox — codex reads anywhere but writes only inside the workspace; the NEVER-USE-GIT warning rides along in the prompt) and prints one JSON line:
+
+```json
+{"ok":true,"changed":true,"compiles":true,"timed_out":false,"restored_parent":false,"summary":"...","diff":"..."}
+```
+
+Read `summary` and `diff` and **judge for yourself** whether codex actually implemented `description`, preserved the interface, and made a real behavioral change — not a no-op, rename, or off-description edit. The script reports only hard signals (`ok` = exit 0 + file changed + compiles); the semantic call is yours.
+
+- **Good** (`ok:true` and your judgment agrees): codex coded it. Record the model and skip to Step 3.
+  ```bash
+  python3 "$CLAUDE_PLUGIN_ROOT/scripts/evolve_csv.py" --working-dir "<WORKING_DIR>" set-field <CANDIDATE_ID> run-LLM gpt-5.5
+  ```
+- **Not good** (`ok:false`, codex left the file unchanged, or you reject the change): fall back to Step 2b. When `ok:false` the script has already restored the clean parent copy; when you're rejecting a compiling-but-wrong change, restore the parent yourself first (copy `evolution_<parent>.py` — or `algorithm.py` if baseline-rooted — over `target_path`) so you start clean.
+
+### Step 2b — code it yourself (fallback)
+
 Open `target_path` and modify it to implement `description`. Requirements:
 
 1. **Make a substantial, on-description change.** Don't just add comments or rename things. The change must actually do what the description says.
@@ -52,7 +76,11 @@ After editing, sanity-check the syntax:
 python3 -m py_compile "<target_path>"
 ```
 
-If it fails, fix it. If you can't, report `<id>: REFUSED — could not produce valid syntax`.
+If it fails, fix it. If you can't, report `<id>: REFUSED — could not produce valid syntax`. Then record the model:
+
+```bash
+python3 "$CLAUDE_PLUGIN_ROOT/scripts/evolve_csv.py" --working-dir "<WORKING_DIR>" set-field <CANDIDATE_ID> run-LLM sonnet
+```
 
 ## Step 3 — Report
 

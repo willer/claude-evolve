@@ -450,7 +450,7 @@ class EvolutionCSV:
 
         valid_statuses = {'', 'pending', 'complete', 'failed', 'failed-ai-retry',
                          'failed-retry1', 'failed-retry2', 'failed-retry3', 'skipped',
-                         'failed-parent-missing', 'running'}
+                         'failed-validation', 'failed-parent-missing', 'running'}
 
         # Track seen IDs to detect duplicates
         seen_ids = {}
@@ -500,7 +500,7 @@ class EvolutionCSV:
 
         valid_statuses = {'', 'pending', 'complete', 'failed', 'failed-ai-retry',
                          'failed-retry1', 'failed-retry2', 'failed-retry3', 'skipped',
-                         'failed-parent-missing'}
+                         'failed-validation', 'failed-parent-missing'}
 
         for i in range(start_idx, len(rows)):
             if len(rows[i]) > 4:

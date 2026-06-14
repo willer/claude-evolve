@@ -2,10 +2,11 @@
 """
 Shared workspace resolution for claude-evolve plugin scripts.
 
-AIDEV-NOTE: The plugin reuses claude-evolve's CSV/sandbox engine (vendored in
-../lib) but does its OWN config resolution so it stays self-contained when
-installed via the marketplace. We deliberately keep this simpler than the npm
-engine's config.py: no global ~/.config merge, just the workspace config.yaml.
+AIDEV-NOTE: The plugin is fully self-contained — the CSV/sandbox engine lives in
+../lib (stdlib-only) and this module does its own config resolution. No npm
+package, no pip install, nothing outside the plugin dir is required at runtime.
+Config resolution is deliberately simple: no global ~/.config merge, just the
+workspace config.yaml.
 """
 
 import os
@@ -13,14 +14,14 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-# Make the vendored lib importable as `lib.*` (mirrors the npm engine layout).
+# Make the engine importable as `lib.*` (it lives in this plugin, self-contained).
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PLUGIN_ROOT))
 
 # AIDEV-NOTE: The plugin is deliberately stdlib-only so it runs with any Python
 # the workspace happens to have, with no pip install. If PyYAML is present we
-# use it; otherwise a minimal parser handles claude-evolve's simple config.yaml
-# (flat scalars + one level of nesting, the only shape the engine emits).
+# use it; otherwise a minimal parser handles the simple config.yaml shape
+# (flat scalars + one level of nesting, the only shape claude-evolve emits).
 try:
     import yaml  # type: ignore
 

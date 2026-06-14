@@ -4,9 +4,9 @@ Score one candidate: syntax-check, optional validator, sandboxed evaluation,
 then write the result back to evolution.csv.
 
 This is the deterministic core of evolve-score. It needs no AI — it just runs
-the user's evaluator.py under the same sandbox the npm engine uses and records
-the number. A Haiku subagent wraps it only to keep the evaluator's output noise
-out of the main conversation.
+the user's evaluator.py under a macOS sandbox and records the number. A Haiku
+subagent wraps it only to keep the evaluator's output noise out of the main
+conversation.
 
 On success: sets the candidate to 'complete', writes performance + any extra
 JSON metric fields, and prints a JSON result.
@@ -102,7 +102,7 @@ def main():
     validator = ws.evolution_dir / "validator.py"
     if validator.exists() and not is_baseline:
         vr = subprocess.run([ws.python_cmd, str(validator), args.id],
-                            capture_output=True, text=True, timeout=60,
+                            capture_output=True, text=True, timeout=300,
                             cwd=str(ws.evolution_dir))
         if vr.returncode != 0:
             detail = (vr.stdout + "\n" + vr.stderr).strip()
@@ -112,7 +112,7 @@ def main():
             emit_and_exit({"id": args.id, "ok": False, "status": "failed-validation",
                            "error": detail, "stage": "validator"}, 1)
 
-    # 3. Run evaluator (sandboxed, matching the npm engine)
+    # 3. Run evaluator (sandboxed)
     eval_cmd = [ws.python_cmd, str(ws.evaluator_path)]
     if not is_baseline:
         eval_cmd.append(args.id)

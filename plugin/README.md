@@ -1,16 +1,17 @@
 # claude-evolve (Claude Code plugin)
 
-Evolutionary algorithm search, driven from inside Claude Code. This is the
-plugin packaging of [claude-evolve](https://github.com/anthropics/claude-evolve):
-same `evolution.csv` engine and sandboxed evaluator, but the AI steps run as
-Anthropic subagents instead of shelling out to external model CLIs.
+Evolutionary algorithm search, driven from inside Claude Code. Install it from
+the marketplace and it runs standalone — **no npm package, no pip install, no
+external model CLIs.** The `evolution.csv` engine and sandboxed evaluator are
+self-contained in this plugin (`lib/`, stdlib-only), and the AI steps run as
+Anthropic subagents.
 
 ## What it does
 
 Evolution is a greenhouse: each generation grows new algorithm variants from the
 best of the last one. The loop is always the same:
 
-1. **Ideate** new variants from the top performers + your `BRIEF.md` (Opus).
+1. **Ideate** new variants from the top performers + your `BRIEF.md` (Opus, high effort).
 2. **Code** each variant by editing a copy of its parent algorithm (Sonnet).
 3. **Score** each variant by running your `evaluator.py` under a sandbox (Haiku /
    deterministic).
@@ -24,7 +25,7 @@ plugin runs the loop.
 | Skill | Tier | Does |
 |-------|------|------|
 | `evolve` | orchestrator | Runs the whole loop as a self-respawning pool of background worker subagents. The main conversation stays a clean dashboard. Equivalent to `claude-evolve run`. |
-| `evolve-ideate` | Opus | One generation of ideation. Fans out parallel strategy subagents (novel / hill-climb / structural / crossover), appends new `pending` rows. Run one at a time per workspace. |
+| `evolve-ideate` | Opus (high) | One generation of ideation. Fans out parallel strategy subagents (novel / hill-climb / structural / crossover) via the plugin's `ideator` agent, appends new `pending` rows. Run one at a time per workspace. |
 | `evolve-code` | Sonnet | Write the code for one candidate: resolve parent, copy to `evolution_<id>.py`, implement its description. |
 | `evolve-score` | Haiku | Score one candidate: syntax-check, optional `validator.py`, sandboxed `evaluator.py`, write the number to the CSV. Deterministic — the subagent only exists to keep evaluator noise out of the main thread. |
 
@@ -38,14 +39,19 @@ no flag they auto-detect `evolution/config.yaml` or `./config.yaml`. The
 ## Design notes
 
 - **Self-contained & stdlib-only.** The deterministic engine (CSV file-locking,
-  ID generation, sandboxed evaluation) is vendored under `lib/` from the npm
-  package and needs no `pip install` — it falls back to a minimal config parser
-  when PyYAML is absent.
-- **Anthropic-only v1.** The npm engine's multi-model bandit, escalation tiers,
-  and Ollama-embedding novelty filter are intentionally dropped here for
-  simplicity. Models are fixed: Opus ideates, Sonnet codes, the evaluator scores.
-  Novelty is enforced by handing the Opus ideators the existing descriptions and
-  telling them to stay distinct.
+  ID generation, sandboxed evaluation) lives under `lib/` and needs nothing
+  installed — no npm, no `pip` — falling back to a minimal config parser when
+  PyYAML is absent. This plugin is the home of that engine, not a copy of it.
+- **Fixed model roles, defined in `agents/`.** Opus at high effort ideates
+  (`agents/ideator.md`); codex (GPT-5.5) codes first with the Sonnet worker
+  (`agents/coder.md`, restricted tools) judging and falling back to coding
+  itself; the evaluator scores. Each agent definition pins its model/effort and
+  carries the role's protocol as a system prompt — which also keeps the
+  security rules above the untrusted CSV descriptions the workers read.
+  (Earlier claude-evolve experiments with a multi-model bandit, escalation
+  tiers, and an Ollama-embedding novelty filter are intentionally left out for
+  simplicity.) Novelty is enforced by handing the ideators the existing
+  descriptions and telling them to stay distinct.
 - **`scripts/`** are thin JSON-emitting CLIs the skills call:
   `evolve_csv.py` (all CSV reads/writes + ideation context), `prepare.py` (parent
   resolution + file copy), `score.py` (sandboxed evaluation). All AI judgment
