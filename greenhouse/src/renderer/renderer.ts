@@ -77,6 +77,7 @@ let btLoading = false;
 let btLatest: BacktestSummary | undefined; // latest run, joined into the per-workspace stats
 let selectedName: string | null = null; // keyboard cursor, stable across pushes
 let peekFor: string | null = null; // quick-status popover target
+let searchQuery = ''; // fleet name/leader filter ('/' focuses the search box)
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -579,11 +580,18 @@ const SORTS: Record<string, (r: WorkspaceRow) => number | string | null> = {
   health: (r) => HEALTH_RANK[healthOf(r).level],
 };
 
+// Case-insensitive substring match over name + leader id + leader description.
+function matchesSearch(r: WorkspaceRow): boolean {
+  if (!searchQuery) return true;
+  const hay = `${r.name} ${r.stats.leader?.id ?? ''} ${r.stats.leader?.description ?? ''}`.toLowerCase();
+  return hay.includes(searchQuery);
+}
+
 function sorted(): WorkspaceRow[] {
   const key = SORTS[prefs.sortCol] ?? SORTS.score;
   const dir = prefs.sortDesc ? -1 : 1;
   // Starred first, missing values last regardless of direction.
-  return [...rows].sort((a, b) => {
+  return [...rows].filter(matchesSearch).sort((a, b) => {
     if (a.starred !== b.starred) return a.starred ? -1 : 1;
     const va = key(a);
     const vb = key(b);
@@ -778,6 +786,10 @@ const LIST_COLS: Array<{ label: string; sort?: string; cls?: string }> = [
 ];
 
 function renderList(order: WorkspaceRow[]): void {
+  if (order.length === 0 && searchQuery) {
+    $('list').innerHTML = `<div class="empty">No workspaces match “${esc(searchQuery)}”.</div>`;
+    return;
+  }
   const head = LIST_COLS.map((c) => {
     const arrow = c.sort && prefs.sortCol === c.sort ? (prefs.sortDesc ? ' ▼' : ' ▲') : '';
     const attrs = c.sort ? ` data-sort="${c.sort}" title="Sort by ${esc(c.label)}"` : '';
@@ -820,7 +832,9 @@ function renderList(order: WorkspaceRow[]): void {
 
 function renderGridCards(order: WorkspaceRow[]): void {
   if (order.length === 0) {
-    $('grid').innerHTML = `<div class="empty">No evolution workspaces found.<br>Configure roots (⚙) to point at directories containing claude-evolve workspaces.</div>`;
+    $('grid').innerHTML = searchQuery
+      ? `<div class="empty">No workspaces match “${esc(searchQuery)}”.</div>`
+      : `<div class="empty">No evolution workspaces found.<br>Configure roots (⚙) to point at directories containing claude-evolve workspaces.</div>`;
     return;
   }
   $('grid').innerHTML = order
@@ -972,7 +986,7 @@ function render(): void {
 function renderHints(): void {
   $('hints').innerHTML =
     view || toolView
-      ? `<b>esc</b> back · <b>⌘esc</b> back (even from terminal) · <b>⏎/a</b> focus terminal${view ? ' · <b>s</b> start/stop' : ''} · click terminal to type · wheel scrolls history`
+      ? `<b>esc</b> back · <b>⌘esc</b> back (even from terminal) · <b>⏎/a</b> focus terminal${view ? ' · <b>s</b> start/stop' : ''} · click a chart to enlarge · click terminal to type · wheel scrolls history`
       : btView
         ? `<b>esc/b</b> back to fleet · click a period row for its NAV chart · run selector switches runs · algorithm links open the matching workspace`
         : `<b>↑↓ j k</b> select · <b>⏎</b> open + attach · <b>space</b> peek stats · <b>b</b> backtests · <b>v</b> ${viewMode === 'list' ? 'grid' : 'list'} · <b>s</b> start/stop · <b>*</b> star · <b>r</b> refresh`;
@@ -1762,6 +1776,7 @@ window.addEventListener('drop', (e) => {
 window.addEventListener('keydown', (e) => {
   if (termFocused()) return; // keystrokes belong to the tmux session
   if (($('prefs-dialog') as HTMLDialogElement).open) return;
+  if (document.activeElement?.id === 'search') return; // typing in the filter box
   if (chartZoomOpen()) {
     // The enlarged-chart overlay grabs Escape before it can back out of the view.
     if (e.key === 'Escape') {
@@ -1843,6 +1858,13 @@ window.addEventListener('keydown', (e) => {
     case '*':
       if (sel) void toggleStar(sel.name);
       break;
+    case '/': {
+      e.preventDefault();
+      const s = $('search') as HTMLInputElement;
+      s.focus();
+      s.select();
+      break;
+    }
   }
 });
 
@@ -1853,6 +1875,22 @@ function syncHeaderControls(): void {
   ($('theme') as HTMLSelectElement).value = prefs.theme;
   $('view-toggle').textContent = viewMode === 'list' ? '⊞ Grid' : '☰ List';
 }
+
+const searchEl = $('search') as HTMLInputElement;
+searchEl.addEventListener('input', () => {
+  searchQuery = searchEl.value.trim().toLowerCase();
+  render();
+});
+searchEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    searchEl.value = '';
+    searchQuery = '';
+    searchEl.blur();
+    render();
+  } else if (e.key === 'Enter') {
+    searchEl.blur(); // keep the filter, hand keyboard nav back to the list
+  }
+});
 
 $('refresh').addEventListener('click', () => {
   void api.fleet.refresh();

@@ -44,12 +44,15 @@ export function adhocSessionName(dir: string): string {
   return `adhoc-${dir}`;
 }
 
-// Evolution launch: claude running the /evolve skill, pinned to Opus at xhigh
-// effort. Always forced into auto permission mode (operator decision
+// Evolution launch: claude driven by a /goal that runs /evolve until at least 2
+// generations pass with no improvement (so the session self-terminates on a
+// plateau instead of looping forever), pinned to Opus at xhigh effort. Always
+// forced into auto permission mode (operator decision
 // 2026-06-12): rare prompts that still stop the session surface as ASKING
 // (native notification; attach and answer in the terminal — the CLI does its
 // own question asking). (Was Fable until 2026-06-12, when access was withdrawn.)
-export const EVOLVE_PROMPT = 'run the /evolve skill';
+export const EVOLVE_PROMPT =
+  "/goal run /evolve and keep evolving until there's at least 2 generations that show no improvement and you have no more ideas";
 export const EVOLVE_ARGS = ['--model', 'opus', '--effort', 'xhigh', '--permission-mode', 'auto'];
 
 // Adhoc launch: a plain `claude` in the workspace dir — no model pin, no prompt,

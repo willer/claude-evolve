@@ -99,6 +99,7 @@
     button.no { background: var(--red-bg); border-color: var(--red); color: var(--red); }
     #tool-btns button.on { border-color: var(--green); color: var(--green); }
     input { cursor: text; width: 420px; }
+    #search { width: 200px; cursor: text; }
 
     /* health chip — the one-glance verdict (shared by list, grid, detail) */
     .hc {
@@ -381,6 +382,7 @@
     </div>
     <div class="hrow">
       <span id="tool-btns" style="display: contents"></span>
+      <input id="search" type="search" placeholder="/ filter…" autocomplete="off" title="Filter workspaces (/)" />
       <span class="spacer"></span>
       <button id="bt-btn" title="Backtest results dashboard (b)">📊 Backtests</button>
       <select id="sort">
