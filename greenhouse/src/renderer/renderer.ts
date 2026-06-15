@@ -389,7 +389,7 @@ function navPanelHtml(ws: string, candidateId: string, w: number, h: number): st
  *  curves run through the latest data (fresher than the walk-forward artifact).
  *  Curves load lazily via btEquityFor, repainting as each arrives. Empty string
  *  when the workspace has no entry in the latest backtest run. */
-function navByPeriodPanel(name: string, cw: number): string {
+function navByPeriodPanel(name: string, cw: number, tag: string): string {
   const t = latestBtTable();
   if (!btLatest || !t || !btAlgoFor(name)) return '';
   const runDate = btLatest.runDate;
@@ -404,12 +404,20 @@ function navByPeriodPanel(name: string, cw: number): string {
           ? `<div class="desc" style="color: var(--dim); height: 96px">loading…</div>`
           : eq === null
             ? `<div class="desc" style="color: var(--dim); height: 96px">no curve</div>`
-            : navChartSvg(eq, cellW, 96);
+            : zoomable(
+                `nav-period-${p}`,
+                (w, ht) => {
+                  const e2 = btEquityFor(runDate, name, p);
+                  return e2 ? navChartSvg(e2, w, ht) : '';
+                },
+                cellW,
+                96,
+              );
       return `<figure class="nav-fig" style="width:${cellW}px"><figcaption>${esc(PERIOD_LABELS[p] ?? p)}</figcaption>${body}</figure>`;
     })
     .join('');
   return `<div class="panel">
-      <h3>Leader NAV by period — backtest run ${esc(runDate)}</h3>
+      <h3>Backtest NAV by period — run ${esc(runDate)}${tag}</h3>
       <div class="nav-grid" style="gap:${gap}px">${tiles}</div>
     </div>`;
 }
@@ -438,6 +446,27 @@ function latestBtTable(): { algos: BacktestAlgo[]; periods: string[] } | null {
 }
 
 /** Latest-run backtest entry for a workspace (dir name == algorithm), with rank. */
+// Pull the candidate id (e.g. gen756-008) out of a backtest champion label like
+// "1d-fas gen756-008"; fall back to the last token for baselines/odd labels.
+function candidateIdOf(algoName: string): string | null {
+  const m = algoName.match(/gen\d+-\d+/i);
+  if (m) return m[0];
+  return algoName.trim().split(/\s+/).pop() || null;
+}
+
+// Every leader/backtest pane carries one of these so it's never ambiguous
+// whether you're looking at the live champion or one scored earlier:
+//   'winner'   — the current evolution leader (green)
+//   'previous' — backtest-all scored an older champion than today's leader (yellow)
+//   'unknown'  — no completed leader yet to compare against (neutral)
+function winnerTag(state: 'winner' | 'previous' | 'unknown', tested?: string | null, leader?: string | null): string {
+  if (state === 'winner')
+    return `<span class="tag tag-winner" title="Shows the current evolution leader">★ current winner</span>`;
+  if (state === 'previous')
+    return `<span class="tag tag-prev" title="Shows ${esc(tested ?? 'an earlier champion')}, not the current leader ${esc(leader ?? '')} — re-run backtest-all to refresh">⚠ previous winner${tested ? ` · ${esc(tested)}${leader ? ` (now ${esc(leader)})` : ''}` : ''}</span>`;
+  return `<span class="tag tag-unknown" title="Backtested champion — no completed evolution leader yet to compare">tested${tested ? ` ${esc(tested)}` : ''}</span>`;
+}
+
 function btAlgoFor(name: string): { algo: BacktestAlgo; rank: number } | null {
   const t = latestBtTable();
   if (!t) return null;
@@ -474,14 +503,6 @@ function btEquityFor(runDate: string, algo: string, period: string): Equity | nu
   return undefined;
 }
 
-function btNavCellHtml(runDate: string, algo: string, period: string, w: number): string {
-  const eq = btEquityFor(runDate, algo, period);
-  if (eq === undefined) return `<div class="desc" style="color: var(--dim)">loading…</div>`;
-  if (eq === null)
-    return `<div class="desc" style="color: var(--dim)">no NAV series for this run — backtest-all saves per-period curves since the 2026-06-11 update</div>`;
-  return navChartSvg(eq, w, 165, { axes: true });
-}
-
 const BT_NUM = (v: number | null, digits: number, suffix = ''): string =>
   v === null || v === undefined ? '—' : `${v.toFixed(digits)}${suffix}`;
 
@@ -510,7 +531,19 @@ function btPeriodTableHtml(a: BacktestAlgo, periods: string[], runDate: string, 
         <td class="num">${BT_NUM(r.turnover, 1, 'x')}</td>
       </tr>`;
       const chart = expanded
-        ? `<tr class="bt-chart"><td colspan="7">${btNavCellHtml(runDate, a.algorithm, p, chartW)}</td></tr>`
+        ? `<tr class="bt-chart"><td colspan="7">${zoomable(
+            `bt-${a.algorithm}-${p}`,
+            (w, h) => {
+              const eq = btEquityFor(runDate, a.algorithm, p);
+              if (eq === undefined)
+                return `<div class="desc" style="color: var(--dim)">loading…</div>`;
+              if (eq === null)
+                return `<div class="desc" style="color: var(--dim)">no NAV series for this run — backtest-all saves per-period curves since the 2026-06-11 update</div>`;
+              return navChartSvg(eq, w, h, { axes: true });
+            },
+            chartW,
+            165,
+          )}</td></tr>`
         : '';
       return row + chart;
     })
@@ -616,6 +649,104 @@ function renderTotals(): void {
     if (counts[level]) parts.push(`<span class="${cls}"><b>${counts[level]}</b> ${level}</span>`);
   }
   $('totals').innerHTML = parts.join(' · ');
+}
+
+// ── host load gauges (header) ────────────────────────────────────────────────
+// Fed by the main process on the system:update channel (own cadence, separate
+// from the fleet poll) so the gauges tick without re-rendering the grid.
+interface SysSample {
+  cpu: number;
+  load: number;
+  loadRaw: number;
+  mem: number;
+  cores: number;
+}
+const SYS_HISTORY = 90;
+const sysCpu: number[] = [];
+const sysLoad: number[] = []; // core-normalised (1.0 = fully loaded)
+const sysMem: number[] = [];
+let sysCores = 0;
+
+function pushSys(s: SysSample): void {
+  sysCores = s.cores;
+  for (const [buf, v] of [
+    [sysCpu, s.cpu],
+    [sysLoad, s.load],
+    [sysMem, s.mem],
+  ] as const) {
+    buf.push(v);
+    if (buf.length > SYS_HISTORY) buf.shift();
+  }
+  renderSysCharts();
+}
+
+// Fixed 0..max scale (metrics read honestly against an absolute ceiling rather
+// than auto-zooming to their own range, the way sparklineSvg does).
+function gaugeSpark(values: number[], w: number, h: number, color: string, max: number): string {
+  if (values.length < 2) return `<svg class="spark" width="${w}" height="${h}"></svg>`;
+  const pts = values.map((v, i) => {
+    const x = (i / (values.length - 1)) * (w - 2) + 1;
+    const y = h - 2 - (Math.max(0, Math.min(max, v)) / max) * (h - 4);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  return (
+    `<svg class="spark" width="${w}" height="${h}">` +
+    `<polyline points="${pts.join(' ')}" fill="none" style="stroke:${color}" stroke-width="1.5"/></svg>`
+  );
+}
+
+function sysColor(v: number, warn: number, bad: number): string {
+  return v >= bad ? 'var(--red)' : v >= warn ? 'var(--yellow)' : 'var(--green)';
+}
+
+function renderSysCharts(): void {
+  const el = document.getElementById('sys-metrics');
+  if (!el) return;
+  const cpu = sysCpu.at(-1) ?? 0;
+  const load = sysLoad.at(-1) ?? 0;
+  const mem = sysMem.at(-1) ?? 0;
+  const loadRaw = load * (sysCores || 1);
+  const metrics = [
+    {
+      label: 'CPU',
+      buf: sysCpu,
+      color: sysColor(cpu, 0.6, 0.85),
+      max: 1,
+      val: `${Math.round(cpu * 100)}%`,
+      title: `CPU busy across ${sysCores} cores`,
+    },
+    {
+      label: 'LOAD',
+      buf: sysLoad,
+      color: sysColor(load, 0.7, 1),
+      max: 1.5,
+      val: loadRaw.toFixed(2),
+      title: `1-min load average ${loadRaw.toFixed(2)} over ${sysCores} cores`,
+    },
+    {
+      label: 'MEM',
+      buf: sysMem,
+      color: sysColor(mem, 0.7, 0.9),
+      max: 1,
+      val: `${Math.round(mem * 100)}%`,
+      title: 'Used memory',
+    },
+  ];
+  el.innerHTML = metrics
+    .map(
+      (m) =>
+        `<span class="sys-metric" title="${esc(m.title)}"><span class="sl">${m.label}</span>` +
+        `${gaugeSpark(m.buf, 54, 18, m.color, m.max)}` +
+        `<span class="sv" style="color:${m.color}">${m.val}</span></span>`,
+    )
+    .join('');
+}
+
+// The header is two rows and its height shifts (tool buttons appear after the
+// first poll, the window resizes). Sticky offsets below it read --header-h.
+function syncHeaderHeight(): void {
+  const h = document.querySelector('header');
+  if (h) document.documentElement.style.setProperty('--header-h', `${h.offsetHeight}px`);
 }
 
 function ensureSelection(order: WorkspaceRow[]): void {
@@ -929,6 +1060,55 @@ function panelInnerW(colId: string, fallback: number): number {
   return w > 60 ? w - 30 : fallback;
 }
 
+// ── click-to-enlarge charts ──────────────────────────────────────────────────
+// Each chart wrapped by zoomable() registers a renderer keyed by a stable id;
+// the overlay calls it again at a larger size for a crisp (not CSS-scaled)
+// repaint. The map is rebuilt every render of the hosting view, so ids stay
+// fresh; an open overlay holds its own renderer closure (zoomRender) and is
+// unaffected by the rebuild.
+const chartRenderers = new Map<string, (w: number, h: number) => string>();
+let zoomRender: ((w: number, h: number) => string) | null = null;
+
+function zoomable(id: string, render: (w: number, h: number) => string, w: number, h: number): string {
+  chartRenderers.set(id, render);
+  return `<div class="chart-zoom" data-chart="${esc(id)}" title="Click to enlarge">${render(w, h)}</div>`;
+}
+
+function zoomDims(): { w: number; h: number } {
+  const w = Math.min(window.innerWidth - 120, 1200);
+  const h = Math.min(window.innerHeight - 160, Math.max(360, Math.round(w * 0.5)));
+  return { w, h };
+}
+
+function chartZoomOpen(): boolean {
+  return zoomRender !== null;
+}
+
+function openZoom(render: (w: number, h: number) => string): void {
+  const { w, h } = zoomDims();
+  const html = render(w, h);
+  if (!/<svg/.test(html)) return; // nothing to enlarge yet (loading / no data)
+  zoomRender = render;
+  const ov = $('chart-zoom-overlay');
+  ov.innerHTML = `<div class="zoom-box">${html}</div>`;
+  ov.classList.add('open');
+}
+
+function closeZoom(): void {
+  zoomRender = null;
+  const ov = $('chart-zoom-overlay');
+  ov.classList.remove('open');
+  ov.innerHTML = '';
+}
+
+// Delegated on #detail and #bt; opens the clicked chart's renderer at large size.
+function chartZoomClick(e: MouseEvent): void {
+  const el = (e.target as HTMLElement).closest('.chart-zoom') as HTMLElement | null;
+  if (!el) return;
+  const render = chartRenderers.get(el.dataset.chart ?? '');
+  if (render) openZoom(render);
+}
+
 function renderDetail(): void {
   const r = rows.find((x) => x.name === view);
   const detail = $('detail');
@@ -963,17 +1143,39 @@ function renderDetail(): void {
   // panel wrapper trims 30px of padding/border. Re-measured every render and on
   // window resize, so they reflow instead of sitting at a baked-in width.
   const cw = panelInnerW('d-left', 540);
+  chartRenderers.clear(); // rebuilt below as the detail charts re-register
 
   const s = r.stats;
   const h = healthOf(r);
   const leader = s.leader;
   const years = yearSeries(r);
-  const yearChart = multiLineSvg(years, cw, 80);
+  // Enough data to draw? Mirrors multiLineSvg's own emptiness guard so we can
+  // decide whether to show the panel without rendering a throwaway SVG.
+  const yearVals = years.flatMap((sr) => sr.values.filter((v): v is number => v !== null));
+  const yearN = years.length ? Math.max(...years.map((sr) => sr.values.length)) : 0;
+  const hasYearChart = yearVals.length >= 2 && yearN >= 2;
   const bt = btAlgoFor(r.name);
   const btFlag = btLatest?.appendix.find((x) => x.algorithm === r.name);
+  // backtest-all scores whichever champion was current the last time it ran —
+  // which can lag the live leader. Name the tested champion and flag staleness
+  // so an old backtest isn't mistaken for the current leader's verdict.
+  const testedId = bt ? candidateIdOf(bt.algo.name) : null;
+  const leaderId = leader?.id ?? null;
+  const btStale = !!(testedId && leaderId && testedId.toLowerCase() !== leaderId.toLowerCase());
+  const btWinnerState: 'winner' | 'previous' | 'unknown' = !leaderId
+    ? 'unknown'
+    : btStale
+      ? 'previous'
+      : 'winner';
+  const btTag = bt ? winnerTag(btWinnerState, testedId, leaderId) : '';
   const btPanel = bt && btLatest
     ? `<div class="panel bt-host">
-         <h3>Backtest — run ${esc(btLatest.runDate)} · #${bt.rank} of ${latestBtTable()!.algos.length} · score ${bt.algo.score.toFixed(2)}${bt.algo.qualPct !== null ? ` · qual ${bt.algo.qualPct}%` : ''}</h3>
+         <h3>Backtest — run ${esc(btLatest.runDate)} · testing ${esc(bt.algo.name)} · #${bt.rank} of ${latestBtTable()!.algos.length} · score ${bt.algo.score.toFixed(2)}${bt.algo.qualPct !== null ? ` · qual ${bt.algo.qualPct}%` : ''}${btTag}</h3>
+         ${
+           btWinnerState === 'previous'
+             ? `<div class="desc" style="color: var(--yellow); margin-bottom: 8px; user-select: text;">⚠ backtest-all last scored ${esc(testedId!)}; the current leader ${esc(leaderId!)} hasn't been backtested yet — re-run backtest-all to score it.</div>`
+             : ''
+         }
          ${btFlag ? `<div class="desc" style="color: var(--red); margin-bottom: 8px; user-select: text;">⚑ ${esc(btFlag.reasons)}</div>` : ''}
          ${btPeriodTableHtml(bt.algo, latestBtTable()!.periods, btLatest.runDate, cw)}
        </div>`
@@ -991,7 +1193,7 @@ function renderDetail(): void {
 
   $('d-left').innerHTML = `
     <div class="panel">
-      <h3>Leader ${leader ? `— ${esc(leader.id)} · ${fmtScore(leader.performance)}` : ''}</h3>
+      <h3>Leader ${leader ? `— ${esc(leader.id)} · ${fmtScore(leader.performance)}${winnerTag('winner')}` : ''}</h3>
       ${
         leader
           ? `<div class="desc" style="color: var(--dim); margin-bottom: 10px; user-select: text;">${esc(leader.description)}</div>
@@ -1007,20 +1209,20 @@ function renderDetail(): void {
     ${btPanel}
     ${
       leader
-        ? `<div class="panel"><h3>Leader NAV over time — walk-forward OOS</h3>${navPanelHtml(r.name, leader.id, cw, 130)}</div>
-           ${navByPeriodPanel(r.name, cw)}
-           <div class="panel"><h3>Leader returns by year</h3>${yearBarsHtml(yearReturns(leader))}</div>`
+        ? `<div class="panel"><h3>Leader NAV over time — walk-forward OOS${winnerTag('winner')}</h3>${zoomable('nav-leader', (w, ht) => navPanelHtml(r.name, leader.id, w, ht), cw, 130)}</div>
+           ${navByPeriodPanel(r.name, cw, btTag)}
+           <div class="panel"><h3>Leader returns by year${winnerTag('winner')}</h3>${yearBarsHtml(yearReturns(leader))}</div>`
         : ''
     }
     <div class="panel">
       <h3>Best score by generation</h3>
-      ${sparklineSvg(s.sparkline, cw, 60, HEALTH_COLOR[h.level])}
+      ${zoomable('spark-gen', (w, ht) => sparklineSvg(s.sparkline, w, ht, HEALTH_COLOR[h.level]), cw, 60)}
     </div>
     ${
-      yearChart
+      hasYearChart
         ? `<div class="panel">
              <h3>Year returns by generation (best of gen)</h3>
-             ${yearChart}
+             ${zoomable('year-gen', (w, ht) => multiLineSvg(years, w, ht), cw, 80)}
              <div class="legend">${years
                .map((y) => `<span><span class="sw" style="background:${y.color}"></span>${esc(y.name)}</span>`)
                .join('')}</div>
@@ -1352,6 +1554,7 @@ function renderToolButtons(): void {
            title="${t.running ? `${esc(t.key)} is running — open its session` : `Open ${esc(t.key)}`}">${t.running ? '●' : '⚒'} ${esc(t.key)}</button>`,
     )
     .join('');
+  syncHeaderHeight();
 }
 
 // MessagePort arrives via preload re-post (meta.attachId = session id); route
@@ -1385,6 +1588,8 @@ window.addEventListener('message', (e) => {
     rows = payload.rows;
     tools = payload.tools;
     render();
+  } else if (e.data?.type === 'eg-event' && e.data.channel === 'system:update') {
+    pushSys(e.data.payload as SysSample);
   }
 });
 
@@ -1471,6 +1676,12 @@ $('grid').addEventListener('click', fleetClick);
 $('list').addEventListener('click', fleetClick);
 $('bt').addEventListener('click', btToggleClick);
 $('detail').addEventListener('click', btToggleClick);
+$('detail').addEventListener('click', chartZoomClick);
+$('bt').addEventListener('click', chartZoomClick);
+// Backdrop click (not the chart box) dismisses the enlarged chart.
+$('chart-zoom-overlay').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeZoom();
+});
 
 // ── keyboard (fleet-commander style) ─────────────────────────────────────────
 
@@ -1551,6 +1762,14 @@ window.addEventListener('drop', (e) => {
 window.addEventListener('keydown', (e) => {
   if (termFocused()) return; // keystrokes belong to the tmux session
   if (($('prefs-dialog') as HTMLDialogElement).open) return;
+  if (chartZoomOpen()) {
+    // The enlarged-chart overlay grabs Escape before it can back out of the view.
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeZoom();
+    }
+    return;
+  }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const sel = selectedName ? rows.find((r) => r.name === selectedName) : undefined;
 
@@ -1683,5 +1902,8 @@ void (async () => {
   rows = payload.rows;
   tools = payload.tools;
   render();
+  syncHeaderHeight();
   void loadLatestBacktests(); // joins BT scores into the list/peek/detail when it lands
 })();
+
+window.addEventListener('resize', syncHeaderHeight);

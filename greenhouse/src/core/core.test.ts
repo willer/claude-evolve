@@ -186,12 +186,20 @@ describe('classifyHealth', () => {
     expect(classifyHealth(s, stale, true, NOW).level).toBe('failing');
   });
 
-  it('reports plateau past 20 gens without a new leader', () => {
+  it('reports plateau past 5 gens without a new leader', () => {
     const lines = [HEADER, row('gen01-001', '9.0', 'complete')];
-    for (let g = 2; g <= 22; g++) lines.push(row(`gen${String(g).padStart(2, '0')}-001`, '1.0', 'complete'));
+    for (let g = 2; g <= 7; g++) lines.push(row(`gen${String(g).padStart(2, '0')}-001`, '1.0', 'complete'));
     const s = computeStats(lines.join('\n'));
-    expect(s.gensSinceTop).toBe(21);
+    expect(s.gensSinceTop).toBe(6);
     expect(classifyHealth(s, fresh, true, NOW).level).toBe('plateau');
+  });
+
+  it('stays good at exactly 5 gens since the leader (boundary)', () => {
+    const lines = [HEADER, row('gen01-001', '9.0', 'complete')];
+    for (let g = 2; g <= 6; g++) lines.push(row(`gen${String(g).padStart(2, '0')}-001`, '1.0', 'complete'));
+    const s = computeStats(lines.join('\n'));
+    expect(s.gensSinceTop).toBe(5); // > PLATEAU_GENS is the trigger, so 5 is still good
+    expect(classifyHealth(s, fresh, true, NOW).level).toBe('good');
   });
 });
 

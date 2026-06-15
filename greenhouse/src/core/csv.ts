@@ -188,13 +188,16 @@ export function computeStats(text: string): WorkspaceStats {
   };
 }
 
-// Verdict thresholds (operator-tuned 2026-06-12; gens/stale match the
-// autostatus TUI's red-stat coloring, the fail rule is greenhouse's own):
-// with an AI supervisor coding candidates — not a blind script — failures
+// Verdict thresholds (operator-tuned 2026-06-15; the fail rule is greenhouse's
+// own): with an AI supervisor coding candidates — not a blind script — failures
 // should be rare, so a COUNT beats a rate. More than FAILING_FAILS failures
 // across the last 2 generations means the workspace is broken; a moderate
 // failure rate alongside steady scoring is normal attrition.
-export const PLATEAU_GENS = 20;
+//
+// PLATEAU_GENS dropped 20→5 now that the evolve bots run goal-directed and give
+// up after ~2 stale generations: 5 gens without a new leader already means the
+// search has run dry, so the dashboard should flag it that early too.
+export const PLATEAU_GENS = 5;
 export const FAILING_FAILS = 3;
 export const STALE_MS = 12 * 3600 * 1000;
 

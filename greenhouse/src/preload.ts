@@ -10,7 +10,7 @@ ipcRenderer.on('session:port', (event, meta) => {
   window.postMessage({ type: 'eg-session-port', meta }, '*', event.ports as unknown as MessagePort[]);
 });
 
-for (const channel of ['fleet:update']) {
+for (const channel of ['fleet:update', 'system:update']) {
   ipcRenderer.on(channel, (_e, payload) => {
     window.postMessage({ type: 'eg-event', channel, payload }, '*');
   });

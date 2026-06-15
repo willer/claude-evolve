@@ -60,8 +60,8 @@
     }
     header {
       display: flex;
-      align-items: center;
-      gap: 14px;
+      flex-direction: column;
+      gap: 8px;
       padding: 10px 16px;
       background: var(--panel);
       border-bottom: 1px solid var(--border);
@@ -69,6 +69,7 @@
       top: 0;
       z-index: 10;
     }
+    header .hrow { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
     header h1 { font-size: 15px; margin: 0; font-weight: 600; }
     header .totals { color: var(--dim); font-size: 12px; }
     header .totals b { color: var(--text); font-weight: 600; }
@@ -76,6 +77,12 @@
     header .totals .t-yellow { color: var(--yellow); }
     header .totals .t-magenta { color: var(--magenta); }
     header .spacer { flex: 1; }
+    /* host-load gauges (top-right of the header) */
+    .sys-metrics { display: flex; align-items: center; gap: 16px; }
+    .sys-metric { display: flex; align-items: center; gap: 5px; font-size: 11px; }
+    .sys-metric .sl { color: var(--dim); font-weight: 600; letter-spacing: 0.4px; }
+    .sys-metric .sv { font-family: var(--mono); font-weight: 600; min-width: 34px; text-align: right; }
+    .sys-metric .spark { display: block; }
     select, button, input {
       background: var(--panel2);
       color: var(--text);
@@ -107,6 +114,48 @@
     .hc.plateau, .hc.idle { background: var(--yellow-bg); color: var(--yellow); }
     .hc.failing, .hc.error { background: var(--red-bg); color: var(--red); }
 
+    /* winner/previous pill — every leader/backtest pane states which champion
+       it's showing (the live leader, or one backtest-all scored earlier). */
+    .tag {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      padding: 1px 7px;
+      border-radius: 10px;
+      margin-left: 8px;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+    .tag-winner { background: var(--green-bg); color: var(--green); }
+    .tag-prev { background: var(--yellow-bg); color: var(--yellow); }
+    .tag-unknown { background: var(--panel2); color: var(--dim); }
+
+    /* click-to-enlarge charts (detail + backtests) */
+    .chart-zoom { cursor: zoom-in; }
+    .chart-zoom:hover { outline: 1px solid var(--cyan); outline-offset: 2px; border-radius: 4px; }
+    #chart-zoom-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.7);
+      z-index: 50;
+      align-items: center;
+      justify-content: center;
+      padding: 30px;
+    }
+    #chart-zoom-overlay.open { display: flex; }
+    #chart-zoom-overlay .zoom-box {
+      background: var(--panel);
+      border: 1px solid var(--cyan);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+      max-width: 100%;
+      max-height: 100%;
+      cursor: zoom-out;
+    }
+    #chart-zoom-overlay .zoom-box svg { display: block; }
+
     .badge {
       font-size: 10px;
       font-weight: 700;
@@ -136,7 +185,7 @@
       padding: 6px 8px;
       border-bottom: 1px solid var(--border);
       position: sticky;
-      top: 42px; /* under the sticky header */
+      top: var(--header-h, 76px); /* under the sticky (two-row) header */
       background: var(--bg);
       cursor: pointer;
       white-space: nowrap;
@@ -211,7 +260,7 @@
     #peek {
       display: none;
       position: fixed;
-      top: 56px;
+      top: calc(var(--header-h, 76px) + 14px);
       right: 20px;
       width: 440px;
       max-height: calc(100vh - 110px);
@@ -324,30 +373,36 @@
 </head>
 <body>
   <header>
-    <h1>🌱 Evolve Greenhouse</h1>
-    <span class="totals" id="totals"></span>
-    <span class="spacer"></span>
-    <span id="tool-btns" style="display: contents"></span>
-    <button id="bt-btn" title="Backtest results dashboard (b)">📊 Backtests</button>
-    <select id="sort">
-      <option value="score">Sort: score</option>
-      <option value="bt">Sort: backtest score</option>
-      <option value="name">Sort: name</option>
-      <option value="health">Sort: health</option>
-      <option value="updated">Sort: updated</option>
-      <option value="state">Sort: activity</option>
-      <option value="gen">Sort: latest gen</option>
-      <option value="gens">Sort: gens since top</option>
-      <option value="rate">Sort: success rate</option>
-    </select>
-    <select id="theme" title="Theme">
-      <option value="system">◐ System</option>
-      <option value="dark">● Dark</option>
-      <option value="light">○ Light</option>
-    </select>
-    <button id="view-toggle" title="Toggle list/grid (v)">⊞ Grid</button>
-    <button id="prefs-btn" title="Configure workspace roots">⚙ Roots</button>
-    <button id="refresh">↻ Refresh</button>
+    <div class="hrow">
+      <h1>🌱 Evolve Greenhouse</h1>
+      <span class="totals" id="totals"></span>
+      <span class="spacer"></span>
+      <div id="sys-metrics" class="sys-metrics" title="Host load"></div>
+    </div>
+    <div class="hrow">
+      <span id="tool-btns" style="display: contents"></span>
+      <span class="spacer"></span>
+      <button id="bt-btn" title="Backtest results dashboard (b)">📊 Backtests</button>
+      <select id="sort">
+        <option value="score">Sort: score</option>
+        <option value="bt">Sort: backtest score</option>
+        <option value="name">Sort: name</option>
+        <option value="health">Sort: health</option>
+        <option value="updated">Sort: updated</option>
+        <option value="state">Sort: activity</option>
+        <option value="gen">Sort: latest gen</option>
+        <option value="gens">Sort: gens since top</option>
+        <option value="rate">Sort: success rate</option>
+      </select>
+      <select id="theme" title="Theme">
+        <option value="system">◐ System</option>
+        <option value="dark">● Dark</option>
+        <option value="light">○ Light</option>
+      </select>
+      <button id="view-toggle" title="Toggle list/grid (v)">⊞ Grid</button>
+      <button id="prefs-btn" title="Configure workspace roots">⚙ Roots</button>
+      <button id="refresh">↻ Refresh</button>
+    </div>
   </header>
 
   <div id="list"></div>
@@ -356,6 +411,7 @@
   <div id="tool"></div>
   <div id="bt"></div>
   <div id="peek"></div>
+  <div id="chart-zoom-overlay"></div>
 
   <div id="hints"></div>
 

@@ -32,6 +32,13 @@ to verify the NAV chart deterministically.
 - [ ] List: column headers sort on click with ▲/▼ indicator; health chip
       (ok/plateau/idle/failing/error) and state badge render per row;
       sparkline stroke matches health color (green/yellow/red)
+- [ ] Header is two rows: row 1 = brand + totals (left) and CPU/LOAD/MEM
+      host-load gauges (right); row 2 = tool buttons (left) and
+      Backtests/Sort/Theme/Grid/Roots/Refresh (right). Sticky list/peek
+      offsets sit just below the (taller) header — no overlap
+- [ ] Header host-load gauges: CPU% / 1-min loadavg / MEM% each with a
+      fixed-scale sparkline that fills over ~minutes; value color greens→
+      yellow→red as load climbs
 - [ ] Header totals: workspace/running counts plus asking/failing/idle/
       plateau counts in their alert colors
 - [ ] Peek (Space): leader ratios grid, returns-by-year bars (return_YYYY
@@ -78,6 +85,10 @@ to verify the NAV chart deterministically.
 - [ ] Per-workspace join: BT column in the list (sortable, '—' when the dir
       isn't in the latest run), BT score/qual in the peek Run grid, Backtest
       panel in detail (rank/score/qual, ⚑ flag reasons, NAV toggles)
+- [ ] Detail Backtest panel names the tested champion ("testing <name>") and
+      notes whether it's the current leader: green ✓ when the backtested
+      candidate id matches the live leader, yellow ⚠ "re-run backtest-all"
+      when it lags (backtest-all scored an older champion)
 - [ ] EG_ROOTS run shows ONLY synthetic data everywhere, including the
       backtests view (the seam covers ipc DB lookups)
 - [ ] Header tool buttons (⚒ inference-all / backtest-all) appear when the

@@ -7,6 +7,7 @@ import * as path from 'node:path';
 import { Poller } from './Poller';
 import { PrefsStore } from './prefsStore';
 import { SessionHost } from './SessionHost';
+import { SystemMetrics } from './SystemMetrics';
 import { wireIpc } from './ipc';
 
 // Dock launches inherit launchd's bare PATH — tmux/claude live in
@@ -114,7 +115,16 @@ app.whenReady().then(() => {
   win.on('closed', () => (win = null));
 
   poller.start(5000);
-  app.on('before-quit', () => poller.stop());
+
+  // Host load (CPU/loadavg/memory) for the header gauges — its own faster cadence
+  // than the 5s fleet poll, on a separate channel so it never re-renders the grid.
+  const sys = new SystemMetrics();
+  const sysTimer = setInterval(() => win?.webContents.send('system:update', sys.sample()), 2000);
+
+  app.on('before-quit', () => {
+    poller.stop();
+    clearInterval(sysTimer);
+  });
 
   if (process.env.EG_SHOT) devShots(process.env.EG_SHOT);
 });
