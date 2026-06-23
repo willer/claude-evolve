@@ -1,5 +1,14 @@
 # Claude-Evolve – Implementation Plan
 
+> ⚠️ **HISTORICAL PLAN — partially superseded.** This document plans the original
+> shell-script MVP (`bin/claude-evolve.sh`, `lib/common.sh`, a Bats test suite).
+> That implementation was rewritten into the current Python-worker + tmux +
+> Electron-`greenhouse` architecture (published to npm at v1.14.0). Several
+> remaining `[ ]` items reference files/tests that no longer exist; those are
+> marked `[B]` with the reason. Delivered capabilities are marked `[x]` with a
+> pointer to the current implementation. New work should be tracked against the
+> current architecture, not this plan.
+
 The plan is organised into sequential _phases_ – each phase fits comfortably in a feature branch and ends in a working, testable state. Tick the `[ ]` check-box when the task is complete.
 
 ---
@@ -138,8 +147,9 @@ Additional Features ✅
 
 > ⚠️ **INCOMPLETE**: Implementation exists but is currently failing the Bats test suite. Please ensure the timeout logic (exit codes, error messaging, and process cleanup) aligns with test expectations and fix or update tests as needed (see Phase 7).
 
-- [ ] `--parallel <N>` → run up to N candidates concurrently (background subshells)
-- [ ] ETA & throughput stats in the live log
+- [x] `--parallel <N>` → run up to N candidates concurrently (background subshells)
+  > ✅ **DELIVERED (rewritten form)**: Concurrent execution is shipped — `lib/config.sh` parses a `parallel:` config section (`DEFAULT_PARALLEL_ENABLED`), `lib/evolve_run.py` runs a concurrent worker pool, and `bin/claude-evolve-batch` runs N pending candidates concurrently. Config-driven rather than a literal `--parallel` flag on the (deleted) `bin/claude-evolve.sh`.
+- [B] ETA & throughput stats in the live log — the "live log" this targets was the original foreground `cmd_run` streaming output, which no longer exists. Progress is now surfaced via `bin/claude-evolve-status` and the greenhouse dashboard; this needs re-speccing against the current progress UI before it can be implemented as written.
 
 ---
 
@@ -171,38 +181,40 @@ Implementation Notes ✅
 
 **Next Developer Requirements (critical)**:
 
-- [ ] Fix existing Bats test failures without modifying tests:
-  - Resolve timeout CSV update logic broken in test scenarios
-  - Correct ideate command error handling and validation (tests 13–19)
-  - Address run command processing failures in candidate workflow (tests 22–37)
-  - Repair CSV manipulation functions not working as designed (tests 22–23, 38–44)
-  - Align error message patterns and validation logic across commands
-- [ ] Achieve 100% Bats test pass rate (44/44 passing)
-- [ ] Follow a test-driven development approach with continuous validation
+- [B] Fix existing Bats test failures without modifying tests — the Bats suite does not exist: there are **zero** `.bats` files in the repo, and the `bin/claude-evolve.sh` / `lib/common.sh` they exercised were deleted in the Python rewrite. There is nothing to fix. The current test surface is `npm test` (→ `claude-evolve --help`, passing) plus `lib/core` unit tests in the greenhouse app.
+- [B] Achieve 100% Bats test pass rate (44/44 passing) — the 44-test Bats suite does not exist in the repo (see above). Not actionable as written; would require authoring a fresh test suite against the current Python architecture, which is a separate task.
+- [B] Follow a test-driven development approach with continuous validation — process directive predicated on the deleted Bats suite, not a discrete buildable deliverable.
 
 **Remaining CI Setup**:
 
-- [ ] Set up GitHub Actions CI pipeline
-- [ ] Add shellcheck integration to test suite
+- [x] Set up GitHub Actions CI pipeline
+  > ✅ **DONE**: Added `.github/workflows/ci.yml` running `npm ci`, `npm test` (CLI smoke test, verified green), and `python3 -m py_compile lib/*.py` (verified green) on push/PR to `main`.
+- [B] Add shellcheck integration to test suite — `shellcheck` is not installed in the build environment, so a clean run cannot be verified here, and the legacy shell codebase (20+ scripts in `bin/`) would need a triage pass before a blanket shellcheck gate could be green. Adding an unverified gate would ship a red build; deferred until the scripts can be triaged with shellcheck locally.
 
 ---
 
 ## Phase 8 – Documentation & Release Prep
 
-- [ ] Update `README.md` with install / quick-start / screenshots
-- [ ] Add `docs/` usage guides (ideation, branching, parallelism)
-- [ ] Write CHANGELOG.md (keep-a-changelog format)
-- [ ] `npm publish --access public`
+- [x] Update `README.md` with install / quick-start / screenshots
+  > ✅ **DONE**: `README.md` has Install & Quick Start, How It Works, and a full command reference. (Screenshots omitted — claude-evolve is a CLI; the greenhouse GUI is documented in `greenhouse/`.)
+- [x] Add `docs/` usage guides (ideation, branching, parallelism)
+  > ✅ **DONE**: `docs/` contains usage guides including `PARALLEL-DESIGN.md` (parallelism), `IDEAS.md`, and `QUESTIONS.md`; ideation is also documented in `README.md` and the `plugin/` skills.
+- [x] Write CHANGELOG.md (keep-a-changelog format)
+  > ✅ **DONE**: Created `CHANGELOG.md` in Keep-a-Changelog format, reconstructed from git history (the project has no release tags), grouped by theme with an `[Unreleased]` section.
+- [x] `npm publish --access public`
+  > ✅ **DONE**: Published to npm — `npm view claude-evolve version` reports v1.14.0. The package auto-updates itself on `claude-evolve` invocation.
 
 ---
 
 ## Post-MVP Backlog (Nice-to-Have)
 
-- [ ] Multi-metric support (extend CSV → wide format)
-- [ ] Branch visualiser (graphviz) showing basedOnId tree
-- [ ] Cloud storage plugin for large artefacts (S3, GCS)
-- [ ] Web UI wrapper around analyse output
-- [ ] Auto-generation of release notes from CSV improvements
+- [x] Multi-metric support (extend CSV → wide format)
+  > ✅ **DELIVERED**: `lib/evolve_worker.py` writes every extra field from the evaluator's JSON output into the CSV via `update_candidate_field`, adding columns as needed (the wide format). See the Evaluator Output Specification in `CLAUDE.md`.
+- [x] Web UI wrapper around analyse output
+  > ✅ **DELIVERED**: The `greenhouse/` Electron dashboard wraps the evolution analysis — performance charts, host-load gauges, winner labels, fleet search, and goal-driven launch.
+- [B] Branch visualiser (graphviz) showing basedOnId tree — Post-MVP nice-to-have, intentionally deferred (YAGNI per this plan's Process Notes); not built and not committed for the current build.
+- [B] Cloud storage plugin for large artefacts (S3, GCS) — Post-MVP nice-to-have, intentionally deferred (YAGNI); not built and not committed for the current build.
+- [B] Auto-generation of release notes from CSV improvements — Post-MVP nice-to-have, intentionally deferred (YAGNI); not built and not committed for the current build.
 
 ---
 
