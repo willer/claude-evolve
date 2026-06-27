@@ -8,7 +8,7 @@ import * as path from 'node:path';
 import { computeStats, emptyStats } from '../core/csv';
 import { resolveProfile } from '../core/profile';
 import { TOOLS, adhocSessionName, classifyPane, sessionName, toolSessionName } from '../core/state';
-import type { Prefs, SessionState, ToolState, WorkspaceRow, WorkspaceStats } from '../core/types';
+import type { Activity, Prefs, SessionState, ToolState, WorkspaceRow, WorkspaceStats } from '../core/types';
 import type { SessionHost } from './SessionHost';
 
 interface CacheEntry {
@@ -21,7 +21,9 @@ export class Poller {
   private tools: ToolState[] = [];
   private statsCache = new Map<string, CacheEntry>();
   private paneHashes = new Map<string, number | null>();
-  private prevAsking = new Set<string>();
+  // Sessions currently in an attention state (asking | stuck) — for edge-firing
+  // the native notification once per transition into that state.
+  private prevAttention = new Set<string>();
   private timer: NodeJS.Timeout | null = null;
   private polling = false;
 
@@ -29,7 +31,7 @@ export class Poller {
     private host: SessionHost,
     private prefs: () => Prefs,
     private onUpdate: (rows: WorkspaceRow[], tools: ToolState[]) => void,
-    private onAsking: (name: string) => void,
+    private onAttention: (name: string, activity: Activity) => void,
   ) {}
 
   current(): WorkspaceRow[] {
@@ -82,8 +84,10 @@ export class Poller {
   }
 
   /** Classify one tmux session: running + pane activity, with mtime-style hash
-   *  caching for waiting-detection. notifyName non-null fires an "asking"
-   *  notification on the asking edge (evolution only — adhoc passes null). */
+   *  caching for waiting-detection. notifyName non-null fires a native
+   *  notification on the edge into an attention state — asking (a question /
+   *  permission prompt) or stuck (hit a hard wall) — evolution only; adhoc
+   *  passes null. */
   private async classifySession(
     sess: string,
     live: Set<string>,
@@ -92,17 +96,17 @@ export class Poller {
     const running = live.has(sess);
     if (!running) {
       this.paneHashes.delete(sess);
-      this.prevAsking.delete(sess);
+      this.prevAttention.delete(sess);
       return { running: false, activity: null };
     }
     const pane = await this.host.capture(sess);
     const { activity, hash } = classifyPane(pane, this.paneHashes.get(sess) ?? null);
     this.paneHashes.set(sess, hash);
-    if (activity === 'asking') {
-      if (notifyName && !this.prevAsking.has(sess)) this.onAsking(notifyName);
-      this.prevAsking.add(sess);
+    if (activity === 'asking' || activity === 'stuck') {
+      if (notifyName && !this.prevAttention.has(sess)) this.onAttention(notifyName, activity);
+      this.prevAttention.add(sess);
     } else {
-      this.prevAsking.delete(sess);
+      this.prevAttention.delete(sess);
     }
     return { running: true, activity };
   }

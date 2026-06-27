@@ -47,8 +47,12 @@ to before the profile split — verify against the screenshot harness.
   - `backtests.ts` — TS port of trading-strategies/scoring.py's "By Algorithm"
     aggregate score + qual%. Test expectations come from the python reference;
     if scoring.py's weights/caps change, change this in lockstep. The
-    equity_curves table (per-period NAV, written by backtest-all since
-    2026-06-11) is the other lockstep contract — see backtests:equity in ipc.
+    equity_curves table (per-period NAV + optional signed position %, written
+    by backtest-all since 2026-06-11; position column added 2026-06-17) is the
+    other lockstep contract — see backtests:equity in ipc. The `position`
+    series is emitted by backtest.py's --json (always, aligned 1:1 with nav)
+    and persisted by backtest-all (nullable; older runs / per-candidate
+    artifacts carry none, so navChartSvg falls back to its 2-pane layout).
   - `state.ts` — tmux pane-motion classification (working/waiting/asking) and
     the `evolve-<dir>` session naming. Both are a SHARED VOCABULARY with the
     trading-strategies TUI — change them in lockstep or the two tools stop
@@ -91,9 +95,12 @@ EG_SHOT=shots npm start   # screenshot harness (WEBTESTS.md) — side-effect-fre
 
 Tracker: `docs/PLAN.md`. v1–v4 verified against live data (core stats and
 backtest scoring both cross-checked exactly against Python references).
-v4 added the backtest dashboard (b key — streamlit By Algorithm port over
-data/backtest-results.db via sqlite3 CLI) and repo tool sessions
-(inference-all / backtest-all in greenhouse-<key> tmux). Detail/backtest
+v4 added repo tool sessions (inference-all / backtest-all in greenhouse-<key>
+tmux). Backtest scoring (the streamlit By Algorithm port over
+data/backtest-results.db via sqlite3 CLI) lives in core/backtests.ts and now
+surfaces ONLY inside each workspace's detail Backtest panel — the standalone
+"Backtests" page/button/`b` key was removed (the data is per-evolution, so it
+belongs in the detail view). Detail/backtest
 charts are now fluid — sized from the live column width (panelInnerW) and
 repainted on window resize, no baked-in pixel widths. The detail view shows
 a "Leader NAV by period" small-multiples panel (one navChartSvg per backtest
@@ -113,6 +120,24 @@ webUtils.getPathForFile — File.path is gone in Electron 39; a window-wide
 drop preventDefault stops Electron from navigating to the file:// URL). The
 "stalled" health verdict was renamed "idle" — it flags the RUNNER (claude
 process quiet >12h via CSV mtime), not the evolution search; the hover leads
-with the CSV age. Unverified (need a human): terminal typing/wheel and file
-drop on a live session. Open: equity/ artifact retention (claude-evolve
-side), per-timeframe returns table.
+with the CSV age. The detail-view backtest period table now appends a buy&hold comparison
+(single-symbol trading workspaces only): Ret (strategy total return from the
+period NAV) next to SPY B&H and <SYM> B&H, computed by the workspace:benchmark
+IPC straight from data/raw/<SYM>_1d_*.csv over each period window (SPY measured
+over the instrument's own window so differing inceptions stay comparable). It's
+retroactive (reads raw prices, no re-run) and absent when the workspace has no
+resolvable symbol. Period bounds mirror backtest-all (core/backtests.ts
+PERIOD_BOUNDS — LOCKSTEP). Terminal wheel-scroll: xterm handles the wheel
+natively (NO custom handler) and forwards it as a mouse sequence to the attached
+app. claude runs in the alternate screen with mouse tracking on, so tmux keeps
+ZERO scrollback for its pane (`history_size` 0) — the earlier copy-mode hijack
+scrolled a buffer that didn't exist and, by returning false, stopped the wheel
+ever reaching claude, so claude couldn't scroll its own conversation. tmux
+`mouse off` means tmux forwards mouse events to the app instead of grabbing them.
+The old `session:scroll` IPC / `SessionHost.scroll` / copy-mode path is deleted.
+Detail-view NAV charts (leader walk-forward + per-period) open an INTERACTIVE
+viewer (drag/shift-wheel pan, wheel/± zoom, reset) that re-slices the series so
+the Y axis autoscales and the return/CAGR/maxDD/Sharpe badge reflect the visible
+window; every other chart still uses the static enlarge. Unverified (need a
+human with a real wheel + live claude session): that claude now scrolls on wheel.
+Open: equity/ artifact retention (claude-evolve side).

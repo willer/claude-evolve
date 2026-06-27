@@ -33,7 +33,11 @@ declare global {
     greenhouse: {
       fleet: { snapshot(): Promise<FleetPayload>; refresh(): Promise<void> };
       workspace: {
-        equity(name: string, candidateId: string): Promise<{ dates: string[]; nav: number[] } | null>;
+        equity(
+          name: string,
+          candidateId: string,
+        ): Promise<{ dates: string[]; nav: number[]; position?: number[] | null } | null>;
+        benchmark(name: string): Promise<Benchmark | null>;
       };
       evolution: {
         start(name: string): Promise<void>;
@@ -50,12 +54,12 @@ declare global {
           runDate: string,
           algorithm: string,
           period: string,
-        ): Promise<{ dates: string[]; nav: number[] } | null>;
+        ): Promise<{ dates: string[]; nav: number[]; position: number[] | null } | null>;
       };
       session: {
         attach(id: string, cols: number, rows: number): Promise<{ ok: boolean }>;
         detach(id: string): Promise<void>;
-        scroll(id: string, dir: 'up' | 'down', lines: number): Promise<void>;
+        unstick(id: string): Promise<void>;
       };
       prefs: { get(): Promise<Prefs>; set(patch: Partial<Prefs>): Promise<Prefs> };
       pathForFile(file: File): string;
@@ -67,16 +71,15 @@ const api = window.greenhouse;
 
 let rows: WorkspaceRow[] = [];
 let tools: ToolState[] = [];
-let prefs: Prefs = { roots: [], starred: [], sortCol: 'score', sortDesc: true, theme: 'system' };
+let prefs: Prefs = { roots: [], starred: [], sortCol: 'score', sortDesc: true, winnerCols: ['', '', '', '', ''], theme: 'system' };
 let viewMode: 'list' | 'grid' = 'list'; // session-only — every launch starts in the list
 let view: string | null = null; // workspace detail, or null
 let toolView: string | null = null; // tool session page (inference-all / backtest-all), or null
-let btView = false; // backtest results view
-let btData: BacktestSummary | undefined; // undefined = not fetched yet (run the bt view shows)
-let btLoading = false;
 let btLatest: BacktestSummary | undefined; // latest run, joined into the per-workspace stats
+let btLoaded = false; // have we fetched the summary at least once (distinguishes "no DB" from "not yet loaded")
 let selectedName: string | null = null; // keyboard cursor, stable across pushes
 let peekFor: string | null = null; // quick-status popover target
+let searchQuery = ''; // fleet name/leader filter ('/' focuses the search box)
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -203,21 +206,93 @@ function headlineMetrics(c: Candidate): Array<{ k: string; v: string; cls: strin
 
 // ── charts (inline SVG) ──────────────────────────────────────────────────────
 
-function sparklineSvg(values: number[], w: number, h: number, color = 'var(--green)'): string {
+// Panel-colored outline drawn behind axis glyphs (paint-order: stroke) so labels
+// stay legible where a line or gridline passes through them.
+const HALO = 'paint-order: stroke; stroke: var(--panel); stroke-width: 3px; stroke-linejoin: round;';
+
+// Compact Y-axis label: enough precision to tell values apart without overflowing
+// the gutter (scores can be Sharpe-like ones or six-figure NAVs).
+function axisNum(v: number): string {
+  const a = Math.abs(v);
+  if (a === 0) return '0';
+  if (a >= 1000) return v.toExponential(1);
+  if (a >= 100) return v.toFixed(0);
+  if (a >= 1) return v.toFixed(2);
+  return v.toFixed(3);
+}
+
+// Left gutter labels (min/max) on the value axis — shared by the spark/multiline
+// charts when enlarged. The leftPad is the gutter width the caller reserves.
+function yAxisGutter(
+  w: number,
+  leftPad: number,
+  x0: number,
+  yOf: (v: number) => number,
+  marks: number[],
+): string {
+  const yLab = (yy: number, t: string) =>
+    `<text x="${leftPad - 4}" y="${(yy + 3).toFixed(1)}" style="fill: var(--dim); ${HALO}" font-size="9" text-anchor="end">${t}</text>`;
+  const gLine = (yy: number) =>
+    `<line x1="${x0}" y1="${yy.toFixed(1)}" x2="${(w - 2).toFixed(1)}" y2="${yy.toFixed(1)}" style="stroke: var(--border)" stroke-dasharray="1,3" opacity="0.6"/>`;
+  return marks.map((v) => gLine(yOf(v)) + yLab(yOf(v), axisNum(v))).join('');
+}
+
+// Bottom (generation) axis for the spark/multiline charts when enlarged: an
+// axis baseline plus a handful of evenly-spaced "gen N" labels across the plot
+// width. gens[i] is the generation number at plot position i (aligned 1:1 with
+// the series). Endpoints anchor inward so they don't clip the chart edges.
+function xAxisGen(
+  w: number,
+  x0: number,
+  baseY: number,
+  labelY: number,
+  xOf: (i: number) => number,
+  gens: number[],
+): string {
+  const n = gens.length;
+  if (n < 2) return '';
+  const maxLabels = Math.max(2, Math.floor((w - 2 - x0) / 44));
+  const step = Math.max(1, Math.ceil((n - 1) / (maxLabels - 1)));
+  const idxs: number[] = [];
+  for (let i = 0; i < n; i += step) idxs.push(i);
+  if (idxs[idxs.length - 1] !== n - 1) idxs.push(n - 1);
+  let out = `<line x1="${x0}" y1="${baseY.toFixed(1)}" x2="${(w - 2).toFixed(1)}" y2="${baseY.toFixed(1)}" style="stroke: var(--border)"/>`;
+  for (const i of idxs) {
+    const anchor = i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle';
+    out += `<text x="${xOf(i).toFixed(1)}" y="${labelY}" style="fill: var(--dim); ${HALO}" font-size="9" text-anchor="${anchor}">${gens[i]}</text>`;
+  }
+  return out;
+}
+
+function sparklineSvg(
+  values: number[],
+  w: number,
+  h: number,
+  color = 'var(--green)',
+  axes = false,
+  xLabels?: number[],
+): string {
   if (values.length < 2) {
     return `<svg class="spark" width="${w}" height="${h}"><line x1="0" y1="${h / 2}" x2="${w}" y2="${h / 2}" style="stroke: var(--border)" stroke-dasharray="3,3"/></svg>`;
   }
   const min = Math.min(...values);
   const max = Math.max(...values);
   const span = max - min || 1;
-  const pts = values.map((v, i) => {
-    const x = (i / (values.length - 1)) * (w - 4) + 2;
-    const y = h - 3 - ((v - min) / span) * (h - 6);
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  });
+  const leftPad = axes ? 46 : 0;
+  const bottomPad = axes ? 16 : 0;
+  const x0 = leftPad + 2;
+  const plotW = w - 4 - leftPad;
+  const x = (i: number) => x0 + (i / (values.length - 1)) * plotW;
+  const y = (v: number) => h - 3 - bottomPad - ((v - min) / span) * (h - 6 - bottomPad);
+  const pts = values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`);
   const last = pts[pts.length - 1].split(',');
+  const axisG = axes
+    ? yAxisGutter(w, leftPad, x0, y, max === min ? [max] : [max, min]) +
+      (xLabels ? xAxisGen(w, x0, h - 3 - bottomPad, h - 4, x, xLabels) : '')
+    : '';
   return (
     `<svg class="spark" width="${w}" height="${h}">` +
+    axisG +
     `<polyline points="${pts.join(' ')}" fill="none" style="stroke: ${color}" stroke-width="1.5"/>` +
     `<circle cx="${last[0]}" cy="${last[1]}" r="2.2" style="fill: ${color}"/>` +
     `</svg>`
@@ -233,18 +308,26 @@ interface Series {
 }
 
 /** Multi-line chart over generation positions; series may have gaps (nulls). */
-function multiLineSvg(series: Series[], w: number, h: number): string {
+function multiLineSvg(series: Series[], w: number, h: number, axes = false, xLabels?: number[]): string {
   const all = series.flatMap((s) => s.values.filter((v): v is number => v !== null));
   const n = Math.max(...series.map((s) => s.values.length));
   if (all.length < 2 || n < 2) return '';
   const min = Math.min(...all, 0);
   const max = Math.max(...all, 0);
   const span = max - min || 1;
-  const x = (i: number) => (i / (n - 1)) * (w - 4) + 2;
-  const y = (v: number) => h - 3 - ((v - min) / span) * (h - 6);
+  const leftPad = axes ? 46 : 0;
+  const bottomPad = axes ? 16 : 0;
+  const x0 = leftPad + 2;
+  const plotW = w - 4 - leftPad;
+  const x = (i: number) => x0 + (i / (n - 1)) * plotW;
+  const y = (v: number) => h - 3 - bottomPad - ((v - min) / span) * (h - 6 - bottomPad);
   const zero = y(0);
   let out = `<svg class="spark" width="${w}" height="${h}">`;
-  out += `<line x1="0" y1="${zero.toFixed(1)}" x2="${w}" y2="${zero.toFixed(1)}" style="stroke: var(--border)" stroke-dasharray="3,3"/>`;
+  if (axes) out += yAxisGutter(w, leftPad, x0, y, [max, min].filter((v) => v !== 0));
+  if (axes && xLabels) out += xAxisGen(w, x0, h - 3 - bottomPad, h - 4, x, xLabels);
+  out += `<line x1="${axes ? x0 : 0}" y1="${zero.toFixed(1)}" x2="${axes ? (w - 2).toFixed(1) : w}" y2="${zero.toFixed(1)}" style="stroke: var(--border)" stroke-dasharray="3,3"/>`;
+  if (axes)
+    out += `<text x="${leftPad - 4}" y="${(zero + 3).toFixed(1)}" style="fill: var(--dim); ${HALO}" font-size="9" text-anchor="end">0</text>`;
   for (const s of series) {
     const pts = s.values
       .map((v, i) => (v === null ? null : `${x(i).toFixed(1)},${y(v).toFixed(1)}`))
@@ -259,7 +342,10 @@ function multiLineSvg(series: Series[], w: number, h: number): string {
 
 // ── NAV chart (out-of-sample equity artifact) ────────────────────────────────
 
-type Equity = { dates: string[]; nav: number[] };
+// position: signed % of portfolio (long +, short −), aligned 1:1 with nav, or
+// absent (undefined/null) for the per-candidate artifact and pre-position runs.
+type Equity = { dates: string[]; nav: number[]; position?: number[] | null };
+type Benchmark = { symbol: string; periods: Record<string, { instrument: number | null; spy: number | null }> };
 
 // One fetch per workspace/candidate per session; null (no artifact) is cached
 // too — a candidate's artifact is written once at evaluation time, and a new
@@ -285,6 +371,30 @@ function equityFor(ws: string, candidateId: string): Equity | null | undefined {
   return undefined;
 }
 
+/** Annualized Sharpe from a daily NAV series: mean/std of daily returns × √252.
+ *  null when too few points or zero variance. Computed over whatever slice it's
+ *  given, so the interactive zoom reports the Sharpe of the *visible* window. */
+function annualizedSharpe(nav: number[]): number | null {
+  const rets: number[] = [];
+  for (let i = 1; i < nav.length; i++) if (nav[i - 1] > 0) rets.push(nav[i] / nav[i - 1] - 1);
+  if (rets.length < 2) return null;
+  const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
+  const variance = rets.reduce((a, b) => a + (b - mean) ** 2, 0) / (rets.length - 1);
+  const sd = Math.sqrt(variance);
+  return sd > 0 ? (mean / sd) * Math.sqrt(252) : null;
+}
+
+/** Sub-range an Equity to [i0, i1] inclusive — the unit of interactive zoom/pan.
+ *  Slicing and re-rendering autoscales Y and recomputes the badge stats to the
+ *  visible window, since navChartSvg derives everything from the array it's given. */
+function sliceEquity(eq: Equity, i0: number, i1: number): Equity {
+  return {
+    dates: eq.dates.slice(i0, i1 + 1),
+    nav: eq.nav.slice(i0, i1 + 1),
+    position: eq.position ? eq.position.slice(i0, i1 + 1) : eq.position,
+  };
+}
+
 /** NAV line over time with an underwater (drawdown) pane and year gridlines —
  *  the at-a-glance view of big drawdowns and stalled NAV. With axes:true it
  *  adds a left gutter of %-return-vs-start labels (Y) and start/end dates (X) —
@@ -294,13 +404,18 @@ function navChartSvg(eq: Equity, w: number, h: number, opts: { axes?: boolean } 
   const { dates, nav } = eq;
   if (nav.length < 2) return '';
   const axes = opts.axes ?? false;
-  // Panel-colored outline drawn behind glyphs (paint-order: stroke) so labels
-  // stay legible where the NAV line or gridlines pass through them.
-  const HALO = 'paint-order: stroke; stroke: var(--panel); stroke-width: 3px; stroke-linejoin: round;';
   const leftPad = axes ? 46 : 0;
   const labelH = axes ? 16 : 12;
-  const navH = Math.round((h - labelH) * 0.7);
-  const ddH = h - labelH - navH - 3;
+  const plotH = h - labelH;
+  // Optional middle pane: signed position (% of portfolio, long +/short −),
+  // mirroring backtest.py's 3-panel chart. Only when the curve carries a 1:1
+  // position series (backtest-all equity_curves since 2026-06-17); the
+  // per-candidate artifact and older runs omit it, so the chart stays 2-pane.
+  const position = eq.position && eq.position.length === nav.length ? eq.position : null;
+  const navH = Math.round(plotH * (position ? 0.54 : 0.7));
+  const posH = position ? Math.round(plotH * 0.2) : 0;
+  const ddTop = position ? navH + posH + 6 : navH + 3; // 3px gap above each lower pane
+  const ddH = plotH - ddTop;
   const x0 = leftPad + 2;
   const plotW = w - 4 - leftPad;
   const x = (i: number) => x0 + (i / (nav.length - 1)) * plotW;
@@ -318,24 +433,46 @@ function navChartSvg(eq: Equity, w: number, h: number, opts: { axes?: boolean } 
     return v / runMax - 1;
   });
   const minDd = Math.min(...dd, -0.0001);
-  const yDd = (d: number) => navH + 3 + (d / minDd) * (ddH - 2);
+  const yDd = (d: number) => ddTop + (d / minDd) * (ddH - 2);
 
-  // Year boundaries → gridlines + labels.
+  // Time axis: walk calendar-month boundaries, then pick a stride (months) whose
+  // tick count fits the plot width — so a wide/zoomed chart labels every month
+  // while a narrow tile falls back to quarters or years. Labels land on
+  // calendar-aligned positions (Jan, Apr, …) and carry the year on January (and
+  // on the first label) so context survives even when most ticks are bare months.
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const mb: Array<{ i: number; y: number; m: number }> = [];
+  let prevYm = '';
+  for (let i = 0; i < dates.length; i++) {
+    const ym = dates[i].slice(0, 7);
+    if (ym !== prevYm) {
+      mb.push({ i, y: +dates[i].slice(0, 4), m: +dates[i].slice(5, 7) });
+      prevYm = ym;
+    }
+  }
+  const monthsAbs = (b: { y: number; m: number }) => b.y * 12 + (b.m - 1);
+  const maxLabels = Math.max(2, Math.floor(plotW / 42));
+  const STRIDES = [1, 2, 3, 6, 12, 24, 36, 60, 120, 240];
+  let stride = STRIDES[STRIDES.length - 1];
+  for (const s of STRIDES) {
+    if (mb.filter((b) => monthsAbs(b) % s === 0).length <= maxLabels) {
+      stride = s;
+      break;
+    }
+  }
+  const yearly = stride >= 12;
   let ticks = '';
   let labels = '';
-  let prevYear = '';
-  let nYearLabels = 0;
-  for (let i = 0; i < dates.length; i++) {
-    const year = dates[i].slice(0, 4);
-    if (year !== prevYear) {
-      if (prevYear !== '') {
-        const tx = x(i).toFixed(1);
-        ticks += `<line x1="${tx}" y1="0" x2="${tx}" y2="${navH + ddH + 3}" style="stroke: var(--border)" stroke-dasharray="2,3"/>`;
-        labels += `<text x="${tx}" y="${h - 2}" style="fill: var(--dim); ${HALO}" font-size="9" text-anchor="middle">${year}</text>`;
-        nYearLabels++;
-      }
-      prevYear = year;
-    }
+  let nLabels = 0;
+  for (const b of mb) {
+    if (monthsAbs(b) % stride !== 0) continue;
+    const tx = x(b.i).toFixed(1);
+    let txt: string;
+    if (yearly) txt = String(b.y);
+    else txt = b.m === 1 || nLabels === 0 ? `${MONTHS[b.m - 1]} ’${String(b.y).slice(2)}` : MONTHS[b.m - 1];
+    ticks += `<line x1="${tx}" y1="0" x2="${tx}" y2="${plotH}" style="stroke: var(--border)" stroke-dasharray="2,3"/>`;
+    labels += `<text x="${tx}" y="${h - 2}" style="fill: var(--dim); ${HALO}" font-size="9" text-anchor="middle">${txt}</text>`;
+    nLabels++;
   }
 
   // Axis gutter: %-return-vs-start on Y, period endpoints on X (single-year
@@ -350,25 +487,67 @@ function navChartSvg(eq: Equity, w: number, h: number, opts: { axes?: boolean } 
     axisG += gLine(yNav(max)) + yLab(yNav(max), pct(max));
     axisG += yLab(yNav(min), pct(min));
     if (base > min && base < max) axisG += gLine(yNav(base)) + yLab(yNav(base), '0%');
-    axisG += yLab(navH + 3 + ddH - 2, `${(minDd * 100).toFixed(0)}%`); // worst drawdown
-    if (nYearLabels === 0) {
-      axisG += `<text x="${x0}" y="${h - 2}" style="fill: var(--dim); ${HALO}" font-size="9" text-anchor="start">${dates[0].slice(0, 7)}</text>`;
-      axisG += `<text x="${(w - 2).toFixed(1)}" y="${h - 2}" style="fill: var(--dim); ${HALO}" font-size="9" text-anchor="end">${dates[dates.length - 1].slice(0, 7)}</text>`;
-    }
+    axisG += yLab(ddTop + ddH - 2, `${(minDd * 100).toFixed(0)}%`); // worst drawdown
+    // Exact series bounds, top-left (mirrors the return badge top-right). The
+    // interior ticks land on calendar months, so the data may start/end
+    // mid-month — these full ISO dates make the precise window unambiguous in
+    // the zoomed view. Halo keeps them legible over the NAV line.
+    axisG += `<text x="${x0}" y="11" style="fill: var(--dim); ${HALO}" font-size="10" text-anchor="start">${dates[0]} → ${dates[dates.length - 1]}</text>`;
   }
 
   const navPts = nav.map((v, i) => `${x(i).toFixed(1)},${yNav(v).toFixed(1)}`).join(' ');
   const ddPts = dd.map((d, i) => `${x(i).toFixed(1)},${yDd(d).toFixed(1)}`).join(' ');
-  const ddArea = `${x0},${(navH + 3).toFixed(1)} ${ddPts} ${(w - 2).toFixed(1)},${(navH + 3).toFixed(1)}`;
+  const ddArea = `${x0},${ddTop.toFixed(1)} ${ddPts} ${(w - 2).toFixed(1)},${ddTop.toFixed(1)}`;
+
+  // Position pane: signed exposure filled green (long) above / red (short) below
+  // a zero baseline, with the exposure line on top — same read as backtest.py.
+  let posG = '';
+  if (position) {
+    const posTop = navH + 3;
+    const posZero = posTop + posH / 2;
+    const posMax = Math.max(1, ...position.map((p) => Math.abs(p)));
+    const yPos = (p: number) => posZero - (Math.max(-posMax, Math.min(posMax, p)) / posMax) * (posH / 2 - 2);
+    const area = (clamp: (p: number) => number) =>
+      `${x0},${posZero.toFixed(1)} ` +
+      position.map((p, i) => `${x(i).toFixed(1)},${yPos(clamp(p)).toFixed(1)}`).join(' ') +
+      ` ${(w - 2).toFixed(1)},${posZero.toFixed(1)}`;
+    const posLine = position.map((p, i) => `${x(i).toFixed(1)},${yPos(p).toFixed(1)}`).join(' ');
+    posG =
+      `<polygon points="${area((p) => Math.max(0, p))}" style="fill: var(--green)" opacity="0.30"/>` +
+      `<polygon points="${area((p) => Math.min(0, p))}" style="fill: var(--red)" opacity="0.30"/>` +
+      `<line x1="${x0}" y1="${posZero.toFixed(1)}" x2="${(w - 2).toFixed(1)}" y2="${posZero.toFixed(1)}" style="stroke: var(--border)" stroke-dasharray="3,3"/>` +
+      `<polyline points="${posLine}" fill="none" style="stroke: var(--text)" stroke-width="1" opacity="0.7"/>` +
+      `<text x="${(w - 4).toFixed(1)}" y="${(posTop + 9).toFixed(1)}" style="fill: var(--dim); ${HALO}" font-size="9" text-anchor="end">position ±${posMax.toFixed(0)}%</text>`;
+    if (axes) {
+      const yLabP = (y: number, t: string) =>
+        `<text x="${leftPad - 4}" y="${(y + 3).toFixed(1)}" style="fill: var(--dim); ${HALO}" font-size="9" text-anchor="end">${t}</text>`;
+      posG += yLabP(yPos(posMax), `+${posMax.toFixed(0)}%`) + yLabP(posZero, '0%');
+    }
+  }
 
   const total = nav[nav.length - 1] / nav[0] - 1;
+  // Sharpe + CAGR round out the visible-window stats (total return + maxDD) in
+  // the zoomed view; omitted at tile size where the badge has no room. CAGR is
+  // calendar-time annualized over the visible span, skipped for spans under a
+  // month where annualizing a handful of days is just noise.
+  const sharpe = axes ? annualizedSharpe(nav) : null;
+  const sharpeTxt = sharpe !== null ? ` · Sharpe ${sharpe.toFixed(2)}` : '';
+  let cagrTxt = '';
+  if (axes && nav[0] > 0) {
+    const years = (new Date(dates[dates.length - 1]).getTime() - new Date(dates[0]).getTime()) / 31_557_600_000;
+    if (years > 0.08) {
+      const cagr = Math.pow(nav[nav.length - 1] / nav[0], 1 / years) - 1;
+      cagrTxt = ` · CAGR ${cagr >= 0 ? '+' : ''}${(cagr * 100).toFixed(0)}%`;
+    }
+  }
   return (
     `<svg class="spark" width="${w}" height="${h}">` +
     ticks +
     axisG +
     `<polyline points="${navPts}" fill="none" style="stroke: var(--cyan)" stroke-width="1.5"/>` +
+    posG +
     `<polygon points="${ddArea}" style="fill: var(--red)" opacity="0.45"/>` +
-    `<text x="${w - 4}" y="11" style="fill: var(--dim); ${HALO}" font-size="10" text-anchor="end"><tspan style="fill: ${total >= 0 ? 'var(--green)' : 'var(--red)'}" font-weight="700">${total >= 0 ? '+' : ''}${(total * 100).toFixed(0)}%</tspan> · maxDD ${(minDd * 100).toFixed(0)}%</text>` +
+    `<text x="${w - 4}" y="11" style="fill: var(--dim); ${HALO}" font-size="10" text-anchor="end"><tspan style="fill: ${total >= 0 ? 'var(--green)' : 'var(--red)'}" font-weight="700">${total >= 0 ? '+' : ''}${(total * 100).toFixed(0)}%</tspan>${cagrTxt} · maxDD ${(minDd * 100).toFixed(0)}%${sharpeTxt}</text>` +
     labels +
     `</svg>`
   );
@@ -389,7 +568,7 @@ function navPanelHtml(ws: string, candidateId: string, w: number, h: number): st
  *  curves run through the latest data (fresher than the walk-forward artifact).
  *  Curves load lazily via btEquityFor, repainting as each arrives. Empty string
  *  when the workspace has no entry in the latest backtest run. */
-function navByPeriodPanel(name: string, cw: number): string {
+function navByPeriodPanel(name: string, cw: number, tag: string): string {
   const t = latestBtTable();
   if (!btLatest || !t || !btAlgoFor(name)) return '';
   const runDate = btLatest.runDate;
@@ -404,12 +583,21 @@ function navByPeriodPanel(name: string, cw: number): string {
           ? `<div class="desc" style="color: var(--dim); height: 96px">loading…</div>`
           : eq === null
             ? `<div class="desc" style="color: var(--dim); height: 96px">no curve</div>`
-            : navChartSvg(eq, cellW, 96);
+            : registerNavZoom(`nav-period-${p}`, eq) +
+              zoomable(
+                `nav-period-${p}`,
+                (w, ht, zoom) => {
+                  const e2 = btEquityFor(runDate, name, p);
+                  return e2 ? navChartSvg(e2, w, ht, { axes: zoom }) : '';
+                },
+                cellW,
+                96,
+              );
       return `<figure class="nav-fig" style="width:${cellW}px"><figcaption>${esc(PERIOD_LABELS[p] ?? p)}</figcaption>${body}</figure>`;
     })
     .join('');
   return `<div class="panel">
-      <h3>Leader NAV by period — backtest run ${esc(runDate)}</h3>
+      <h3>Backtest NAV by period — run ${esc(runDate)}${tag}</h3>
       <div class="nav-grid" style="gap:${gap}px">${tiles}</div>
     </div>`;
 }
@@ -438,6 +626,27 @@ function latestBtTable(): { algos: BacktestAlgo[]; periods: string[] } | null {
 }
 
 /** Latest-run backtest entry for a workspace (dir name == algorithm), with rank. */
+// Pull the candidate id (e.g. gen756-008) out of a backtest champion label like
+// "1d-fas gen756-008"; fall back to the last token for baselines/odd labels.
+function candidateIdOf(algoName: string): string | null {
+  const m = algoName.match(/gen\d+-\d+/i);
+  if (m) return m[0];
+  return algoName.trim().split(/\s+/).pop() || null;
+}
+
+// Every leader/backtest pane carries one of these so it's never ambiguous
+// whether you're looking at the live champion or one scored earlier:
+//   'winner'   — the current evolution leader (green)
+//   'previous' — backtest-all scored an older champion than today's leader (yellow)
+//   'unknown'  — no completed leader yet to compare against (neutral)
+function winnerTag(state: 'winner' | 'previous' | 'unknown', tested?: string | null, leader?: string | null): string {
+  if (state === 'winner')
+    return `<span class="tag tag-winner" title="Shows the current evolution leader">★ current winner</span>`;
+  if (state === 'previous')
+    return `<span class="tag tag-prev" title="Shows ${esc(tested ?? 'an earlier champion')}, not the current leader ${esc(leader ?? '')} — re-run backtest-all to refresh">⚠ previous winner${tested ? ` · ${esc(tested)}${leader ? ` (now ${esc(leader)})` : ''}` : ''}</span>`;
+  return `<span class="tag tag-unknown" title="Backtested champion — no completed evolution leader yet to compare">tested${tested ? ` ${esc(tested)}` : ''}</span>`;
+}
+
 function btAlgoFor(name: string): { algo: BacktestAlgo; rank: number } | null {
   const t = latestBtTable();
   if (!t) return null;
@@ -445,8 +654,37 @@ function btAlgoFor(name: string): { algo: BacktestAlgo; rank: number } | null {
   return i === -1 ? null : { algo: t.algos[i], rank: i + 1 };
 }
 
-async function loadLatestBacktests(): Promise<void> {
-  btLatest = await api.backtests.summary();
+// Re-reads the latest backtest-all run from sqlite. Called at startup and on
+// each detail open, so a long-open app picks up new daily runs without a
+// restart — but NOT on the fleet poll: switching the run out from under a
+// static, open detail panel is what made its backtest charts vanish mid-run.
+//
+// requireAlgo (the workspace being opened) guards the other half of that bug:
+// backtest-all writes a run incrementally, so the newest run can already be
+// "latest" (>10 algos) while still missing this workspace. Adopting it then
+// would blank the workspace's panels (btAlgoFor → null) until the run catches
+// up. So when the candidate run lacks requireAlgo but the current run has it,
+// keep the current (complete) run and let a later open pick up the finished one.
+async function loadLatestBacktests(requireAlgo?: string): Promise<void> {
+  const next = await api.backtests.summary();
+  if (!next) {
+    // DB momentarily unavailable (e.g. mid-write) — never clobber a good run.
+    if (!btLoaded) {
+      btLoaded = true;
+      render();
+    }
+    return;
+  }
+  if (
+    requireAlgo &&
+    btLatest &&
+    !next.rows.some((r) => r.algorithm === requireAlgo) &&
+    btLatest.rows.some((r) => r.algorithm === requireAlgo)
+  )
+    return;
+  if (btLoaded && next.runDate === btLatest?.runDate) return; // same run, nothing new
+  btLoaded = true;
+  btLatest = next;
   render();
 }
 
@@ -466,7 +704,6 @@ function btEquityFor(runDate: string, algo: string, period: string): Equity | nu
       .then((d) => {
         btEquityCache.set(key, d);
         btEquityPending.delete(key);
-        btDirty = true;
         render();
       })
       .catch(() => btEquityPending.delete(key));
@@ -474,29 +711,69 @@ function btEquityFor(runDate: string, algo: string, period: string): Equity | nu
   return undefined;
 }
 
-function btNavCellHtml(runDate: string, algo: string, period: string, w: number): string {
-  const eq = btEquityFor(runDate, algo, period);
-  if (eq === undefined) return `<div class="desc" style="color: var(--dim)">loading…</div>`;
-  if (eq === null)
-    return `<div class="desc" style="color: var(--dim)">no NAV series for this run — backtest-all saves per-period curves since the 2026-06-11 update</div>`;
-  return navChartSvg(eq, w, 165, { axes: true });
+// Buy & hold benchmarks per workspace, lazily fetched and cached (prices change
+// at most daily; a re-poll never invalidates them mid-view). null = no price
+// data / not a single-symbol trading workspace; undefined = still loading.
+const benchmarkCache = new Map<string, Benchmark | null>();
+const benchmarkPending = new Set<string>();
+
+function benchmarkFor(name: string): Benchmark | null | undefined {
+  if (benchmarkCache.has(name)) return benchmarkCache.get(name);
+  if (!benchmarkPending.has(name)) {
+    benchmarkPending.add(name);
+    void api.workspace
+      .benchmark(name)
+      .then((d) => {
+        benchmarkCache.set(name, d);
+        benchmarkPending.delete(name);
+        render();
+      })
+      .catch(() => benchmarkPending.delete(name));
+  }
+  return undefined;
 }
 
 const BT_NUM = (v: number | null, digits: number, suffix = ''): string =>
   v === null || v === undefined ? '—' : `${v.toFixed(digits)}${suffix}`;
 
+// Buy&hold / total-return cell: signed percent with pos/neg colour.
+const BT_PCT = (v: number | null | undefined): string =>
+  v === null || v === undefined
+    ? '<td class="num">—</td>'
+    : `<td class="num ${v >= 0 ? 'pos' : 'neg'}">${(v * 100).toFixed(1)}%</td>`;
+
 /** Per-period results table for one algorithm; rows with data toggle their
- *  period's NAV chart. Shared by the backtests view and the detail panel. */
-function btPeriodTableHtml(a: BacktestAlgo, periods: string[], runDate: string, chartW: number): string {
+ *  period's NAV chart. Shared by the backtests view and the detail panel.
+ *  Passing `returns` (detail panel only) appends buy&hold CAGR for SPY and for
+ *  the traded instrument — annualized to sit in the same units as the CAGR
+ *  column, the "did it beat just holding?" check against the strategy's CAGR. */
+function btPeriodTableHtml(
+  a: BacktestAlgo,
+  periods: string[],
+  runDate: string,
+  chartW: number,
+  returns?: { bh: Benchmark | null | undefined },
+): string {
+  const sym = returns?.bh?.symbol ?? 'ETF';
+  const cols = 7 + (returns ? 2 : 0);
+  const retHead = returns
+    ? `<th class="num" title="Buy &amp; hold SPY over the same window, annualized (CAGR) — directly comparable to the strategy CAGR column">SPY B&H</th>` +
+      `<th class="num" title="Buy &amp; hold ${esc(sym)} over the same window, annualized (CAGR) — directly comparable to the strategy CAGR column">${esc(sym)} B&H</th>`
+    : '';
   const head =
     `<tr><th>Period</th><th class="num">CAGR</th><th class="num">Pain</th>` +
-    `<th class="num">AA/P</th><th class="num">Sharpe</th><th>Risk</th><th class="num">Turnover</th></tr>`;
+    `<th class="num">AA/P</th><th class="num">Sharpe</th><th>Risk</th><th class="num">Turnover</th>${retHead}</tr>`;
+  const retCells = (p: string): string => {
+    if (!returns) return '';
+    const bp = returns.bh?.periods[p];
+    return BT_PCT(bp?.spy) + BT_PCT(bp?.instrument);
+  };
   const body = periods
     .map((p) => {
       const r = a.periods[p];
       const label = esc(PERIOD_LABELS[p] ?? p);
       if (!r)
-        return `<tr><td>${label}</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td>N/A</td><td class="num">—</td></tr>`;
+        return `<tr><td>${label}</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td>N/A</td><td class="num">—</td>${retCells(p)}</tr>`;
       const expanded = btExpanded.has(`${a.algorithm}|${p}`);
       const cagr = r.cagr === null ? null : r.cagr * 100;
       const badRisk = r.achieved_risk === 'bad' || r.achieved_risk === 'ERROR';
@@ -508,9 +785,22 @@ function btPeriodTableHtml(a: BacktestAlgo, periods: string[], runDate: string, 
         <td class="num">${BT_NUM(r.sharpe, 2)}</td>
         <td class="${badRisk ? 'risk-bad' : ''}">${esc(r.achieved_risk ?? '—')}</td>
         <td class="num">${BT_NUM(r.turnover, 1, 'x')}</td>
+        ${retCells(p)}
       </tr>`;
       const chart = expanded
-        ? `<tr class="bt-chart"><td colspan="7">${btNavCellHtml(runDate, a.algorithm, p, chartW)}</td></tr>`
+        ? `<tr class="bt-chart"><td colspan="${cols}">${zoomable(
+            `bt-${a.algorithm}-${p}`,
+            (w, h) => {
+              const eq = btEquityFor(runDate, a.algorithm, p);
+              if (eq === undefined)
+                return `<div class="desc" style="color: var(--dim)">loading…</div>`;
+              if (eq === null)
+                return `<div class="desc" style="color: var(--dim)">no NAV series for this run — backtest-all saves per-period curves since the 2026-06-11 update</div>`;
+              return navChartSvg(eq, w, h, { axes: true });
+            },
+            chartW,
+            165,
+          )}</td></tr>`
         : '';
       return row + chart;
     })
@@ -525,32 +815,46 @@ function btToggleClick(e: MouseEvent): void {
   const key = `${el.dataset.btAlgo}|${el.dataset.btPeriod}`;
   if (btExpanded.has(key)) btExpanded.delete(key);
   else btExpanded.add(key);
-  btDirty = true;
   render();
 }
 
 // ── sorting ──────────────────────────────────────────────────────────────────
 
-const ACTIVITY_RANK: Record<string, number> = { asking: 3, waiting: 2, working: 1 };
+const ACTIVITY_RANK: Record<string, number> = { stuck: 4, asking: 3, waiting: 2, working: 1 };
 const HEALTH_RANK: Record<Health['level'], number> = { error: 4, failing: 3, idle: 2, plateau: 1, good: 0 };
 
 const SORTS: Record<string, (r: WorkspaceRow) => number | string | null> = {
   name: (r) => r.name.toLowerCase(),
   score: (r) => r.stats.leader?.performance ?? null,
-  bt: (r) => btAlgoFor(r.name)?.algo.score ?? null,
   updated: (r) => r.csvMtimeMs,
   state: (r) => (r.session.running ? ACTIVITY_RANK[r.session.activity ?? 'working'] : 0),
-  gen: (r) => r.stats.latestGen,
   gens: (r) => r.stats.gensSinceTop,
   rate: (r) => r.stats.recentSuccessRate,
   health: (r) => HEALTH_RANK[healthOf(r).level],
 };
 
+// Case-insensitive substring match over name + leader id + leader description.
+function matchesSearch(r: WorkspaceRow): boolean {
+  if (!searchQuery) return true;
+  const hay = `${r.name} ${r.stats.leader?.id ?? ''} ${r.stats.leader?.description ?? ''}`.toLowerCase();
+  return hay.includes(searchQuery);
+}
+
+// Resolve a sort-column id to its comparator. Winner columns sort on the
+// leader's value for an evaluator metric, addressed as `metric:<col>`.
+function sortKey(col: string): (r: WorkspaceRow) => number | string | null {
+  if (col.startsWith('metric:')) {
+    const m = col.slice('metric:'.length);
+    return (r) => r.stats.leader?.metrics[m] ?? null;
+  }
+  return SORTS[col] ?? SORTS.score;
+}
+
 function sorted(): WorkspaceRow[] {
-  const key = SORTS[prefs.sortCol] ?? SORTS.score;
+  const key = sortKey(prefs.sortCol);
   const dir = prefs.sortDesc ? -1 : 1;
   // Starred first, missing values last regardless of direction.
-  return [...rows].sort((a, b) => {
+  return [...rows].filter(matchesSearch).sort((a, b) => {
     if (a.starred !== b.starred) return a.starred ? -1 : 1;
     const va = key(a);
     const vb = key(b);
@@ -574,14 +878,20 @@ async function setSort(col: string): Promise<void> {
 
 // ── shared row bits ──────────────────────────────────────────────────────────
 
-function sessBadge(s: SessionState): string {
+// sessId enables the 'stuck' badge to act as an unstick button (sends Esc +
+// "continue please" + Enter to that tmux session). Omit it for read-only badges.
+function sessBadge(s: SessionState, sessId?: string): string {
   if (!s.running) return `<span class="badge stopped">stopped</span>`;
   const a = s.activity ?? 'working';
-  return `<span class="badge ${a}">${a === 'asking' ? '❓ asking' : a}</span>`;
+  if (a === 'stuck' && sessId) {
+    return `<button class="badge stuck" data-unstick="${esc(sessId)}" title="Nudge it: sends Esc + 'continue please' + Enter to the session">⚠ unstick</button>`;
+  }
+  const label = a === 'asking' ? '❓ asking' : a === 'stuck' ? '⚠ stuck' : a;
+  return `<span class="badge ${a}">${label}</span>`;
 }
 
 function badge(r: WorkspaceRow): string {
-  return sessBadge(r.session);
+  return sessBadge(r.session, sessionName(r.name));
 }
 
 // Evolution / adhoc action buttons, shared by list and grid. No Attach button —
@@ -603,9 +913,11 @@ function adhocButtons(r: WorkspaceRow): string {
 function renderTotals(): void {
   const running = rows.filter((r) => r.session.running).length;
   const asking = rows.filter((r) => r.session.activity === 'asking').length;
+  const stuck = rows.filter((r) => r.session.activity === 'stuck').length;
   const counts: Record<string, number> = {};
   for (const r of rows) counts[healthOf(r).level] = (counts[healthOf(r).level] ?? 0) + 1;
   const parts = [`<b>${rows.length}</b> workspaces`, `<b>${running}</b> running`];
+  if (stuck) parts.push(`<span class="t-red"><b>${stuck}</b> stuck</span>`);
   if (asking) parts.push(`<span class="t-magenta"><b>${asking}</b> asking</span>`);
   for (const [level, cls] of [
     ['error', 't-red'],
@@ -618,6 +930,104 @@ function renderTotals(): void {
   $('totals').innerHTML = parts.join(' · ');
 }
 
+// ── host load gauges (header) ────────────────────────────────────────────────
+// Fed by the main process on the system:update channel (own cadence, separate
+// from the fleet poll) so the gauges tick without re-rendering the grid.
+interface SysSample {
+  cpu: number;
+  load: number;
+  loadRaw: number;
+  mem: number;
+  cores: number;
+}
+const SYS_HISTORY = 90;
+const sysCpu: number[] = [];
+const sysLoad: number[] = []; // core-normalised (1.0 = fully loaded)
+const sysMem: number[] = [];
+let sysCores = 0;
+
+function pushSys(s: SysSample): void {
+  sysCores = s.cores;
+  for (const [buf, v] of [
+    [sysCpu, s.cpu],
+    [sysLoad, s.load],
+    [sysMem, s.mem],
+  ] as const) {
+    buf.push(v);
+    if (buf.length > SYS_HISTORY) buf.shift();
+  }
+  renderSysCharts();
+}
+
+// Fixed 0..max scale (metrics read honestly against an absolute ceiling rather
+// than auto-zooming to their own range, the way sparklineSvg does).
+function gaugeSpark(values: number[], w: number, h: number, color: string, max: number): string {
+  if (values.length < 2) return `<svg class="spark" width="${w}" height="${h}"></svg>`;
+  const pts = values.map((v, i) => {
+    const x = (i / (values.length - 1)) * (w - 2) + 1;
+    const y = h - 2 - (Math.max(0, Math.min(max, v)) / max) * (h - 4);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  return (
+    `<svg class="spark" width="${w}" height="${h}">` +
+    `<polyline points="${pts.join(' ')}" fill="none" style="stroke:${color}" stroke-width="1.5"/></svg>`
+  );
+}
+
+function sysColor(v: number, warn: number, bad: number): string {
+  return v >= bad ? 'var(--red)' : v >= warn ? 'var(--yellow)' : 'var(--green)';
+}
+
+function renderSysCharts(): void {
+  const el = document.getElementById('sys-metrics');
+  if (!el) return;
+  const cpu = sysCpu.at(-1) ?? 0;
+  const load = sysLoad.at(-1) ?? 0;
+  const mem = sysMem.at(-1) ?? 0;
+  const loadRaw = load * (sysCores || 1);
+  const metrics = [
+    {
+      label: 'CPU',
+      buf: sysCpu,
+      color: sysColor(cpu, 0.6, 0.85),
+      max: 1,
+      val: `${Math.round(cpu * 100)}%`,
+      title: `CPU busy across ${sysCores} cores`,
+    },
+    {
+      label: 'LOAD',
+      buf: sysLoad,
+      color: sysColor(load, 0.7, 1),
+      max: 1.5,
+      val: loadRaw.toFixed(2),
+      title: `1-min load average ${loadRaw.toFixed(2)} over ${sysCores} cores`,
+    },
+    {
+      label: 'MEM',
+      buf: sysMem,
+      color: sysColor(mem, 0.7, 0.9),
+      max: 1,
+      val: `${Math.round(mem * 100)}%`,
+      title: 'Used memory',
+    },
+  ];
+  el.innerHTML = metrics
+    .map(
+      (m) =>
+        `<span class="sys-metric" title="${esc(m.title)}"><span class="sl">${m.label}</span>` +
+        `${gaugeSpark(m.buf, 54, 18, m.color, m.max)}` +
+        `<span class="sv" style="color:${m.color}">${m.val}</span></span>`,
+    )
+    .join('');
+}
+
+// The header is two rows and its height shifts (tool buttons appear after the
+// first poll, the window resizes). Sticky offsets below it read --header-h.
+function syncHeaderHeight(): void {
+  const h = document.querySelector('header');
+  if (h) document.documentElement.style.setProperty('--header-h', `${h.offsetHeight}px`);
+}
+
 function ensureSelection(order: WorkspaceRow[]): void {
   if (order.length === 0) {
     selectedName = null;
@@ -628,26 +1038,53 @@ function ensureSelection(order: WorkspaceRow[]): void {
 
 // ── fleet: list view ─────────────────────────────────────────────────────────
 
-const LIST_COLS: Array<{ label: string; sort?: string; cls?: string }> = [
-  { label: '★' },
-  { label: 'Name', sort: 'name' },
-  { label: 'State', sort: 'state' },
-  { label: 'Health', sort: 'health' },
-  { label: 'Winner' },
-  { label: 'Score', sort: 'score', cls: 'num' },
-  { label: 'BT', sort: 'bt', cls: 'num' },
-  { label: 'Gen', sort: 'gen', cls: 'num' },
-  { label: 'Gens▲', sort: 'gens', cls: 'num' },
-  { label: '5gOK%', sort: 'rate', cls: 'num' },
-  { label: 'P/C/F/R' },
-  { label: 'Updated', sort: 'updated', cls: 'num' },
-  { label: 'Trend' },
-  { label: 'Evolution' },
-  { label: 'Adhoc' },
-];
+// The configurable winner-info columns (right of Score) are inserted live from
+// prefs.winnerCols — non-blank slots only — so the header and cells stay aligned.
+function activeWinnerCols(): string[] {
+  return (prefs.winnerCols ?? []).filter(Boolean);
+}
+
+// Union of evaluator metric columns across the fleet — the choices offered in
+// the config dialog's winner-column dropdowns.
+function availableMetricCols(): string[] {
+  const set = new Set<string>();
+  for (const r of rows) for (const col of r.stats.metricColumns) set.add(col);
+  return [...set].sort();
+}
+
+// One winner-column cell: the leader's value for that evaluator column.
+function winnerCell(r: WorkspaceRow, col: string): string {
+  const val = r.stats.leader?.metrics[col];
+  if (val === undefined) return '<td class="num">—</td>';
+  const f = fmtMetric(col, val);
+  return `<td class="num ${f.cls}">${f.v}</td>`;
+}
+
+function listCols(): Array<{ label: string; sort?: string; cls?: string }> {
+  return [
+    { label: '★' },
+    { label: 'Name', sort: 'name' },
+    { label: 'State', sort: 'state' },
+    { label: 'Health', sort: 'health' },
+    { label: 'Winner' },
+    { label: 'Score', sort: 'score', cls: 'num' },
+    ...activeWinnerCols().map((col) => ({ label: col, sort: `metric:${col}`, cls: 'num' })),
+    { label: 'Gens▲', sort: 'gens', cls: 'num' },
+    { label: '5gOK%', sort: 'rate', cls: 'num' },
+    { label: 'Updated', sort: 'updated', cls: 'num' },
+    { label: 'Score Trend' },
+    { label: 'Evolution' },
+    { label: 'Adhoc' },
+  ];
+}
 
 function renderList(order: WorkspaceRow[]): void {
-  const head = LIST_COLS.map((c) => {
+  if (order.length === 0 && searchQuery) {
+    $('list').innerHTML = `<div class="empty">No workspaces match “${esc(searchQuery)}”.</div>`;
+    return;
+  }
+  const winnerCols = activeWinnerCols();
+  const head = listCols().map((c) => {
     const arrow = c.sort && prefs.sortCol === c.sort ? (prefs.sortDesc ? ' ▼' : ' ▲') : '';
     const attrs = c.sort ? ` data-sort="${c.sort}" title="Sort by ${esc(c.label)}"` : '';
     return `<th class="${c.cls ?? ''}"${attrs}>${esc(c.label)}${arrow}</th>`;
@@ -660,7 +1097,6 @@ function renderList(order: WorkspaceRow[]): void {
       const age = fmtAge(r.csvMtimeMs);
       const gens = s.gensSinceTop;
       const rate = s.recentSuccessRate;
-      const c = s.counts;
       const n = esc(r.name);
       return `<tr class="row ${r.name === selectedName ? 'selected' : ''}" data-name="${n}">
         <td><span class="star ${r.starred ? 'on' : ''}" data-star="${n}" title="Pin to top">${r.starred ? '★' : '☆'}</span></td>
@@ -669,11 +1105,9 @@ function renderList(order: WorkspaceRow[]): void {
         <td>${healthChip(h)}</td>
         <td class="winner">${s.error ? `<span class="warn">${esc(s.error)}</span>` : esc(s.leader?.id ?? '—')}</td>
         <td class="num score">${fmtScore(s.leader?.performance ?? null)}</td>
-        <td class="num" title="Backtest aggregate score (latest run)">${btAlgoFor(r.name)?.algo.score.toFixed(2) ?? '—'}</td>
-        <td class="num">${s.latestGen}</td>
+        ${winnerCols.map((col) => winnerCell(r, col)).join('')}
         <td class="num ${gens !== null && gens > PLATEAU_GENS ? 'warn' : ''}" title="Generations since the leader">${gens ?? '—'}</td>
         <td class="num ${s.recentFails > FAILING_FAILS ? 'warn' : rate !== null ? 'pos' : ''}" title="Success rate, last 5 gens (${s.recentFails} fails in last 2)">${rate === null ? '--' : `${Math.round(rate * 100)}%`}</td>
-        <td title="pending/complete/failed/running">${c.pending}/${c.complete}/${c.failed}/${c.running}</td>
         <td class="num ${age.stale ? 'stale' : ''}">${age.text}</td>
         <td>${sparklineSvg(s.sparkline, 120, 20, HEALTH_COLOR[h.level])}</td>
         <td><div class="actions">${evoButtons(r)}</div></td>
@@ -689,7 +1123,9 @@ function renderList(order: WorkspaceRow[]): void {
 
 function renderGridCards(order: WorkspaceRow[]): void {
   if (order.length === 0) {
-    $('grid').innerHTML = `<div class="empty">No evolution workspaces found.<br>Configure roots (⚙) to point at directories containing claude-evolve workspaces.</div>`;
+    $('grid').innerHTML = searchQuery
+      ? `<div class="empty">No workspaces match “${esc(searchQuery)}”.</div>`
+      : `<div class="empty">No evolution workspaces found.<br>Configure roots (⚙) to point at directories containing claude-evolve workspaces.</div>`;
     return;
   }
   $('grid').innerHTML = order
@@ -706,8 +1142,9 @@ function renderGridCards(order: WorkspaceRow[]): void {
       const rate = s.recentSuccessRate;
       const gens = s.gensSinceTop;
       const c = s.counts;
+      const act = r.session.activity;
       const cls = [
-        r.session.activity === 'asking' ? 'asking' : '',
+        act === 'asking' ? 'asking' : act === 'stuck' ? 'stuck' : '',
         r.name === selectedName ? 'selected' : '',
       ].join(' ');
       return `
@@ -811,12 +1248,11 @@ function togglePeek(): void {
 function render(): void {
   const isDetail = view !== null;
   const isTool = toolView !== null;
-  const isFleet = !isDetail && !isTool && !btView;
+  const isFleet = !isDetail && !isTool;
   $('list').style.display = isFleet && viewMode === 'list' ? 'block' : 'none';
   $('grid').style.display = isFleet && viewMode === 'grid' ? 'grid' : 'none';
   $('detail').style.display = isDetail ? 'block' : 'none';
   $('tool').style.display = isTool ? 'block' : 'none';
-  $('bt').style.display = !isDetail && !isTool && btView ? 'block' : 'none';
   renderTotals();
   renderToolButtons();
   renderHints();
@@ -824,8 +1260,7 @@ function render(): void {
     peekFor = null;
     renderPeek();
     if (isDetail) renderDetail();
-    else if (isTool) renderTool();
-    else renderBacktests();
+    else renderTool();
     return;
   }
   const order = sorted();
@@ -841,10 +1276,8 @@ function render(): void {
 function renderHints(): void {
   $('hints').innerHTML =
     view || toolView
-      ? `<b>esc</b> back · <b>⌘esc</b> back (even from terminal) · <b>⏎/a</b> focus terminal${view ? ' · <b>s</b> start/stop' : ''} · click terminal to type · wheel scrolls history`
-      : btView
-        ? `<b>esc/b</b> back to fleet · click a period row for its NAV chart · run selector switches runs · algorithm links open the matching workspace`
-        : `<b>↑↓ j k</b> select · <b>⏎</b> open + attach · <b>space</b> peek stats · <b>b</b> backtests · <b>v</b> ${viewMode === 'list' ? 'grid' : 'list'} · <b>s</b> start/stop · <b>*</b> star · <b>r</b> refresh`;
+      ? `<b>esc</b> back · <b>⌘esc</b> back (even from terminal) · <b>⏎/a</b> focus terminal${view ? ' · <b>s</b> start/stop' : ''} · click a chart to enlarge · click terminal to type · wheel scrolls the session`
+      : `<b>↑↓ j k</b> select · <b>⏎</b> open + attach · <b>space</b> peek stats · <b>v</b> ${viewMode === 'list' ? 'grid' : 'list'} · <b>s</b> start/stop · <b>*</b> star`;
 }
 
 // ── detail view ──────────────────────────────────────────────────────────────
@@ -902,6 +1335,12 @@ function openDetail(name: string, focusTerm = false): void {
   selectedName = name;
   teardownAllTerminals();
   render(); // renderDetail attaches running sessions (unfocused) as part of rendering
+  // Re-read the latest backtest-all run from sqlite on each open: btLatest is
+  // otherwise fetched once at startup, so a run that finished after launch
+  // wouldn't show until restart. Pass the workspace so an in-progress run that
+  // hasn't reached it yet can't blank its panels. The runDate-keyed curve caches
+  // self-invalidate when the run changes, so refreshing this pointer is enough.
+  void loadLatestBacktests(name);
   window.scrollTo(0, 0); // the page scroll position carries over from the fleet list otherwise
   // Focus only on explicit intent (open+attach / 'a'), so stray keys can't reach claude.
   if (focusTerm) focusPrimaryTerm();
@@ -927,6 +1366,152 @@ let detailBuiltFor: string | null = null;
 function panelInnerW(colId: string, fallback: number): number {
   const w = document.getElementById(colId)?.clientWidth ?? 0;
   return w > 60 ? w - 30 : fallback;
+}
+
+// ── click-to-enlarge charts ──────────────────────────────────────────────────
+// Each chart wrapped by zoomable() registers a renderer keyed by a stable id;
+// the overlay calls it again at a larger size for a crisp (not CSS-scaled)
+// repaint. The map is rebuilt every render of the hosting view, so ids stay
+// fresh; an open overlay holds its own renderer closure (zoomRender) and is
+// unaffected by the rebuild.
+// render(w, h, zoom): zoom is true only in the enlarged overlay, so a chart can
+// add a labeled Y-axis gutter (and other chrome) that wouldn't fit in the tile.
+type ChartRender = (w: number, h: number, zoom?: boolean) => string;
+const chartRenderers = new Map<string, ChartRender>();
+let zoomRender: ChartRender | null = null;
+
+// NAV charts (walk-forward leader + per-period) get a richer zoom than the
+// static re-render: an interactive viewer that pans/zooms a time window and
+// rescales live. The underlying Equity for each is registered here by id (same
+// lifecycle as chartRenderers — cleared and rebuilt every detail render); a
+// clicked id present here opens the interactive viewer instead of openZoom.
+const navZoomData = new Map<string, Equity>();
+// Open interactive NAV viewer state; null when the overlay isn't a NAV zoom. An
+// open viewer holds its own eq copy, so a background re-render can clear the map
+// without disturbing it (mirrors zoomRender). i0..i1 is the visible index window.
+let navZoom: { eq: Equity; i0: number; i1: number } | null = null;
+const NAV_ZOOM_MIN = 8; // smallest visible window (points) — keeps the chart legible
+
+function zoomable(id: string, render: ChartRender, w: number, h: number): string {
+  chartRenderers.set(id, render);
+  return `<div class="chart-zoom" data-chart="${esc(id)}" title="Click to enlarge">${render(w, h)}</div>`;
+}
+
+/** Register a chart id's Equity for the interactive viewer (no-op when the curve
+ *  hasn't loaded yet). Returns '' so it composes inline in template strings. */
+function registerNavZoom(id: string, eq: Equity | null | undefined): string {
+  if (eq) navZoomData.set(id, eq);
+  return '';
+}
+
+function zoomDims(): { w: number; h: number } {
+  const w = Math.min(window.innerWidth - 120, 1200);
+  const h = Math.min(window.innerHeight - 160, Math.max(360, Math.round(w * 0.5)));
+  return { w, h };
+}
+
+function chartZoomOpen(): boolean {
+  return zoomRender !== null || navZoom !== null;
+}
+
+function openZoom(render: ChartRender): void {
+  const { w, h } = zoomDims();
+  const html = render(w, h, true);
+  if (!/<svg/.test(html)) return; // nothing to enlarge yet (loading / no data)
+  zoomRender = render;
+  const ov = $('chart-zoom-overlay');
+  ov.innerHTML = `<div class="zoom-box">${html}</div>`;
+  ov.classList.add('open');
+}
+
+function closeZoom(): void {
+  zoomRender = null;
+  navZoom = null;
+  const ov = $('chart-zoom-overlay');
+  ov.classList.remove('open');
+  ov.innerHTML = '';
+}
+
+// Delegated on #detail and #bt: a NAV chart opens the interactive viewer; any
+// other chart falls back to the static enlarge.
+function chartZoomClick(e: MouseEvent): void {
+  const el = (e.target as HTMLElement).closest('.chart-zoom') as HTMLElement | null;
+  if (!el) return;
+  const id = el.dataset.chart ?? '';
+  const eq = navZoomData.get(id);
+  if (eq) {
+    openNavZoom(eq);
+    return;
+  }
+  const render = chartRenderers.get(id);
+  if (render) openZoom(render);
+}
+
+// ── interactive NAV viewer ────────────────────────────────────────────────────
+// Pan (drag / shift+wheel) and zoom (wheel / ± buttons) a time window over the
+// full series; the slice re-renders through navChartSvg, so Y autoscales and the
+// return / maxDD / Sharpe badge all reflect the visible window. The control bar
+// is built once; only the plot slice repaints on interaction.
+function openNavZoom(eq: Equity): void {
+  if (eq.nav.length < 2) return;
+  navZoom = { eq, i0: 0, i1: eq.nav.length - 1 };
+  const ov = $('chart-zoom-overlay');
+  ov.innerHTML = `<div class="zoom-box nav-zoom">
+      <div class="nav-zoom-ctl">
+        <button data-nz="out" title="Zoom out">−</button>
+        <button data-nz="in" title="Zoom in">+</button>
+        <button data-nz="reset" title="Show full range">reset</button>
+        <span class="nav-zoom-hint">drag to pan · wheel to zoom · shift-wheel to pan</span>
+      </div>
+      <div class="nav-zoom-plot" id="nav-zoom-plot"></div>
+    </div>`;
+  ov.classList.add('open');
+  updateNavZoomPlot();
+}
+
+function updateNavZoomPlot(): void {
+  if (!navZoom) return;
+  const plot = document.getElementById('nav-zoom-plot');
+  if (!plot) return;
+  const { w, h } = zoomDims();
+  // Reserve the control-bar height so the chart fits the overlay without scroll.
+  const svg = navChartSvg(sliceEquity(navZoom.eq, navZoom.i0, navZoom.i1), w, h - 34, { axes: true });
+  plot.innerHTML = svg;
+}
+
+/** Rescale the window by `factor` (<1 zoom in, >1 out) about `focusFrac` (0..1
+ *  of the current window) — keeps the focused point under the cursor fixed. */
+function navZoomScale(focusFrac: number, factor: number): void {
+  if (!navZoom) return;
+  const n = navZoom.eq.nav.length;
+  const len = navZoom.i1 - navZoom.i0;
+  const focus = navZoom.i0 + focusFrac * len;
+  let newLen = Math.round(len * factor);
+  newLen = Math.max(NAV_ZOOM_MIN, Math.min(n - 1, newLen));
+  let i0 = Math.round(focus - focusFrac * newLen);
+  i0 = Math.max(0, Math.min(n - 1 - newLen, i0));
+  navZoom.i0 = i0;
+  navZoom.i1 = i0 + newLen;
+  updateNavZoomPlot();
+}
+
+/** Shift the window by `frac` of its width (sign = direction), clamped to data. */
+function navZoomPan(frac: number): void {
+  if (!navZoom) return;
+  const n = navZoom.eq.nav.length;
+  const len = navZoom.i1 - navZoom.i0;
+  let i0 = Math.round(navZoom.i0 + frac * len);
+  i0 = Math.max(0, Math.min(n - 1 - len, i0));
+  navZoom.i0 = i0;
+  navZoom.i1 = i0 + len;
+  updateNavZoomPlot();
+}
+
+function navZoomReset(): void {
+  if (!navZoom) return;
+  navZoom.i0 = 0;
+  navZoom.i1 = navZoom.eq.nav.length - 1;
+  updateNavZoomPlot();
 }
 
 function renderDetail(): void {
@@ -963,19 +1548,47 @@ function renderDetail(): void {
   // panel wrapper trims 30px of padding/border. Re-measured every render and on
   // window resize, so they reflow instead of sitting at a baked-in width.
   const cw = panelInnerW('d-left', 540);
+  chartRenderers.clear(); // rebuilt below as the detail charts re-register
+  navZoomData.clear(); // NAV viewer data re-registers with the charts
 
   const s = r.stats;
   const h = healthOf(r);
   const leader = s.leader;
   const years = yearSeries(r);
-  const yearChart = multiLineSvg(years, cw, 80);
+  // Generation numbers behind each chart's X positions, so the enlarged view
+  // labels a real "gen N" axis. sparkline drops gens with no best (matching
+  // csv.ts); yearSeries spans every generation (best?.metric ?? null).
+  const sparkGens = s.generations.filter((g) => g.best !== null).map((g) => g.gen);
+  const yearGens = s.generations.map((g) => g.gen);
+  // Enough data to draw? Mirrors multiLineSvg's own emptiness guard so we can
+  // decide whether to show the panel without rendering a throwaway SVG.
+  const yearVals = years.flatMap((sr) => sr.values.filter((v): v is number => v !== null));
+  const yearN = years.length ? Math.max(...years.map((sr) => sr.values.length)) : 0;
+  const hasYearChart = yearVals.length >= 2 && yearN >= 2;
   const bt = btAlgoFor(r.name);
   const btFlag = btLatest?.appendix.find((x) => x.algorithm === r.name);
+  // backtest-all scores whichever champion was current the last time it ran —
+  // which can lag the live leader. Name the tested champion and flag staleness
+  // so an old backtest isn't mistaken for the current leader's verdict.
+  const testedId = bt ? candidateIdOf(bt.algo.name) : null;
+  const leaderId = leader?.id ?? null;
+  const btStale = !!(testedId && leaderId && testedId.toLowerCase() !== leaderId.toLowerCase());
+  const btWinnerState: 'winner' | 'previous' | 'unknown' = !leaderId
+    ? 'unknown'
+    : btStale
+      ? 'previous'
+      : 'winner';
+  const btTag = bt ? winnerTag(btWinnerState, testedId, leaderId) : '';
   const btPanel = bt && btLatest
     ? `<div class="panel bt-host">
-         <h3>Backtest — run ${esc(btLatest.runDate)} · #${bt.rank} of ${latestBtTable()!.algos.length} · score ${bt.algo.score.toFixed(2)}${bt.algo.qualPct !== null ? ` · qual ${bt.algo.qualPct}%` : ''}</h3>
+         <h3>Backtest — run ${esc(btLatest.runDate)} · testing ${esc(bt.algo.name)} · #${bt.rank} of ${latestBtTable()!.algos.length} · score ${bt.algo.score.toFixed(2)}${bt.algo.qualPct !== null ? ` · qual ${bt.algo.qualPct}%` : ''}${btTag}</h3>
+         ${
+           btWinnerState === 'previous'
+             ? `<div class="desc" style="color: var(--yellow); margin-bottom: 8px; user-select: text;">⚠ backtest-all last scored ${esc(testedId!)}; the current leader ${esc(leaderId!)} hasn't been backtested yet — re-run backtest-all to score it.</div>`
+             : ''
+         }
          ${btFlag ? `<div class="desc" style="color: var(--red); margin-bottom: 8px; user-select: text;">⚑ ${esc(btFlag.reasons)}</div>` : ''}
-         ${btPeriodTableHtml(bt.algo, latestBtTable()!.periods, btLatest.runDate, cw)}
+         ${btPeriodTableHtml(bt.algo, latestBtTable()!.periods, btLatest.runDate, cw, { bh: benchmarkFor(r.name) })}
        </div>`
     : '';
 
@@ -991,7 +1604,7 @@ function renderDetail(): void {
 
   $('d-left').innerHTML = `
     <div class="panel">
-      <h3>Leader ${leader ? `— ${esc(leader.id)} · ${fmtScore(leader.performance)}` : ''}</h3>
+      <h3>Leader ${leader ? `— ${esc(leader.id)} · ${fmtScore(leader.performance)}${winnerTag('winner')}` : ''}</h3>
       ${
         leader
           ? `<div class="desc" style="color: var(--dim); margin-bottom: 10px; user-select: text;">${esc(leader.description)}</div>
@@ -1007,20 +1620,20 @@ function renderDetail(): void {
     ${btPanel}
     ${
       leader
-        ? `<div class="panel"><h3>Leader NAV over time — walk-forward OOS</h3>${navPanelHtml(r.name, leader.id, cw, 130)}</div>
-           ${navByPeriodPanel(r.name, cw)}
-           <div class="panel"><h3>Leader returns by year</h3>${yearBarsHtml(yearReturns(leader))}</div>`
+        ? `<div class="panel"><h3>Leader NAV over time — walk-forward OOS${winnerTag('winner')}</h3>${registerNavZoom('nav-leader', equityFor(r.name, leader.id))}${zoomable('nav-leader', (w, ht) => navPanelHtml(r.name, leader.id, w, ht), cw, 130)}</div>
+           ${navByPeriodPanel(r.name, cw, btTag)}
+           <div class="panel"><h3>Leader returns by year${winnerTag('winner')}</h3>${yearBarsHtml(yearReturns(leader))}</div>`
         : ''
     }
     <div class="panel">
       <h3>Best score by generation</h3>
-      ${sparklineSvg(s.sparkline, cw, 60, HEALTH_COLOR[h.level])}
+      ${zoomable('spark-gen', (w, ht, zoom) => sparklineSvg(s.sparkline, w, ht, HEALTH_COLOR[h.level], zoom, sparkGens), cw, 60)}
     </div>
     ${
-      yearChart
+      hasYearChart
         ? `<div class="panel">
              <h3>Year returns by generation (best of gen)</h3>
-             ${yearChart}
+             ${zoomable('year-gen', (w, ht, zoom) => multiLineSvg(years, w, ht, zoom, yearGens), cw, 80)}
              <div class="legend">${years
                .map((y) => `<span><span class="sw" style="background:${y.color}"></span>${esc(y.name)}</span>`)
                .join('')}</div>
@@ -1096,15 +1709,15 @@ function syncSessionPanel(
     if (!terms.has(sessId)) void attachTerminal(sessId, false, slot, 'dual');
     const attached = terms.has(sessId);
     ctl.innerHTML =
-      `${sessBadge(state)} ` +
+      `${sessBadge(state, sessId)} ` +
       (attached
-        ? `<span class="term-note">live — click (or ⏎) to focus; wheel scrolls history; ⌘esc backs out</span>`
+        ? `<span class="term-note">live — click (or ⏎) to focus; wheel scrolls the session; ⌘esc backs out</span>`
         : `<button class="primary" data-sess-attach>Attach terminal</button>`) +
       `<span style="flex:1"></span><button class="danger" data-sess-stop>⏹ Stop</button>`;
   } else {
     if (terms.has(sessId)) teardownTerminal(sessId); // session died — clear stale term
     slot.innerHTML = `<button class="primary term-launch" data-sess-start>${esc(startLabel)}</button>`;
-    ctl.innerHTML = `${sessBadge(state)} <span class="term-note">not running</span>`;
+    ctl.innerHTML = `${sessBadge(state, sessId)} <span class="term-note">not running</span>`;
   }
   slot.querySelector('[data-sess-start]')?.addEventListener('click', startAct);
   ctl.querySelector('[data-sess-stop]')?.addEventListener('click', stopAct);
@@ -1133,7 +1746,7 @@ async function attachTerminal(
     fontFamily: 'SF Mono, Menlo, monospace',
     fontSize: 12,
     theme: { background: '#000000' },
-    scrollback: 0, // tmux owns history; wheel drives copy-mode
+    scrollback: 0, // the attached app (claude, alt-screen) owns its own scrollback
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
@@ -1144,14 +1757,13 @@ async function attachTerminal(
   terms.set(sessId, ts);
 
   term.onData((data) => ts.port?.postMessage({ type: 'input', data }));
-  wrap.addEventListener(
-    'wheel',
-    (e) => {
-      e.preventDefault();
-      void api.session.scroll(sessId, e.deltaY < 0 ? 'up' : 'down', 3);
-    },
-    { passive: false },
-  );
+  // No custom wheel handler: claude runs in the alternate screen with mouse
+  // tracking on, so tmux keeps zero scrollback for it (`history_size` 0) — the
+  // old copy-mode hijack scrolled a buffer that doesn't exist and, by cancelling
+  // the wheel event, stopped it ever reaching claude. Letting xterm handle the
+  // wheel natively forwards it as a mouse sequence (onData → pty → tmux →
+  // claude), so claude scrolls its own conversation. tmux `mouse off` means tmux
+  // forwards to the app rather than grabbing the wheel for itself.
   ts.ro = new ResizeObserver(() => {
     fit.fit();
     ts.port?.postMessage({ type: 'resize', cols: term.cols, rows: term.rows });
@@ -1163,117 +1775,12 @@ async function attachTerminal(
   render(); // refresh the control row (detail or tool page)
 }
 
-// ── backtests view (port of the streamlit dashboard's By Algorithm tab) ─────
-
-let btRendered: BacktestSummary | undefined; // last summary painted — fleet pushes must not rebuild the run <select> under the user
-let btDirty = false; // chart toggles / equity arrivals force a repaint of the same summary
-
-function openBacktests(): void {
-  if (view) closeDetail();
-  if (toolView) closeTool();
-  btView = true;
-  if (btData === undefined) void loadBacktests();
-  render();
-  window.scrollTo(0, 0);
-}
-
-function closeBacktests(): void {
-  btView = false;
-  render();
-}
-
-async function loadBacktests(runDate?: string): Promise<void> {
-  if (btLoading) return;
-  btLoading = true;
-  try {
-    btData = await api.backtests.summary(runDate);
-  } finally {
-    btLoading = false;
-  }
-  btRendered = undefined; // force repaint with the new run
-  render();
-}
-
-function renderBacktests(): void {
-  if (btData !== undefined && btRendered === btData && !btDirty) return;
-  btRendered = btData;
-  btDirty = false;
-  const bt = $('bt');
-  const bar = `
-    <div class="bar">
-      <button id="bt-back">← Fleet</button>
-      <h2>📊 Backtest results</h2>
-      ${
-        btData
-          ? `<select id="bt-run" title="Backtest run">${btData.runDates
-              .map((d) => `<option value="${esc(d)}" ${d === btData!.runDate ? 'selected' : ''}>${esc(d)}</option>`)
-              .join('')}</select>`
-          : ''
-      }
-      <span style="flex:1"></span>
-    </div>`;
-
-  if (btData === undefined) {
-    bt.innerHTML = `${bar}<div class="empty">loading backtest results…</div>`;
-  } else if (btData === null) {
-    bt.innerHTML = `${bar}<div class="empty">No data/backtest-results.db under any configured root.<br>Run backtest-all (or backtest-import) in the trading-strategies repo first.</div>`;
-  } else {
-    const { algos, periods } = buildBacktestTable(btData.rows);
-    // Fluid to the page width; the chart sits inside a panel (28+2) and a table
-    // cell (16) under the #bt page padding, so trim those off the measured width.
-    const cw = Math.max(320, panelInnerW('bt', 720) - 16);
-    const panels = algos
-      .map((a, i) => {
-        const ws = rows.find((r) => r.name === a.algorithm); // evolution workspace of the same dir, if scanned
-        const title = ws ? `<a data-ws="${esc(ws.name)}">${esc(a.name)}</a>` : esc(a.name);
-        return `<div class="panel">
-          <h3><span class="rank">#${i + 1}</span> ${a.qualPct === 100 ? '✅ ' : ''}${title}
-            — score <span class="score">${a.score.toFixed(2)}</span>${a.qualPct !== null ? ` <span class="qual">· qual ${a.qualPct}%</span>` : ''}</h3>
-          ${btPeriodTableHtml(a, periods, btData!.runDate, cw)}
-        </div>`;
-      })
-      .join('');
-    const appendix = btData.appendix.length
-      ? `<div class="panel appendix">
-          <h3>Appendix — ${btData.appendix.length} flagged algorithms (report flag criteria)</h3>
-          <table>
-            <tr><th>Algorithm</th><th>Reasons</th></tr>
-            ${btData.appendix
-              .map(
-                (x) => `<tr><td>${esc(x.algorithm_name)}</td><td class="reasons">${esc(x.reasons)}</td></tr>`,
-              )
-              .join('')}
-          </table>
-        </div>`
-      : '';
-    bt.innerHTML = `${bar}
-      <div class="caption">By Algorithm — ranked by aggregate score: weighted geometric mean of min(AA/Pain, 50)
-        across periods (Long-Term &amp; 2022+ ×2, Cal 2025 &amp; OOS ×1.5). Bad/ERROR risk and negative-alpha
-        periods penalized hard; replay/benchmark dirs hidden. ${algos.length} algorithms in the
-        ${esc(btData.runDate)} run. Click a period row for its NAV chart.</div>
-      ${panels}
-      ${appendix}`;
-  }
-
-  document.getElementById('bt-back')?.addEventListener('click', closeBacktests);
-  document.getElementById('bt-run')?.addEventListener('change', (e) => {
-    void loadBacktests((e.target as HTMLSelectElement).value);
-  });
-  bt.querySelectorAll('[data-ws]').forEach((a) =>
-    a.addEventListener('click', () => {
-      btView = false;
-      openDetail((a as HTMLElement).dataset.ws!);
-    }),
-  );
-}
-
 // ── tool page (inference-all / backtest-all in their own tmux sessions) ──────
 
 let toolBuiltFor: string | null = null;
 
 function openTool(key: string): void {
   if (view) closeDetail();
-  btView = false;
   toolView = key;
   teardownAllTerminals();
   render();
@@ -1335,7 +1842,7 @@ function renderTool(): void {
   document.getElementById('t-stop')?.addEventListener('click', () => void stopTool(t.key));
   $('tool-term-hint').innerHTML = t.running
     ? terms.has(toolSessionName(t.key))
-      ? 'Live tmux attach — click (or ⏎) to focus; keystrokes then go to the session; wheel scrolls history; ⌘esc backs out.'
+      ? 'Live tmux attach — click (or ⏎) to focus; keystrokes then go to the session; wheel scrolls the session; ⌘esc backs out.'
       : '<button id="t-attach" class="primary">Attach terminal</button>'
     : `Not running. ▶ runs ./${esc(t.key)} in ${esc(t.root ?? '?')} — the pane stays inspectable after it exits.`;
   document
@@ -1352,6 +1859,7 @@ function renderToolButtons(): void {
            title="${t.running ? `${esc(t.key)} is running — open its session` : `Open ${esc(t.key)}`}">${t.running ? '●' : '⚒'} ${esc(t.key)}</button>`,
     )
     .join('');
+  syncHeaderHeight();
 }
 
 // MessagePort arrives via preload re-post (meta.attachId = session id); route
@@ -1385,6 +1893,8 @@ window.addEventListener('message', (e) => {
     rows = payload.rows;
     tools = payload.tools;
     render();
+  } else if (e.data?.type === 'eg-event' && e.data.channel === 'system:update') {
+    pushSys(e.data.payload as SysSample);
   }
 });
 
@@ -1401,6 +1911,13 @@ async function stopEvolution(name: string): Promise<void> {
   // inspectable) and a stopped session restarts with one keypress.
   teardownTerminal(sessionName(name));
   await api.evolution.stop(name);
+}
+
+/** Nudge a stuck session back to work: sends Esc + "continue please" + Enter to
+ *  its tmux pane, then refreshes so the badge reclassifies once it moves. */
+async function unstick(sessId: string): Promise<void> {
+  await api.session.unstick(sessId);
+  setTimeout(() => void api.fleet.refresh(), 1500);
 }
 
 async function startAdhoc(name: string): Promise<void> {
@@ -1444,6 +1961,12 @@ function fleetClick(e: MouseEvent): void {
     void toggleStar(star.dataset.star!);
     return;
   }
+  const unstickBtn = t.closest('[data-unstick]') as HTMLElement | null;
+  if (unstickBtn) {
+    e.stopPropagation();
+    void unstick(unstickBtn.dataset.unstick!);
+    return;
+  }
   const btn = t.closest('[data-act]') as HTMLElement | null;
   if (btn) {
     e.stopPropagation();
@@ -1469,8 +1992,77 @@ function fleetClick(e: MouseEvent): void {
 }
 $('grid').addEventListener('click', fleetClick);
 $('list').addEventListener('click', fleetClick);
-$('bt').addEventListener('click', btToggleClick);
 $('detail').addEventListener('click', btToggleClick);
+$('detail').addEventListener('click', chartZoomClick);
+// 'stuck' unstick badge in the detail bar / session control rows.
+$('detail').addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement).closest('[data-unstick]') as HTMLElement | null;
+  if (b) void unstick(b.dataset.unstick!);
+});
+// Backdrop click (not the chart box) dismisses the enlarged chart; the ± / reset
+// buttons drive the interactive NAV viewer.
+$('chart-zoom-overlay').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) {
+    closeZoom();
+    return;
+  }
+  const btn = (e.target as HTMLElement).closest('[data-nz]') as HTMLElement | null;
+  if (!btn || !navZoom) return;
+  const act = btn.dataset.nz;
+  if (act === 'in') navZoomScale(0.5, 0.6);
+  else if (act === 'out') navZoomScale(0.5, 1 / 0.6);
+  else if (act === 'reset') navZoomReset();
+});
+
+// Wheel over the NAV viewer: zoom about the cursor (shift = pan). The plot's
+// own width maps the cursor to a window fraction so zoom stays centered on it.
+$('chart-zoom-overlay').addEventListener(
+  'wheel',
+  (e) => {
+    if (!navZoom) return;
+    e.preventDefault();
+    if (e.shiftKey) {
+      navZoomPan((e.deltaY > 0 ? 0.15 : -0.15));
+      return;
+    }
+    const plot = document.getElementById('nav-zoom-plot');
+    const rect = plot?.getBoundingClientRect();
+    const frac = rect && rect.width > 0 ? Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) : 0.5;
+    navZoomScale(frac, e.deltaY > 0 ? 1 / 0.85 : 0.85); // scroll up = zoom in
+  },
+  { passive: false },
+);
+
+// Drag across the NAV viewer pans the window; window-level move/up so the drag
+// survives the cursor leaving the plot.
+$('chart-zoom-overlay').addEventListener('mousedown', (e) => {
+  if (!navZoom) return;
+  const plot = document.getElementById('nav-zoom-plot');
+  if (!plot || !plot.contains(e.target as Node)) return;
+  e.preventDefault();
+  const rect = plot.getBoundingClientRect();
+  const startX = e.clientX;
+  const startI0 = navZoom.i0;
+  const startI1 = navZoom.i1;
+  const len = startI1 - startI0;
+  plot.classList.add('dragging');
+  const move = (m: MouseEvent) => {
+    if (!navZoom || rect.width <= 0) return;
+    const di = Math.round((-(m.clientX - startX) / rect.width) * len);
+    const n = navZoom.eq.nav.length;
+    let i0 = Math.max(0, Math.min(n - 1 - len, startI0 + di));
+    navZoom.i0 = i0;
+    navZoom.i1 = i0 + len;
+    updateNavZoomPlot();
+  };
+  const up = () => {
+    plot.classList.remove('dragging');
+    window.removeEventListener('mousemove', move);
+    window.removeEventListener('mouseup', up);
+  };
+  window.addEventListener('mousemove', move);
+  window.addEventListener('mouseup', up);
+});
 
 // ── keyboard (fleet-commander style) ─────────────────────────────────────────
 
@@ -1521,7 +2113,7 @@ window.addEventListener('resize', () => {
   if (resizeRaf) return;
   resizeRaf = requestAnimationFrame(() => {
     resizeRaf = 0;
-    if (view || btView) render();
+    if (view) render();
   });
 });
 
@@ -1551,6 +2143,15 @@ window.addEventListener('drop', (e) => {
 window.addEventListener('keydown', (e) => {
   if (termFocused()) return; // keystrokes belong to the tmux session
   if (($('prefs-dialog') as HTMLDialogElement).open) return;
+  if (document.activeElement?.id === 'search') return; // typing in the filter box
+  if (chartZoomOpen()) {
+    // The enlarged-chart overlay grabs Escape before it can back out of the view.
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeZoom();
+    }
+    return;
+  }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const sel = selectedName ? rows.find((r) => r.name === selectedName) : undefined;
 
@@ -1573,11 +2174,6 @@ window.addEventListener('keydown', (e) => {
         if (t?.running) void attachTerminal(toolSessionName(toolView), true, $('tool-term-slot'), 'solo');
       }
     } else if (e.key === ' ') e.preventDefault();
-    return;
-  }
-
-  if (btView) {
-    if (e.key === 'Escape' || e.key === 'b') closeBacktests();
     return;
   }
 
@@ -1611,56 +2207,95 @@ window.addEventListener('keydown', (e) => {
     case 'v':
       toggleView();
       break;
-    case 'b':
-      openBacktests();
-      break;
-    case 'r':
-      void api.fleet.refresh();
-      void loadLatestBacktests();
-      break;
     case 's':
       if (sel) void toggleEvolution(sel.name);
       break;
     case '*':
       if (sel) void toggleStar(sel.name);
       break;
+    case '/': {
+      e.preventDefault();
+      const s = $('search') as HTMLInputElement;
+      s.focus();
+      s.select();
+      break;
+    }
   }
 });
 
 // ── header controls ──────────────────────────────────────────────────────────
 
+// Theme cycles system → dark → light on each click of the icon button.
+const THEME_CYCLE: Array<Prefs['theme']> = ['system', 'dark', 'light'];
+const THEME_ICON: Record<Prefs['theme'], string> = { system: '◐', dark: '●', light: '○' };
+
 function syncHeaderControls(): void {
-  ($('sort') as HTMLSelectElement).value = prefs.sortCol in SORTS ? prefs.sortCol : 'score';
-  ($('theme') as HTMLSelectElement).value = prefs.theme;
-  $('view-toggle').textContent = viewMode === 'list' ? '⊞ Grid' : '☰ List';
+  const themeBtn = $('theme-btn');
+  themeBtn.textContent = THEME_ICON[prefs.theme];
+  themeBtn.title = `Theme: ${prefs.theme}`;
+  $('view-toggle')
+    .querySelectorAll<HTMLButtonElement>('button')
+    .forEach((b) => b.classList.toggle('active', b.dataset.view === viewMode));
 }
 
-$('refresh').addEventListener('click', () => {
-  void api.fleet.refresh();
-  void loadLatestBacktests();
+const searchEl = $('search') as HTMLInputElement;
+searchEl.addEventListener('input', () => {
+  searchQuery = searchEl.value.trim().toLowerCase();
+  render();
 });
-$('view-toggle').addEventListener('click', () => toggleView());
-$('bt-btn').addEventListener('click', () => (btView ? closeBacktests() : openBacktests()));
+searchEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    searchEl.value = '';
+    searchQuery = '';
+    searchEl.blur();
+    render();
+  } else if (e.key === 'Enter') {
+    searchEl.blur(); // keep the filter, hand keyboard nav back to the list
+  }
+});
+
+$('view-toggle').addEventListener('click', (e) => {
+  const mode = (e.target as HTMLElement).closest('button')?.dataset.view as 'list' | 'grid' | undefined;
+  if (!mode || mode === viewMode) return;
+  viewMode = mode;
+  syncHeaderControls();
+  render();
+});
 $('tool-btns').addEventListener('click', (e) => {
   const btn = (e.target as HTMLElement).closest('[data-tool]') as HTMLElement | null;
   if (btn) openTool(btn.dataset.tool!);
 });
 
-($('theme') as HTMLSelectElement).addEventListener('change', (e) => {
-  const theme = (e.target as HTMLSelectElement).value as Prefs['theme'];
-  void api.prefs.set({ theme }).then((p) => (prefs = p));
+$('theme-btn').addEventListener('click', () => {
+  const next = THEME_CYCLE[(THEME_CYCLE.indexOf(prefs.theme) + 1) % THEME_CYCLE.length];
+  void api.prefs.set({ theme: next }).then((p) => {
+    prefs = p;
+    syncHeaderControls();
+  });
 });
 
-($('sort') as HTMLSelectElement).addEventListener('change', (e) => {
-  const col = (e.target as HTMLSelectElement).value;
-  void (async () => {
-    prefs = await api.prefs.set({ sortCol: col, sortDesc: col !== 'name' });
-    render();
-  })();
-});
+// Build the 5 winner-column dropdowns from the columns the fleet actually emits,
+// preselecting whatever's saved (even if not currently present in the union).
+function syncWinnerColDialog(): void {
+  const cols = availableMetricCols();
+  const saved = prefs.winnerCols ?? [];
+  const opts = (sel: string): string => {
+    const known = cols.includes(sel) || sel === '';
+    const extra = known ? '' : `<option value="${esc(sel)}" selected>${esc(sel)}</option>`;
+    const list = cols
+      .map((c) => `<option value="${esc(c)}"${c === sel ? ' selected' : ''}>${esc(c)}</option>`)
+      .join('');
+    return `<option value=""${sel === '' ? ' selected' : ''}>— none —</option>${extra}${list}`;
+  };
+  $('winner-cols').innerHTML = Array.from({ length: 5 }, (_, i) => {
+    const sel = saved[i] ?? '';
+    return `<select class="winner-col" data-slot="${i}" title="Winner info column ${i + 1}">${opts(sel)}</select>`;
+  }).join('');
+}
 
 $('prefs-btn').addEventListener('click', () => {
   ($('roots-input') as HTMLTextAreaElement).value = prefs.roots.join('\n');
+  syncWinnerColDialog();
   ($('prefs-dialog') as HTMLDialogElement).showModal();
 });
 $('prefs-cancel').addEventListener('click', () => ($('prefs-dialog') as HTMLDialogElement).close());
@@ -1669,19 +2304,27 @@ $('prefs-save').addEventListener('click', async () => {
     .split('\n')
     .map((s) => s.trim())
     .filter(Boolean);
-  prefs = await api.prefs.set({ roots });
+  const winnerCols = Array.from(
+    document.querySelectorAll<HTMLSelectElement>('#winner-cols .winner-col'),
+  ).map((sel) => sel.value);
+  prefs = await api.prefs.set({ roots, winnerCols });
   ($('prefs-dialog') as HTMLDialogElement).close();
+  render();
 });
 
 // ── boot ─────────────────────────────────────────────────────────────────────
 
 void (async () => {
   prefs = await api.prefs.get();
-  if (!(prefs.sortCol in SORTS)) prefs = await api.prefs.set({ sortCol: 'score', sortDesc: true });
+  if (!(prefs.sortCol in SORTS) && !prefs.sortCol.startsWith('metric:'))
+    prefs = await api.prefs.set({ sortCol: 'score', sortDesc: true });
   syncHeaderControls();
   const payload = await api.fleet.snapshot();
   rows = payload.rows;
   tools = payload.tools;
   render();
+  syncHeaderHeight();
   void loadLatestBacktests(); // joins BT scores into the list/peek/detail when it lands
 })();
+
+window.addEventListener('resize', syncHeaderHeight);

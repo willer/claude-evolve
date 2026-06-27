@@ -10,7 +10,7 @@ ipcRenderer.on('session:port', (event, meta) => {
   window.postMessage({ type: 'eg-session-port', meta }, '*', event.ports as unknown as MessagePort[]);
 });
 
-for (const channel of ['fleet:update']) {
+for (const channel of ['fleet:update', 'system:update']) {
   ipcRenderer.on(channel, (_e, payload) => {
     window.postMessage({ type: 'eg-event', channel, payload }, '*');
   });
@@ -41,13 +41,13 @@ contextBridge.exposeInMainWorld('greenhouse', {
   workspace: {
     equity: (name: string, candidateId: string) =>
       ipcRenderer.invoke('workspace:equity', name, candidateId),
+    benchmark: (name: string) => ipcRenderer.invoke('workspace:benchmark', name),
   },
   session: {
     attach: (name: string, cols: number, rows: number) =>
       ipcRenderer.invoke('session:attach', name, cols, rows),
     detach: (name: string) => ipcRenderer.invoke('session:detach', name),
-    scroll: (name: string, dir: 'up' | 'down', lines: number) =>
-      ipcRenderer.invoke('session:scroll', name, dir, lines),
+    unstick: (name: string) => ipcRenderer.invoke('session:unstick', name),
   },
   prefs: {
     get: () => ipcRenderer.invoke('prefs:get'),

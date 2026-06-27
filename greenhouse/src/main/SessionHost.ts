@@ -121,16 +121,18 @@ export class SessionHost {
     };
   }
 
-  /** Wheel scrolling via copy-mode — claude grabs mouse tracking, so the view
-   *  drives tmux's own history instead. Auto-exits at bottom. */
-  scroll(id: string, dir: 'up' | 'down', lines: number): void {
-    execFile('tmux', ['copy-mode', '-e', '-t', id], () => {
-      execFile(
-        'tmux',
-        ['send-keys', '-X', '-N', String(lines), '-t', id, dir === 'up' ? 'scroll-up' : 'scroll-down'],
-        () => {},
-      );
-    });
+  /** Nudge a stuck session: Esc (clear any half-typed prompt / dismiss a
+   *  dialog), then type "continue please" and Enter. Used by the 'stuck' badge
+   *  when a session stalled on a hard wall (spend/usage limit) the operator has
+   *  since cleared. Small delays let the TUI process each step (Esc must land
+   *  before the text, the text before Enter). */
+  async unstick(id: string): Promise<void> {
+    const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    await tmux('send-keys', '-t', id, 'Escape');
+    await pause(250);
+    await tmux('send-keys', '-t', id, '-l', 'continue please');
+    await pause(150);
+    await tmux('send-keys', '-t', id, 'Enter');
   }
 
   async capture(id: string): Promise<string | null> {
