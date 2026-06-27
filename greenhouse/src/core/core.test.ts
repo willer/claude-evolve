@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildBacktestTable, qualPct, scoreAlgo } from './backtests';
-import type { BacktestRow } from './backtests';
+import { benchmarkReturns, buildBacktestTable, qualPct, scoreAlgo } from './backtests';
+import type { BacktestRow, PricePoint } from './backtests';
 import {
   STALE_MS,
   classifyHealth,
@@ -216,8 +216,69 @@ describe('classifyPane', () => {
     expect(classifyPane('something new', first.hash).activity).toBe('working');
   });
 
+  it('stays working when background shells run, even byte-static', () => {
+    // Real evolve footer: idle composer but a background shell still churning.
+    const txt = '❯ \n  ⏵⏵ auto mode on · 1 shell · ← for agents';
+    const first = classifyPane(txt, null);
+    expect(classifyPane(txt, first.hash).activity).toBe('working'); // not 'waiting'
+    const multi = '✻ Worked for 3m 33s · 2 shells still running\n❯ ';
+    const m1 = classifyPane(multi, null);
+    expect(classifyPane(multi, m1.hash).activity).toBe('working');
+  });
+
+  it('stays working when subagents are mid-flight, even byte-static', () => {
+    // Real evolve agent-fleet rows: workers running while the main pane is idle.
+    const txt = '❯ \n  ⏺ main\n  ◯ evolve-worker-1  evolve worker 1   1m 13s · ↓ 32.0k tokens';
+    const first = classifyPane(txt, null);
+    expect(classifyPane(txt, first.hash).activity).toBe('working'); // not 'waiting'
+  });
+
+  it('still reports waiting for a truly idle composer (no background work)', () => {
+    const txt = '❯ \n  ⏵⏵ auto mode on (shift+tab to cycle)';
+    const first = classifyPane(txt, null);
+    expect(classifyPane(txt, first.hash).activity).toBe('waiting');
+  });
+
   it('assumes working when the pane is unreadable', () => {
     expect(classifyPane(null, hashText('x')).activity).toBe('working');
+  });
+
+  it('does NOT stay working on stale "N shells" frozen in scrollback', () => {
+    // Real 1d-soxl-inv pane: every worker came to rest on the spend limit; the
+    // last live spinner line is "Cooked for 0s" (idle), but old "· N shells
+    // still running" lines are frozen above it. Scoping busy markers to the live
+    // footer must keep those stale lines from pinning it to 'working'.
+    const txt = [
+      '✻ Cogitated for 56m 34s · 2 shells still running',
+      '⏺ Agent "evolve worker 1" came to rest · 34m 14s',
+      '✻ Cooked for 0s · 1 shell still running',
+      '⏺ Agent "evolve worker 1" came to rest · 1h 6m 35s',
+      '✻ Cooked for 0s',
+      '❯ ',
+      '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents',
+    ].join('\n');
+    const first = classifyPane(txt, null);
+    expect(classifyPane(txt, first.hash).activity).not.toBe('working');
+  });
+
+  it('reports stuck when byte-static on a spend/usage limit', () => {
+    const txt = [
+      "  ⎿  You've hit your org's monthly spend limit · run /usage-credits to raise it",
+      '✻ Cooked for 0s',
+      '❯ ',
+    ].join('\n');
+    const first = classifyPane(txt, null);
+    expect(classifyPane(txt, first.hash).activity).toBe('stuck');
+  });
+
+  it('recovers to working once a spend-limited pane resumes moving', () => {
+    // The stale spend-limit line lingers in scrollback after the cap is raised;
+    // a moving pane (new hash) must override it back to 'working'.
+    const stuckTxt = "  ⎿  hit your org's monthly spend limit\n✻ Cooked for 0s\n❯ ";
+    const s1 = classifyPane(stuckTxt, null);
+    expect(classifyPane(stuckTxt, s1.hash).activity).toBe('stuck');
+    const moving = "  ⎿  hit your org's monthly spend limit\n✻ Worked for 2s · 1 shell still running\n❯ ";
+    expect(classifyPane(moving, s1.hash).activity).toBe('working');
   });
 });
 
@@ -277,6 +338,41 @@ describe('backtests scoring (port of scoring.py)', () => {
     const t = buildBacktestTable(rows);
     expect(t.algos.map((a) => a.algorithm)).toEqual(['ev-1d-b', 'ev-1d-a']);
     expect(t.periods).toEqual(['cal2025']);
+  });
+});
+
+describe('benchmarkReturns (buy & hold CAGR)', () => {
+  const pt = (date: string, close: number): PricePoint => ({ date: `${date} 04:00:00`, close });
+  // CAGR over [start, end]: (1+total)^(1/years)-1, years = day-span / 365.25.
+  const cagr = (total: number, startDay: string, endDay: string): number => {
+    const years = (Date.parse(endDay) - Date.parse(startDay)) / (365.25 * 86_400_000);
+    return Math.pow(1 + total, 1 / years) - 1;
+  };
+
+  it('annualizes the per-window buy&hold return to CAGR', () => {
+    // One point per relevant boundary; close doubles over cal2025.
+    const inst = [pt('2025-01-02', 100), pt('2025-12-31', 150), pt('2026-06-15', 300)];
+    const spy = [pt('2025-01-02', 100), pt('2025-12-31', 110), pt('2026-06-15', 121)];
+    const r = benchmarkReturns(inst, spy);
+    expect(r.cal2025.instrument).toBeCloseTo(cagr(0.5, '2025-01-02', '2025-12-31'), 10);
+    expect(r.cal2025.spy).toBeCloseTo(cagr(0.1, '2025-01-02', '2025-12-31'), 10);
+    expect(r.ytd2026.instrument).toBeNull(); // single 2026 point → no window
+  });
+
+  it('measures SPY over the instrument window so different inceptions stay comparable', () => {
+    // Instrument starts 2010 (no SPY before it); longterm SPY must use 2010 start.
+    const inst = [pt('2010-02-11', 1), pt('2026-06-15', 401)];
+    const spy = [pt('2003-09-10', 50), pt('2010-02-11', 100), pt('2026-06-15', 700)];
+    const r = benchmarkReturns(inst, spy);
+    expect(r.longterm.instrument).toBeCloseTo(cagr(400, '2010-02-11', '2026-06-15'), 10); // 401/1-1, annualized
+    expect(r.longterm.spy).toBeCloseTo(cagr(6, '2010-02-11', '2026-06-15'), 10); // 700/100-1 from 2010, annualized
+  });
+
+  it('returns null for a period with too little instrument data', () => {
+    const inst = [pt('2026-03-01', 100)]; // only one point, all in ytd2026
+    const r = benchmarkReturns(inst, [pt('2026-03-01', 100), pt('2026-06-15', 110)]);
+    expect(r.cal2025).toEqual({ instrument: null, spy: null });
+    expect(r.ytd2026).toEqual({ instrument: null, spy: null }); // single point → no window
   });
 });
 

@@ -11,6 +11,7 @@ const DEFAULTS: Prefs = {
   // streamlit reports); CAGR-style metrics are timeframe-dependent.
   sortCol: 'score',
   sortDesc: true,
+  winnerCols: ['', '', '', '', ''],
   theme: 'system',
   // Listed so a saved value survives the known-keys load filter; the window
   // falls back to its default size until the first close writes real bounds.

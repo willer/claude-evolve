@@ -101,10 +101,13 @@ app.whenReady().then(() => {
     host,
     effPrefs,
     (rows, tools) => win?.webContents.send('fleet:update', { rows, tools }),
-    (name) => {
+    (name, activity) => {
+      const stuck = activity === 'stuck';
       new Notification({
-        title: `${name} is asking`,
-        body: 'The evolution session has a question or permission prompt — attach to answer.',
+        title: stuck ? `${name} is stuck` : `${name} is asking`,
+        body: stuck
+          ? 'The evolution hit a hard wall (spend/usage limit) and stalled — attach to clear it.'
+          : 'The evolution session has a question or permission prompt — attach to answer.',
       }).show();
     },
   );
@@ -132,8 +135,10 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => app.quit());
 
 // Screenshot verification harness (WEBTESTS.md): EG_SHOT=<dir> captures the
-// list (default view), the Space peek popover, the grid, and the first
-// workspace's detail view, then quits. Read-only: never clicks action buttons.
+// list (default view), the Space peek popover, the tool page, the grid, the
+// first workspace's detail view, and a chart enlarged in the zoom overlay, then
+// quits. Read-only: never clicks action buttons. (Backtests are now part of the
+// per-workspace detail view, not a standalone page.)
 function devShots(dir: string): void {
   const fs = require('node:fs') as typeof import('node:fs');
   fs.mkdirSync(dir, { recursive: true });
@@ -173,13 +178,6 @@ function devShots(dir: string): void {
     await pause(400);
     await shot('peek.png');
     await key('Escape');
-    await key('b'); // backtests dashboard (reads data/backtest-results.db, read-only)
-    await pause(1200);
-    await shot('backtests.png');
-    await js(`document.querySelector('#bt tr.bt-row')?.click()`); // toggle a NAV chart (read-only)
-    await pause(800);
-    await shot('backtests-nav.png');
-    await key('b');
     // Tool page: opening is read-only — it never presses ▶ Run, and attaches
     // only when the tool session already exists.
     await js(`document.querySelector('#tool-btns [data-tool]')?.click()`);
@@ -192,6 +190,32 @@ function devShots(dir: string): void {
     await js(`document.querySelector('.card')?.click()`);
     await pause(1500);
     await shot('detail.png');
+    // Click-to-enlarge: open the best-score sparkline in the zoom overlay (it
+    // repaints at a larger size with a labeled min/max Y-axis gutter it omits at
+    // tile size), capture, then close. The sparkline is always present (no
+    // equity artifact needed), so this shot is workspace-agnostic.
+    await js(`document.querySelector('#detail [data-chart="spark-gen"]')?.click()`);
+    await pause(500);
+    await shot('detail-zoom.png');
+    await key('Escape');
+    await pause(300);
+    // NAV chart opens the interactive viewer (axes path: Y %-return gutter, the
+    // start→end date range, the position pane when present). Full range first.
+    // Present only when the leader has an equity artifact, so this shot can be
+    // blank on artifact-less workspaces — verify on a trading root.
+    await js(`document.querySelector('#detail [data-chart="nav-leader"]')?.click()`);
+    await pause(500);
+    await shot('detail-zoom-nav.png');
+    // Drive the interactive zoom: + three times narrows the window about its
+    // centre — the Y axis and the return/maxDD/Sharpe badge recompute to the
+    // visible slice, proving it's a live chart, not a static enlarge.
+    await js(
+      `(() => { const b = document.querySelector('.nav-zoom-ctl [data-nz="in"]'); if (b) { b.click(); b.click(); b.click(); } })()`,
+    );
+    await pause(300);
+    await shot('detail-zoom-nav-in.png');
+    await key('Escape');
+    await pause(300);
     // Focus-stability regression check: focus the attached terminal, span a
     // poll push, and confirm focus + scroll position survived the re-render.
     await js(`document.querySelector('.term-wrap textarea')?.focus()`);

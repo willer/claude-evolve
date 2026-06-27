@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld('greenhouse', {
   workspace: {
     equity: (name: string, candidateId: string) =>
       ipcRenderer.invoke('workspace:equity', name, candidateId),
+    benchmark: (name: string) => ipcRenderer.invoke('workspace:benchmark', name),
   },
   session: {
     attach: (name: string, cols: number, rows: number) =>
@@ -48,6 +49,7 @@ contextBridge.exposeInMainWorld('greenhouse', {
     detach: (name: string) => ipcRenderer.invoke('session:detach', name),
     scroll: (name: string, dir: 'up' | 'down', lines: number) =>
       ipcRenderer.invoke('session:scroll', name, dir, lines),
+    unstick: (name: string) => ipcRenderer.invoke('session:unstick', name),
   },
   prefs: {
     get: () => ipcRenderer.invoke('prefs:get'),

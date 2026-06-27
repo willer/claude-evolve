@@ -1,8 +1,9 @@
 // Shared types across main/renderer. The renderer only ever sees these JSON
 // shapes (plus the raw terminal byte stream over a MessagePort).
 
-/** Live-session activity, classified from tmux pane motion (see state.ts). */
-export type Activity = 'working' | 'waiting' | 'asking';
+/** Live-session activity, classified from tmux pane motion (see state.ts).
+ *  'stuck' = byte-static on a hard wall (spend/usage limit) — needs a human. */
+export type Activity = 'working' | 'waiting' | 'asking' | 'stuck';
 
 export interface SessionState {
   running: boolean;
@@ -116,6 +117,9 @@ export interface Prefs {
   starred: string[];
   sortCol: string;
   sortDesc: boolean;
+  /** Up to 5 evaluator CSV columns shown for the current winner, right of Score
+   *  in the fleet list. '' = an empty slot. Chosen in the Roots/config dialog. */
+  winnerCols: string[];
   /** UI theme; 'system' follows the OS. Drives Electron's nativeTheme, which
    *  the renderer picks up via prefers-color-scheme. */
   theme: 'system' | 'light' | 'dark';
