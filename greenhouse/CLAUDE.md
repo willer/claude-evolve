@@ -127,10 +127,17 @@ IPC straight from data/raw/<SYM>_1d_*.csv over each period window (SPY measured
 over the instrument's own window so differing inceptions stay comparable). It's
 retroactive (reads raw prices, no re-run) and absent when the workspace has no
 resolvable symbol. Period bounds mirror backtest-all (core/backtests.ts
-PERIOD_BOUNDS — LOCKSTEP). Terminal wheel-scroll now rides xterm's
-`attachCustomWheelEventHandler` (fires even when the terminal is focused;
-returns false so xterm leaves its scrollback:0 buffer alone) → tmux copy-mode,
-for every attached session including tool pages — the old bubble-phase wrap
-listener never fired once xterm had focus. Unverified (need a human): terminal
-typing and file drop on a live session. Open: equity/ artifact retention
-(claude-evolve side).
+PERIOD_BOUNDS — LOCKSTEP). Terminal wheel-scroll: xterm handles the wheel
+natively (NO custom handler) and forwards it as a mouse sequence to the attached
+app. claude runs in the alternate screen with mouse tracking on, so tmux keeps
+ZERO scrollback for its pane (`history_size` 0) — the earlier copy-mode hijack
+scrolled a buffer that didn't exist and, by returning false, stopped the wheel
+ever reaching claude, so claude couldn't scroll its own conversation. tmux
+`mouse off` means tmux forwards mouse events to the app instead of grabbing them.
+The old `session:scroll` IPC / `SessionHost.scroll` / copy-mode path is deleted.
+Detail-view NAV charts (leader walk-forward + per-period) open an INTERACTIVE
+viewer (drag/shift-wheel pan, wheel/± zoom, reset) that re-slices the series so
+the Y axis autoscales and the return/CAGR/maxDD/Sharpe badge reflect the visible
+window; every other chart still uses the static enlarge. Unverified (need a
+human with a real wheel + live claude session): that claude now scrolls on wheel.
+Open: equity/ artifact retention (claude-evolve side).

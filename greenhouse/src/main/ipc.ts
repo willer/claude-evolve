@@ -184,10 +184,6 @@ export function wireIpc(
     attaches.delete(id);
   });
 
-  ipcMain.handle('session:scroll', (_e, id: string, dir: 'up' | 'down', lines: number) =>
-    host.scroll(id, dir, lines),
-  );
-
   ipcMain.handle('session:unstick', (_e, id: string) => host.unstick(id));
 
   // NAV artifact for one candidate: <workspace>/equity/<id>.csv, written by the

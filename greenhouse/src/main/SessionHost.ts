@@ -121,18 +121,6 @@ export class SessionHost {
     };
   }
 
-  /** Wheel scrolling via copy-mode — claude grabs mouse tracking, so the view
-   *  drives tmux's own history instead. Auto-exits at bottom. */
-  scroll(id: string, dir: 'up' | 'down', lines: number): void {
-    execFile('tmux', ['copy-mode', '-e', '-t', id], () => {
-      execFile(
-        'tmux',
-        ['send-keys', '-X', '-N', String(lines), '-t', id, dir === 'up' ? 'scroll-up' : 'scroll-down'],
-        () => {},
-      );
-    });
-  }
-
   /** Nudge a stuck session: Esc (clear any half-typed prompt / dismiss a
    *  dialog), then type "continue please" and Enter. Used by the 'stuck' badge
    *  when a session stalled on a hard wall (spend/usage limit) the operator has

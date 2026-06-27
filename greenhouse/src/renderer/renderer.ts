@@ -59,7 +59,6 @@ declare global {
       session: {
         attach(id: string, cols: number, rows: number): Promise<{ ok: boolean }>;
         detach(id: string): Promise<void>;
-        scroll(id: string, dir: 'up' | 'down', lines: number): Promise<void>;
         unstick(id: string): Promise<void>;
       };
       prefs: { get(): Promise<Prefs>; set(patch: Partial<Prefs>): Promise<Prefs> };
@@ -1277,7 +1276,7 @@ function render(): void {
 function renderHints(): void {
   $('hints').innerHTML =
     view || toolView
-      ? `<b>esc</b> back · <b>⌘esc</b> back (even from terminal) · <b>⏎/a</b> focus terminal${view ? ' · <b>s</b> start/stop' : ''} · click a chart to enlarge · click terminal to type · wheel scrolls history`
+      ? `<b>esc</b> back · <b>⌘esc</b> back (even from terminal) · <b>⏎/a</b> focus terminal${view ? ' · <b>s</b> start/stop' : ''} · click a chart to enlarge · click terminal to type · wheel scrolls the session`
       : `<b>↑↓ j k</b> select · <b>⏎</b> open + attach · <b>space</b> peek stats · <b>v</b> ${viewMode === 'list' ? 'grid' : 'list'} · <b>s</b> start/stop · <b>*</b> star`;
 }
 
@@ -1712,7 +1711,7 @@ function syncSessionPanel(
     ctl.innerHTML =
       `${sessBadge(state, sessId)} ` +
       (attached
-        ? `<span class="term-note">live — click (or ⏎) to focus; wheel scrolls history; ⌘esc backs out</span>`
+        ? `<span class="term-note">live — click (or ⏎) to focus; wheel scrolls the session; ⌘esc backs out</span>`
         : `<button class="primary" data-sess-attach>Attach terminal</button>`) +
       `<span style="flex:1"></span><button class="danger" data-sess-stop>⏹ Stop</button>`;
   } else {
@@ -1747,7 +1746,7 @@ async function attachTerminal(
     fontFamily: 'SF Mono, Menlo, monospace',
     fontSize: 12,
     theme: { background: '#000000' },
-    scrollback: 0, // tmux owns history; wheel drives copy-mode
+    scrollback: 0, // the attached app (claude, alt-screen) owns its own scrollback
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
@@ -1758,15 +1757,13 @@ async function attachTerminal(
   terms.set(sessId, ts);
 
   term.onData((data) => ts.port?.postMessage({ type: 'input', data }));
-  // Wheel → tmux copy-mode scroll. Use xterm's own wheel hook (not a DOM
-  // listener on the wrap): xterm consumes the event on its inner viewport, so a
-  // bubble-phase listener never fires once the terminal is focused. Returning
-  // false stops xterm scrolling its own (scrollback:0) buffer — tmux owns the
-  // history. Works for every attached session, tool pages included.
-  term.attachCustomWheelEventHandler((e) => {
-    void api.session.scroll(sessId, e.deltaY < 0 ? 'up' : 'down', 3);
-    return false;
-  });
+  // No custom wheel handler: claude runs in the alternate screen with mouse
+  // tracking on, so tmux keeps zero scrollback for it (`history_size` 0) — the
+  // old copy-mode hijack scrolled a buffer that doesn't exist and, by cancelling
+  // the wheel event, stopped it ever reaching claude. Letting xterm handle the
+  // wheel natively forwards it as a mouse sequence (onData → pty → tmux →
+  // claude), so claude scrolls its own conversation. tmux `mouse off` means tmux
+  // forwards to the app rather than grabbing the wheel for itself.
   ts.ro = new ResizeObserver(() => {
     fit.fit();
     ts.port?.postMessage({ type: 'resize', cols: term.cols, rows: term.rows });
@@ -1845,7 +1842,7 @@ function renderTool(): void {
   document.getElementById('t-stop')?.addEventListener('click', () => void stopTool(t.key));
   $('tool-term-hint').innerHTML = t.running
     ? terms.has(toolSessionName(t.key))
-      ? 'Live tmux attach — click (or ⏎) to focus; keystrokes then go to the session; wheel scrolls history; ⌘esc backs out.'
+      ? 'Live tmux attach — click (or ⏎) to focus; keystrokes then go to the session; wheel scrolls the session; ⌘esc backs out.'
       : '<button id="t-attach" class="primary">Attach terminal</button>'
     : `Not running. ▶ runs ./${esc(t.key)} in ${esc(t.root ?? '?')} — the pane stays inspectable after it exits.`;
   document
