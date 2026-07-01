@@ -52,7 +52,7 @@ This returns the exact IDs to use (e.g. `["gen03-001", ...]`), already skipping 
 
 ### Pick each strategy's idea source
 
-For variety, some strategies source their ideas from an external AI system instead of Opus — different model families produce genuinely different idea distributions. Roll the dice **once per active strategy** — 1/6 chance `codex`, 1/6 chance `gemini`, 1/6 chance `glm` (GLM-5.2 via opencode), otherwise `opus`:
+For variety, some strategies source their ideas from an external AI system instead of Fable — different model families produce genuinely different idea distributions. Roll the dice **once per active strategy** — 1/6 chance `codex`, 1/6 chance `gemini`, 1/6 chance `glm` (GLM-5.2 via opencode), otherwise `fable`:
 
 ```bash
 for s in novel_exploration hill_climbing structural_mutation crossover_hybrid; do
@@ -60,7 +60,7 @@ for s in novel_exploration hill_climbing structural_mutation crossover_hybrid; d
   if   [ "$r" -eq 0 ]; then src=codex
   elif [ "$r" -eq 1 ]; then src=gemini
   elif [ "$r" -eq 2 ]; then src=glm
-  else src=opus; fi
+  else src=fable; fi
   echo "$s=$src"
 done
 ```
@@ -77,7 +77,7 @@ For a strategy whose `src` (from Step 2) is `codex`, `gemini`, or `glm`, add thi
 Source these ideas from the external tool `<codex|gemini|glm>`: build one prompt carrying the strategy, parents, BRIEF, existing descriptions, and the exact IDs, run it via Bash (codex: `codex exec "<prompt>"`; gemini: `agy --dangerously-skip-permissions -p "<prompt>"` (the Antigravity CLI); glm: `opencode run -m openrouter/z-ai/glm-5.2 "<prompt>"`), then return its ideas in the required schema (sanity-checked for strategy fit and novelty). Fall back to generating them yourself only if the tool errors.
 ```
 
-Strategies whose `src` is `opus` get no extra line — they generate as usual.
+Strategies whose `src` is `fable` get no extra line — they generate as usual.
 
 Per-strategy instructions to put in each prompt:
 
@@ -107,13 +107,13 @@ Return ONLY a JSON array, nothing else.
 
 Gather the JSON arrays from all subagents. Drop any idea whose description is a near-duplicate of an existing description or of another new idea (simple judgment — same technique with trivial wording changes). Keep the IDs you reserved; don't invent new ones.
 
-Tag each surviving idea's `idea-LLM` with its strategy's `src` from Step 2 (`opus`, `codex`, `gemini`, or `glm`) — the IDs are disjoint per strategy, so map each idea by which slice its ID came from.
+Tag each surviving idea's `idea-LLM` with its strategy's `src` from Step 2 (`fable`, `codex`, `gemini`, or `glm`) — the IDs are disjoint per strategy, so map each idea by which slice its ID came from.
 
 Append the survivors in one call (pass the combined JSON array):
 
 ```bash
 python3 "$CLAUDE_PLUGIN_ROOT/scripts/evolve_csv.py" --working-dir "<WORKING_DIR>" \
-  append-ideas '[{"id":"gen03-001","basedOnId":"","description":"...","idea-LLM":"opus"},{"id":"gen03-002","basedOnId":"gen02-004","description":"...","idea-LLM":"gemini"},...]'
+  append-ideas '[{"id":"gen03-001","basedOnId":"","description":"...","idea-LLM":"fable"},{"id":"gen03-002","basedOnId":"gen02-004","description":"...","idea-LLM":"gemini"},...]'
 ```
 
 It prints `{"added": N}`.

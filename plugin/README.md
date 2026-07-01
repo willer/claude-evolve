@@ -11,8 +11,8 @@ Anthropic subagents.
 Evolution is a greenhouse: each generation grows new algorithm variants from the
 best of the last one. The loop is always the same:
 
-1. **Ideate** new variants from the top performers + your `BRIEF.md` (Opus, high effort).
-2. **Code** each variant by editing a copy of its parent algorithm (Sonnet).
+1. **Ideate** new variants from the top performers + your `BRIEF.md` (Fable, high effort).
+2. **Code** each variant by editing a copy of its parent algorithm (codex-first, Opus judge/fallback).
 3. **Score** each variant by running your `evaluator.py` under a sandbox (Haiku /
    deterministic).
 4. Record the result in `evolution.csv` and repeat.
@@ -25,8 +25,8 @@ plugin runs the loop.
 | Skill | Tier | Does |
 |-------|------|------|
 | `evolve` | orchestrator | Runs the whole loop as a self-respawning pool of background worker subagents. The main conversation stays a clean dashboard. Equivalent to `claude-evolve run`. |
-| `evolve-ideate` | Opus (high) | One generation of ideation. Fans out parallel strategy subagents (novel / hill-climb / structural / crossover) via the plugin's `ideator` agent, appends new `pending` rows. Run one at a time per workspace. |
-| `evolve-code` | Sonnet | Write the code for one candidate: resolve parent, copy to `evolution_<id>.py`, implement its description. |
+| `evolve-ideate` | Fable (high) | One generation of ideation. Fans out parallel strategy subagents (novel / hill-climb / structural / crossover) via the plugin's `ideator` agent, appends new `pending` rows. Run one at a time per workspace. |
+| `evolve-code` | Opus (medium) | Write the code for one candidate: resolve parent, copy to `evolution_<id>.py`, implement its description. |
 | `evolve-score` | Haiku | Score one candidate: syntax-check, optional `validator.py`, sandboxed `evaluator.py`, write the number to the CSV. Deterministic — the subagent only exists to keep evaluator noise out of the main thread. |
 
 ## Workspace
@@ -42,8 +42,8 @@ no flag they auto-detect `evolution/config.yaml` or `./config.yaml`. The
   ID generation, sandboxed evaluation) lives under `lib/` and needs nothing
   installed — no npm, no `pip` — falling back to a minimal config parser when
   PyYAML is absent. This plugin is the home of that engine, not a copy of it.
-- **Fixed model roles, defined in `agents/`.** Opus at high effort ideates
-  (`agents/ideator.md`); codex (GPT-5.5) codes first with the Sonnet worker
+- **Fixed model roles, defined in `agents/`.** Fable at high effort ideates
+  (`agents/ideator.md`); codex (GPT-5.5) codes first with the Opus worker
   (`agents/coder.md`, restricted tools) judging and falling back to coding
   itself; the evaluator scores. Each agent definition pins its model/effort and
   carries the role's protocol as a system prompt — which also keeps the

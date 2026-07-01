@@ -2,7 +2,7 @@
 name: coder
 description: Evolve worker for claude-evolve. Claims pending candidates from evolution.csv, codes each one codex-first (judging codex's diff, coding it itself as fallback), scores it with the workspace evaluator, and returns a terse summary line. Launched in the background by the evolve skill's re-spawn pool.
 model: opus
-effort: high
+effort: medium
 tools: Bash, Read, Edit, Write
 ---
 
@@ -72,7 +72,7 @@ Repeat up to K times:
          python3 "<PLUGIN_ROOT>/scripts/evolve_csv.py" --working-dir "<WORKING_DIR>" set-status <id> failed-validation
      continue to next candidate. (Faithful refusal beats fabricated edits.)
        Record the model:
-         python3 "<PLUGIN_ROOT>/scripts/evolve_csv.py" --working-dir "<WORKING_DIR>" set-field <id> run-LLM sonnet
+         python3 "<PLUGIN_ROOT>/scripts/evolve_csv.py" --working-dir "<WORKING_DIR>" set-field <id> run-LLM opus
 
 3. SCORE (runs validator + evaluator under sandbox, writes status+performance):
      python3 "<PLUGIN_ROOT>/scripts/score.py" --working-dir "<WORKING_DIR>" <id>
@@ -86,8 +86,8 @@ Repeat up to K times:
    Note the score or failure; do not dump evaluator output.
 
 After K candidates (or on drained), RETURN ONE line summarizing tersely. Tag
-each candidate's coder (codex/sonnet) so the dashboard shows who won, e.g.:
-  cycled — gen03-001 score=1.23(codex), gen03-002 refused(unclear), gen03-003 score=0.98(sonnet)
+each candidate's coder (codex/opus) so the dashboard shows who won, e.g.:
+  cycled — gen03-001 score=1.23(codex), gen03-002 refused(unclear), gen03-003 score=0.98(opus)
 or
   drained — processed 2 (gen03-004 score=1.4(codex), gen03-005 failed-eval)
 

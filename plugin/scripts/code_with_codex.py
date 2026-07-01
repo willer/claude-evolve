@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Attempt to code one candidate with codex (GPT-5.5) — the first-choice coder in
-the evolve loop, ahead of the Sonnet worker itself.
+the evolve loop, ahead of the Opus worker itself.
 
-The evolve worker (Sonnet) runs this AFTER prepare.py has copied the parent
+The evolve worker (Opus) runs this AFTER prepare.py has copied the parent
 algorithm to evolution_<id>.py. This helper hands codex the idea and lets it
 edit that file in place, then reports what happened. The worker reads the
 output (codex's own summary + a unified diff of the attempt) and makes the

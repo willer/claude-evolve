@@ -1,6 +1,6 @@
 ---
 name: evolve-code
-description: Write the code for one evolution candidate. Resolves the candidate's parent algorithm, copies it to evolution_<id>.py, then implements the candidate's description from evolution.csv — codex (GPT-5.5) first, with you (Sonnet) judging the result and coding it yourself if codex falls short. Use when the user says "code gen02-003", "write the algorithm for this candidate", "implement idea <id>", or when a parent skill dispatches coding.
+description: Write the code for one evolution candidate. Resolves the candidate's parent algorithm, copies it to evolution_<id>.py, then implements the candidate's description from evolution.csv — codex (GPT-5.5) first, with you (Opus) judging the result and coding it yourself if codex falls short. Use when the user says "code gen02-003", "write the algorithm for this candidate", "implement idea <id>", or when a parent skill dispatches coding.
 argument-hint: "<candidate-id> [--working-dir DIR]"
 ---
 
@@ -8,7 +8,7 @@ argument-hint: "<candidate-id> [--working-dir DIR]"
 
 Implement one candidate's idea as working code. The candidate already exists in `evolution.csv` with a `description` (the idea) and a `basedOnId` (its parent). Your job: turn the description into a real, substantial code change on a copy of the parent algorithm.
 
-Coding is **codex-first**: codex (GPT-5.5) takes the first pass, and you (Sonnet) judge whether it did the job — coding the candidate yourself when it didn't. It needs genuine coding judgment either way. (The omnibus `/evolve` loop runs this same protocol via the plugin's `claude-evolve:coder` agent, which adds claim/score looping; this skill is the standalone one-candidate path.)
+Coding is **codex-first**: codex (GPT-5.5) takes the first pass, and you (Opus) judge whether it did the job — coding the candidate yourself when it didn't. It needs genuine coding judgment either way. (The omnibus `/evolve` loop runs this same protocol via the plugin's `claude-evolve:coder` agent, which adds claim/score looping; this skill is the standalone one-candidate path.)
 
 ## Resolve the plugin root
 
@@ -79,7 +79,7 @@ python3 -m py_compile "<target_path>"
 If it fails, fix it. If you can't, report `<id>: REFUSED — could not produce valid syntax`. Then record the model:
 
 ```bash
-python3 "$CLAUDE_PLUGIN_ROOT/scripts/evolve_csv.py" --working-dir "<WORKING_DIR>" set-field <CANDIDATE_ID> run-LLM sonnet
+python3 "$CLAUDE_PLUGIN_ROOT/scripts/evolve_csv.py" --working-dir "<WORKING_DIR>" set-field <CANDIDATE_ID> run-LLM opus
 ```
 
 ## Step 3 — Report
