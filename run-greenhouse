@@ -1,0 +1,12 @@
+#!/bin/bash
+# Build and launch the Evolve Greenhouse Electron app (greenhouse/).
+# Run from anywhere: ./run-greenhouse
+set -e
+cd "$(dirname "$0")/greenhouse"
+
+if [ ! -d node_modules ]; then
+  echo "node_modules missing — running npm install..."
+  npm install
+fi
+
+exec npm start
