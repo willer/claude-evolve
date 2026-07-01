@@ -43,7 +43,7 @@ to verify the NAV chart deterministically.
 - [ ] List (default view): every workspace under the configured roots appears
       as a row, sorted by score descending
 - [ ] List: column headers sort on click with ▲/▼ indicator; health chip
-      (ok/plateau/idle/failing/error) and state badge render per row;
+      (ok/plateau/stale/failing/error) and state badge render per row;
       sparkline stroke matches health color (green/yellow/red)
 - [ ] Header is two rows: row 1 = brand + totals (left) and CPU/LOAD/MEM
       host-load gauges (right); row 2 = tool buttons (left) and search +
@@ -58,7 +58,7 @@ to verify the NAV chart deterministically.
 - [ ] Header host-load gauges: CPU% / 1-min loadavg / MEM% each with a
       fixed-scale sparkline that fills over ~minutes; value color greens→
       yellow→red as load climbs
-- [ ] Header totals: workspace/running counts plus asking/failing/idle/
+- [ ] Header totals: workspace/running counts plus asking/failing/stale/
       plateau counts in their alert colors
 - [ ] Peek (Space): leader ratios grid, returns-by-year bars (return_YYYY
       columns), best-score sparkline, run stats

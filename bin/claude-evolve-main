@@ -70,7 +70,8 @@ COMMANDS:
     setup              Initialize evolution workspace
     check              Test all configured AI models (health check)
     ideate             Generate new algorithm ideas
-    run                Execute evolution candidates
+    run [gens]         Execute evolution candidates (optionally only the last [gens] generations)
+    run-noideate [gens]  Re-score pending candidates only, never ideate (optionally last [gens] gens)
     analyze            Analyze evolution results
     edit               Manage candidate statuses by generation
     status             Show evolution progress and current leader
@@ -90,6 +91,9 @@ EXAMPLES:
     claude-evolve setup
     claude-evolve ideate 5
     claude-evolve run --timeout 300
+    claude-evolve run 3                       # only process the last 3 generations
+    claude-evolve run-noideate                # re-score all pending, no new ideas
+    claude-evolve run-noideate 2              # re-score pending in the last 2 generations
     claude-evolve analyze --open
     claude-evolve --working-dir=evolution-abc run
 
@@ -215,6 +219,10 @@ ideate)
 run)
   shift
   exec "$SCRIPT_DIR/claude-evolve-run" "$@"
+  ;;
+run-noideate)
+  shift
+  exec "$SCRIPT_DIR/claude-evolve-run" --no-ideate "$@"
   ;;
 analyze)
   shift

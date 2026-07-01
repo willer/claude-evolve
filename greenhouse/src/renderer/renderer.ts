@@ -123,7 +123,7 @@ function healthChip(h: Health): string {
 const HEALTH_COLOR: Record<Health['level'], string> = {
   good: 'var(--green)',
   plateau: 'var(--yellow)',
-  idle: 'var(--yellow)',
+  stale: 'var(--yellow)',
   failing: 'var(--red)',
   error: 'var(--red)',
 };
@@ -821,7 +821,7 @@ function btToggleClick(e: MouseEvent): void {
 // ── sorting ──────────────────────────────────────────────────────────────────
 
 const ACTIVITY_RANK: Record<string, number> = { stuck: 4, asking: 3, waiting: 2, working: 1 };
-const HEALTH_RANK: Record<Health['level'], number> = { error: 4, failing: 3, idle: 2, plateau: 1, good: 0 };
+const HEALTH_RANK: Record<Health['level'], number> = { error: 4, failing: 3, stale: 2, plateau: 1, good: 0 };
 
 const SORTS: Record<string, (r: WorkspaceRow) => number | string | null> = {
   name: (r) => r.name.toLowerCase(),
@@ -922,7 +922,7 @@ function renderTotals(): void {
   for (const [level, cls] of [
     ['error', 't-red'],
     ['failing', 't-red'],
-    ['idle', 't-yellow'],
+    ['stale', 't-yellow'],
     ['plateau', 't-yellow'],
   ] as const) {
     if (counts[level]) parts.push(`<span class="${cls}"><b>${counts[level]}</b> ${level}</span>`);
@@ -1153,8 +1153,8 @@ function renderGridCards(order: WorkspaceRow[]): void {
           <span class="star ${r.starred ? 'on' : ''}" data-star="${esc(r.name)}" title="Pin to top">${r.starred ? '★' : '☆'}</span>
           <span class="name" title="${esc(r.path)}">${esc(r.name)}</span>
           <span style="flex:1"></span>
-          ${healthChip(h)}
           ${badge(r)}
+          ${healthChip(h)}
         </div>
         ${
           s.error
@@ -1198,7 +1198,7 @@ function renderPeek(): void {
   const age = fmtAge(r.csvMtimeMs);
   peek.style.display = 'block';
   peek.innerHTML = `
-    <h3>${esc(r.name)} ${healthChip(h)} ${badge(r)}</h3>
+    <h3>${esc(r.name)} ${badge(r)} ${healthChip(h)}</h3>
     ${
       leader
         ? `<div class="sub">${esc(leader.id)} · <span class="score">${fmtScore(leader.performance)}</span></div>`
@@ -1593,12 +1593,13 @@ function renderDetail(): void {
     : '';
 
   // Start/stop for both sessions live in the right-column panels (below); the
-  // bar just identifies the workspace and shows the evolution badge.
+  // bar just identifies the workspace and shows the evolution badge. Badge order
+  // (session activity, then health) mirrors the fleet list view.
   $('d-bar').innerHTML = `
     <button id="back">← Fleet</button>
     <h2>${esc(r.name)}</h2>
-    ${healthChip(h)}
     ${badge(r)}
+    ${healthChip(h)}
     <span style="flex:1"></span>`;
   $('back').onclick = closeDetail;
 

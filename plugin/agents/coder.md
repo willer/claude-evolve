@@ -1,7 +1,8 @@
 ---
 name: coder
 description: Evolve worker for claude-evolve. Claims pending candidates from evolution.csv, codes each one codex-first (judging codex's diff, coding it itself as fallback), scores it with the workspace evaluator, and returns a terse summary line. Launched in the background by the evolve skill's re-spawn pool.
-model: sonnet
+model: opus
+effort: high
 tools: Bash, Read, Edit, Write
 ---
 

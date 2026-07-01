@@ -55,6 +55,7 @@ class Config:
     cpu_limit_seconds: int = 0  # CPU time limit (0 = unlimited)
     timeout_seconds: int = 600
     max_candidates: int = 5
+    min_generation: Optional[int] = None  # Only claim candidates >= this generation (--gens window)
     max_validation_retries: int = 3  # Max attempts to fix validation errors (if validator.py exists)
     # Sandbox configuration
     sandbox_enabled: bool = True  # Enable macOS sandbox-exec isolation
@@ -727,7 +728,7 @@ python validator.py {target_basename}
         while processed < self.config.max_candidates:
             # Get next pending candidate
             with EvolutionCSV(self.config.csv_path) as csv:
-                result = csv.get_next_pending_candidate()
+                result = csv.get_next_pending_candidate(min_generation=self.config.min_generation)
 
             if not result:
                 log("No pending candidates")
@@ -826,12 +827,16 @@ def main():
     parser = argparse.ArgumentParser(description='Claude Evolve Worker')
     parser.add_argument('--config', help='Path to config.yaml')
     parser.add_argument('--timeout', type=int, help='Timeout in seconds')
+    parser.add_argument('--min-generation', type=int,
+                        help='Only claim candidates from this generation onward (--gens window)')
     args = parser.parse_args()
 
     try:
         config = load_config_from_yaml(args.config)
         if args.timeout:
             config.timeout_seconds = args.timeout
+        if args.min_generation is not None:
+            config.min_generation = args.min_generation
 
         # Initialize file logging in the evolution directory
         init_file_logging(config.evolution_dir)

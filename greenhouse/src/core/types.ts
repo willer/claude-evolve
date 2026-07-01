@@ -83,11 +83,12 @@ export interface WorkspaceRow {
 }
 
 /** Overall workspace health: error (CSV unreadable) > failing (>3 failures
- *  in the last 2 gens — broken, red) > idle (the RUNNER is alive but its CSV
+ *  in the last 2 gens — broken, red) > stale (the RUNNER is alive but its CSV
  *  has been static >12h — the claude process sitting on a question or quiet,
  *  not the evolution itself; yellow) > plateau (>20 gens since the leader) >
- *  good. */
-export type HealthLevel = 'error' | 'idle' | 'failing' | 'plateau' | 'good';
+ *  good. Named 'stale' (not 'idle') so it can't be confused with the agent's
+ *  'waiting' activity. */
+export type HealthLevel = 'error' | 'stale' | 'failing' | 'plateau' | 'good';
 
 export interface Health {
   level: HealthLevel;

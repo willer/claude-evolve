@@ -21,7 +21,9 @@ Commands:
   set-field <id> <col> <value>
   top-performers [--n N]      -> JSON list of best completed candidates
   context [--n N]             -> JSON ideation context (generation, top performers,
-                                 brief, notes, existing descriptions)
+                                 brief, notes, existing descriptions, and
+                                 cross_evolution_wins from sibling workspaces).
+                                 [--siblings-root DIR] [--sibling-count N] [--no-siblings]
   next-ids <generation> <count>   -> JSON list of unused IDs for a generation
   append-ideas <json>         -> append ideas; <json> is a list of
                                  {id,basedOnId,description,idea-LLM?}
@@ -40,6 +42,124 @@ from lib.evolution_csv import EvolutionCSV
 
 def _emit(obj):
     print(json.dumps(obj))
+
+
+# AIDEV-NOTE: Cross-evolution wins. Siblings = other workspaces under the same
+# root dir (default: parent of this evolution_dir, mirroring the greenhouse
+# "Roots" control). We rank them by cheap BRIEF token-overlap and hand the top
+# few — with their leading performers — to the ideator as UNTRUSTED context, so
+# a technique that won in one workspace can cross-pollinate into a sibling. The
+# overlap score is only a sort key; the (smart) ideator judges real relevance.
+_STOP = {
+    "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with", "is",
+    "are", "be", "this", "that", "it", "as", "by", "at", "from", "we", "our",
+    "you", "your", "i", "but", "not", "can", "will", "should", "must", "each",
+    "all", "any", "no", "so", "if", "then", "than", "into", "over", "per",
+}
+
+
+def _brief_tokens(text: str) -> set:
+    out = set()
+    word = []
+    for ch in text.lower():
+        if ch.isalnum():
+            word.append(ch)
+        else:
+            if word:
+                w = "".join(word)
+                if len(w) > 2 and w not in _STOP:
+                    out.add(w)
+                word = []
+    if word:
+        w = "".join(word)
+        if len(w) > 2 and w not in _STOP:
+            out.add(w)
+    return out
+
+
+def _brief_summary(text: str, limit: int = 240) -> str:
+    """First meaningful line(s) of a BRIEF, headings stripped, capped."""
+    parts = []
+    used = 0
+    for raw in text.splitlines():
+        line = raw.lstrip("#").strip()
+        if not line:
+            continue
+        parts.append(line)
+        used += len(line)
+        if used >= limit:
+            break
+    summary = " — ".join(parts)
+    return summary[:limit].rstrip() + ("…" if len(summary) > limit else "")
+
+
+def gather_sibling_wins(ws, root, max_siblings=5, per_sibling=2):
+    """
+    Discover sibling evolution workspaces under `root` and return their leading
+    performers, ranked by BRIEF relevance to this workspace. Best-effort: any
+    sibling that fails to load or has no completed performers is skipped (a note
+    goes to stderr). Returns a JSON-ready list.
+    """
+    root = Path(root)
+    if not root.is_dir():
+        return []
+
+    self_dir = ws.evolution_dir.resolve()
+    my_tokens = _brief_tokens(ws.brief_path.read_text()) if ws.brief_path.exists() else set()
+
+    # Each immediate subdir that carries its own config.yaml (directly or under
+    # an evolution/ subdir) is a candidate sibling.
+    candidates = []
+    for child in sorted(root.iterdir()):
+        if not child.is_dir():
+            continue
+        cfg = None
+        for probe in (child / "config.yaml", child / "evolution" / "config.yaml"):
+            if probe.exists():
+                cfg = probe
+                break
+        if cfg is None:
+            continue
+        try:
+            sib = load_workspace(str(cfg.parent))
+        except Exception as exc:  # noqa: BLE001 — best-effort discovery
+            print(f"[siblings] skip {child.name}: {exc}", file=sys.stderr)
+            continue
+        if sib.evolution_dir.resolve() == self_dir:
+            continue  # that's us
+        candidates.append(sib)
+
+    scored = []
+    for sib in candidates:
+        try:
+            # Read-only and LOCK-FREE on purpose: a sibling may be mid-run with
+            # its lock held by a worker. _read_csv just reads, and writes land
+            # via atomic os.rename, so we see a complete old-or-new file, never a
+            # torn one — and we never block the fleet or wait out the 10s lock.
+            top = EvolutionCSV(str(sib.csv_path)).get_top_performers(per_sibling, include_novel=False)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[siblings] skip {sib.evolution_dir.name}: {exc}", file=sys.stderr)
+            continue
+        if not top:
+            continue  # no completed performers yet — nothing to cross-pollinate
+        sib_brief = sib.brief_path.read_text() if sib.brief_path.exists() else ""
+        sib_tokens = _brief_tokens(sib_brief)
+        overlap = len(my_tokens & sib_tokens)
+        denom = len(my_tokens | sib_tokens) or 1
+        relevance = round(overlap / denom, 3)  # Jaccard
+        scored.append({
+            "workspace": sib.evolution_dir.name,
+            "brief_summary": _brief_summary(sib_brief),
+            "relevance": relevance,
+            "wins": [
+                {"id": w["id"], "performance": w["performance"], "description": w["description"]}
+                for w in top
+            ],
+        })
+
+    # Most-relevant first; ties broken by the sibling's best score.
+    scored.sort(key=lambda s: (s["relevance"], max(w["performance"] for w in s["wins"])), reverse=True)
+    return scored[:max_siblings]
 
 
 def cmd_stats(csv, args):
@@ -155,6 +275,11 @@ def cmd_context(csv, ws, args):
     if notes_path.exists():
         notes = notes_path.read_text()
 
+    cross = []
+    if not args.no_siblings:
+        root = args.siblings_root or str(ws.evolution_dir.parent)
+        cross = gather_sibling_wins(ws, root, max_siblings=args.sibling_count)
+
     _emit({
         "generation": generation,
         "evolution_dir": str(ws.evolution_dir),
@@ -162,6 +287,7 @@ def cmd_context(csv, ws, args):
         "brief": brief,
         "notes": notes,
         "existing_descriptions": existing,
+        "cross_evolution_wins": cross,
         "num_elites": ws.num_elites,
         "total_ideas": ws.total_ideas,
         "strategies": ws.strategies,
@@ -185,6 +311,9 @@ def main():
     p = sub.add_parser("set-field"); p.add_argument("id"); p.add_argument("col"); p.add_argument("value")
     p = sub.add_parser("top-performers"); p.add_argument("--n", type=int, default=10)
     p = sub.add_parser("context"); p.add_argument("--n", type=int, default=3)
+    p.add_argument("--siblings-root", help="Dir of sibling workspaces to mine for cross-evolution wins (default: parent of this workspace)")
+    p.add_argument("--sibling-count", type=int, default=5, help="Max sibling workspaces to surface")
+    p.add_argument("--no-siblings", action="store_true", help="Disable cross-evolution wins discovery")
     p = sub.add_parser("next-ids"); p.add_argument("generation", type=int); p.add_argument("count", type=int)
     p = sub.add_parser("append-ideas"); p.add_argument("json")
 

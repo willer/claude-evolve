@@ -30,13 +30,29 @@ export const BUSY_MARKERS: RegExp[] = [
   /↓\s*[\d.]+k? tokens/, //         a running agent-fleet row, e.g. "◯ evolve-worker-1 … ↓ 32.0k tokens"
 ];
 
+// The idle-composer rest hint Claude prints ONLY once a turn has fully come to
+// rest and it's awaiting a brand-new instruction ("new task? /clear to save N
+// tokens"). It never shows while background subagents/shells are actively
+// driving the loop (the agent-fleet view and the live "N shells" spinner carry
+// no such hint). So when it's in the live footer the MAIN agent is done — and a
+// lingering "1 shell still running" is an orphan background shell, not work in
+// flight. This must veto the BUSY_MARKERS override so a finished evolve session
+// with a stray shell reads as waiting/stuck, not a pinned-forever 'working'.
+// Verified against the ev-1d-fas pane 2026-06-28 ("Cogitated for 10h 34m 17s ·
+// 1 shell still running" + "new task? /clear to save 413.3k tokens", idle).
+export const REST_MARKERS: RegExp[] = [/new task\?/, /\/clear to save\b/];
+
 // A byte-static pane that carries one of these is not a benign idle composer —
-// it's a session that hit a hard wall and needs a human (raise the cap, top up
-// credits) before it can do anything. Surfaced as 'stuck' (distinct from a
-// plain 'waiting' idle composer) so the fleet flags + notifies it. Checked
-// against the WHOLE pane, since the error text lives in scrollback above the
-// now-idle footer. Seen on 1d-soxl-inv 2026-06-20 ("hit your org's monthly
-// spend limit · run /usage-credits …").
+// it's a session that hit a hard wall RIGHT NOW and needs a human (raise the
+// cap, top up credits) before it can do anything. Surfaced as 'stuck' (distinct
+// from a plain 'waiting' idle composer) so the fleet flags + notifies it.
+// 'stuck' is reserved for a CURRENT technical wall — NOT a session that hit the
+// limit earlier, recovered, and finished normally (e.g. ev-1d-vt converging on
+// its own after an earlier spend-limit blip). So the marker is matched against
+// the recent band (see recentBand), not the whole pane: an error left far up in
+// scrollback with a full turn of work after it is resolved history, not a wall.
+// Seen on 1d-soxl-inv 2026-06-20 ("hit your org's monthly spend limit · run
+// /usage-credits …", the limit message just above the live footer).
 export const STUCK_MARKERS: RegExp[] = [
   /\b(monthly )?spend limit\b/i,
   /\busage limit\b/i,
@@ -63,6 +79,22 @@ function liveFooter(text: string): string {
   return text;
 }
 
+/** The recent band: from the SECOND-to-last spinner line to the end — the live
+ *  footer plus the one turn before it. A hard-wall marker counts as 'stuck'
+ *  only here. A genuine wall sits in this band (the failed turn that hit it is
+ *  the last thing that happened); a wall that was hit, resolved, and buried
+ *  under a full recovery turn + the final report falls outside it, so a session
+ *  that recovered and finished on its own reads as 'waiting', not 'stuck'.
+ *  Falls back to the whole text when there are fewer than two spinner lines. */
+function recentBand(text: string): string {
+  const lines = text.split('\n');
+  let seen = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (SPINNER_LINE.test(lines[i]) && ++seen === 2) return lines.slice(i).join('\n');
+  }
+  return text;
+}
+
 /** Classify a live session pane:
  *   - asking: an interactive dialog footer is present.
  *   - working: background shells/subagents are live in the footer, or the pane
@@ -79,13 +111,19 @@ export function classifyPane(
   if (text === null) return { activity: 'working', hash: prevHash }; // unreadable → assume busy
   const h = hashText(text);
   if (ASKING_MARKERS.some((m) => text.includes(m))) return { activity: 'asking', hash: h };
+  const footer = liveFooter(text);
   // Busy markers are scoped to the live footer so stale "N shells" / token rows
-  // frozen in scrollback can't pin a dead session to 'working'.
-  if (BUSY_MARKERS.some((re) => re.test(liveFooter(text)))) return { activity: 'working', hash: h };
+  // frozen in scrollback can't pin a dead session to 'working'. The rest hint
+  // ("new task?") vetoes them: once the main agent is at rest, a lingering shell
+  // is an orphan, not work in flight — fall through to the byte-static verdict.
+  const atRest = REST_MARKERS.some((re) => re.test(footer));
+  if (!atRest && BUSY_MARKERS.some((re) => re.test(footer))) return { activity: 'working', hash: h };
   if (prevHash !== null && prevHash === h) {
-    // Byte-static: idle. Distinguish a hard-wall stop (needs a human) from a
-    // benign idle composer.
-    if (STUCK_MARKERS.some((re) => re.test(text))) return { activity: 'stuck', hash: h };
+    // Byte-static: idle. Distinguish a CURRENT hard-wall stop (needs a human)
+    // from a benign idle composer. The marker is scoped to the recent band so a
+    // resolved spend-limit blip buried in scrollback (the session recovered and
+    // finished on its own) reads as 'waiting', not a false 'stuck'.
+    if (STUCK_MARKERS.some((re) => re.test(recentBand(text)))) return { activity: 'stuck', hash: h };
     return { activity: 'waiting', hash: h };
   }
   return { activity: 'working', hash: h };
@@ -115,14 +153,16 @@ export function adhocSessionName(dir: string): string {
 
 // Evolution launch: claude driven by a /goal that runs /evolve until at least 2
 // generations pass with no improvement (so the session self-terminates on a
-// plateau instead of looping forever), pinned to Opus at xhigh effort. Always
-// forced into auto permission mode (operator decision
-// 2026-06-12): rare prompts that still stop the session surface as ASKING
-// (native notification; attach and answer in the terminal — the CLI does its
-// own question asking). (Was Fable until 2026-06-12, when access was withdrawn.)
+// plateau instead of looping forever), pinned to Opus at medium effort — this
+// is the manager/coordinator role (high call volume, mostly mechanical state
+// routing), not the correctness-critical coder or ideator roles, so it doesn't
+// need xhigh (2026-07-01 cost/quality review). Always forced into auto
+// permission mode (operator decision 2026-06-12): rare prompts that still stop
+// the session surface as ASKING (native notification; attach and answer in the
+// terminal — the CLI does its own question asking).
 export const EVOLVE_PROMPT =
   "/goal run /evolve and keep evolving until there's at least 2 generations that show no improvement and you have no more ideas";
-export const EVOLVE_ARGS = ['--model', 'opus', '--effort', 'xhigh', '--permission-mode', 'auto'];
+export const EVOLVE_ARGS = ['--model', 'opus', '--effort', 'medium', '--permission-mode', 'auto'];
 
 // Adhoc launch: a plain `claude` in the workspace dir — no model pin, no prompt,
 // default permission mode. It's a scratch session to poke at the workspace by

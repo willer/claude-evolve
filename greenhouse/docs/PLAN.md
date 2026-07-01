@@ -113,10 +113,18 @@
       not rate — AI-supervised coding makes failures rare, moderate attrition
       is normal); stuck renamed stalled and demoted to yellow (a plate that
       stopped spinning — attach and nudge); failing outranks stalled
-- [x] "stalled" renamed "idle" — the verdict is about the RUNNER (claude
-      process quiet >12h), not the evolution search; "stalled" misread as the
-      search plateauing. Level key + label + CSS + totals all renamed; hover
-      detail now leads with the CSV age
+- [x] "stalled" renamed "idle", then "idle" renamed "stale" (2026-06-28) — the
+      verdict is about the RUNNER (claude process quiet >12h), not the evolution
+      search; "stalled" misread as the search plateauing, and "idle" misread as
+      the agent's `waiting` activity. Level key + label + CSS + totals + rank +
+      color all renamed; hover detail leads with the CSV age
+- [x] Pane classifier fixes (2026-06-28, core/state.ts): REST hint ("new task?")
+      in the live footer vetoes the BUSY "N shells" marker so a finished session
+      with an orphan shell reads `waiting` not `working`; STUCK markers scoped to
+      the recentBand (last 2 spinner cycles) so a resolved spend-limit blip in
+      scrollback no longer false-flags a self-converged session as `stuck`
+- [x] Badge order unified across list/grid/detail/peek: activity badge, then
+      health chip (was reversed in detail/grid/peek vs the list view)
 - [x] Removed one-key ✓1/✗2 answer machinery (buttons, 1/2 keys, IPC,
       sendKeys) — asking still badges + notifies; answer in the terminal
 

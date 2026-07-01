@@ -202,10 +202,10 @@ export const FAILING_FAILS = 3;
 export const STALE_MS = 12 * 3600 * 1000;
 
 /** One verdict per workspace so the dashboard reads at a glance. Severity:
- *  error > failing (red — broken) > idle (yellow — the RUNNER is alive but
- *  quiet, usually claude reporting no progress or sitting on a question; the
- *  evolution search itself isn't stalled, the process driving it is) >
- *  plateau (yellow) > ok. */
+ *  error > failing (red — broken) > stale (yellow — the RUNNER is alive but its
+ *  CSV has been quiet >12h, usually claude reporting no progress or sitting on a
+ *  question; the evolution search itself isn't stalled, the process driving it
+ *  is) > plateau (yellow) > ok. */
 export function classifyHealth(
   stats: WorkspaceStats,
   csvMtimeMs: number | null,
@@ -222,9 +222,9 @@ export function classifyHealth(
   if (running && csvMtimeMs !== null && nowMs - csvMtimeMs > STALE_MS) {
     const ageH = Math.floor((nowMs - csvMtimeMs) / 3600000);
     return {
-      level: 'idle',
-      label: 'idle',
-      detail: `runner alive but idle — no CSV write in ${ageH}h; the claude process is likely reporting no progress or waiting on a question, attach to nudge it (the evolution search itself isn't stalled)`,
+      level: 'stale',
+      label: 'stale',
+      detail: `runner alive but no CSV write in ${ageH}h; the claude process is likely reporting no progress or waiting on a question, attach to nudge it (the evolution search itself isn't stalled)`,
     };
   }
   if (stats.gensSinceTop !== null && stats.gensSinceTop > PLATEAU_GENS)

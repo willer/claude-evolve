@@ -84,7 +84,7 @@ EG_SHOT=shots npm start   # screenshot harness (WEBTESTS.md) — side-effect-fre
   `node_modules/electron/dist/` and write `path.txt` containing exactly
   `Electron.app/Contents/MacOS/Electron` — NO trailing newline (printf, not echo).
 - Evolution launch = detached tmux session in the workspace dir, then
-  send-keys `claude --model opus --effort xhigh --dangerously-skip-permissions
+  send-keys `claude --model opus --effort medium --dangerously-skip-permissions
   "run the /evolve skill"` — typed, not passed to new-session, so the shell
   survives claude exiting and the pane stays inspectable post-mortem.
 - Evaluator metrics are generic: any non-core numeric CSV column becomes a
@@ -118,9 +118,18 @@ MessagePort routed by meta.attachId), not the old single-terminal global.
 Dragging a file onto a terminal types its path into that session (preload
 webUtils.getPathForFile — File.path is gone in Electron 39; a window-wide
 drop preventDefault stops Electron from navigating to the file:// URL). The
-"stalled" health verdict was renamed "idle" — it flags the RUNNER (claude
-process quiet >12h via CSV mtime), not the evolution search; the hover leads
-with the CSV age. The detail-view backtest period table now appends a buy&hold comparison
+workspace health verdict for a RUNNER quiet >12h (claude process quiet via CSV
+mtime, not the evolution search) is "stale" — renamed from "idle" (and earlier
+"stalled") because "idle" read as the AGENT's `waiting` activity; the hover
+leads with the CSV age. Two pane-classifier fixes (core/state.ts, 2026-06-28):
+(1) the idle-composer REST hint ("new task?" / "/clear to save") in the live
+footer vetoes the BUSY "N shells" marker — a finished session with one orphan
+background shell now reads `waiting`, not a pinned-forever `working`; (2) the
+hard-wall STUCK markers (spend/usage limit) are scoped to the recentBand (last
+two spinner-line cycles), so a spend-limit blip that was hit, resolved, and
+buried under a full recovery turn + the final report no longer false-flags a
+self-converged session (e.g. ev-1d-vt) as `stuck`. Badge order is unified
+across list/grid/detail/peek: session activity badge first, then health chip. The detail-view backtest period table now appends a buy&hold comparison
 (single-symbol trading workspaces only): Ret (strategy total return from the
 period NAV) next to SPY B&H and <SYM> B&H, computed by the workspace:benchmark
 IPC straight from data/raw/<SYM>_1d_*.csv over each period window (SPY measured

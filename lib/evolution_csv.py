@@ -14,6 +14,23 @@ import time
 from typing import List, Tuple, Optional, Dict, Any
 
 
+def parse_generation(candidate_id: str) -> Optional[int]:
+    """Parse the generation number from a candidate ID.
+
+    'gen08-013' -> 8, 'baseline-000' -> None, '0'/'000' -> None.
+    Returns None for IDs without a 'genNN' prefix (baseline / non-gen rows).
+    """
+    cid = candidate_id.strip().strip('"')
+    if '-' in cid:
+        gen_part = cid.split('-')[0]
+        if gen_part.startswith('gen'):
+            try:
+                return int(gen_part[3:])
+            except ValueError:
+                return None
+    return None
+
+
 class EvolutionCSV:
     """Unified CSV operations for evolution system."""
     
@@ -164,11 +181,15 @@ class EvolutionCSV:
         """Count number of pending candidates."""
         return len(self.get_pending_candidates())
         
-    def get_next_pending_candidate(self) -> Optional[Tuple[str, str]]:
+    def get_next_pending_candidate(self, min_generation: Optional[int] = None) -> Optional[Tuple[str, str]]:
         """
         Get the next pending candidate and mark it as 'running'.
         Returns (candidate_id, original_status) or None if no pending work.
         Processes candidates in REVERSE order (from end to beginning).
+
+        If min_generation is set, only candidates whose generation number is
+        >= min_generation are claimed (used by the --gens "last N generations"
+        filter). Rows without a genNN prefix (baseline) are skipped when filtering.
         """
         rows = self._read_csv()
         if not rows:
@@ -184,6 +205,13 @@ class EvolutionCSV:
             if self.is_pending_candidate(row):
                 # Strip both whitespace and quotes to handle CSV corruption
                 candidate_id = row[0].strip().strip('"')
+
+                # Generation filter: skip candidates older than the window
+                if min_generation is not None:
+                    gen = parse_generation(candidate_id)
+                    if gen is None or gen < min_generation:
+                        continue
+
                 original_status = row[4].strip() if len(row) > 4 else ''
 
                 # Ensure row has at least 5 columns
@@ -899,12 +927,17 @@ class EvolutionCSV:
         self._write_csv(rows)
         return len(candidates)
 
-    def get_csv_stats(self) -> Dict[str, int]:
+    def get_csv_stats(self, min_generation: Optional[int] = None) -> Dict[str, int]:
         """
         Get overall CSV statistics.
 
         Returns:
             Dict with total, pending, complete, failed counts
+
+        If min_generation is set, the pending count only includes candidates
+        within the generation window (matching get_next_pending_candidate), so
+        the orchestrator's "no pending work" check agrees with what workers claim.
+        Other counts remain global.
 
         AIDEV-NOTE: Uses is_pending_candidate() for pending count to ensure
         consistency between stats and what workers actually find.
@@ -926,6 +959,10 @@ class EvolutionCSV:
 
             # Use is_pending_candidate for consistency with workers
             if self.is_pending_candidate(row):
+                if min_generation is not None:
+                    gen = parse_generation(row[0].strip().strip('"'))
+                    if gen is None or gen < min_generation:
+                        continue
                 stats['pending'] += 1
             else:
                 status = row[4].strip().lower() if len(row) > 4 else ''

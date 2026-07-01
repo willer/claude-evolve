@@ -44,6 +44,7 @@ class RunConfig:
     poll_interval: int = 5
     min_completed_for_ideation: int = 3
     config_path: Optional[str] = None
+    gens: Optional[int] = None  # Only process the last N generations (None = all)
 
 
 class WorkerPool:
@@ -54,6 +55,9 @@ class WorkerPool:
         self.worker_script = worker_script
         self.config_path = config_path
         self.timeout = timeout
+        # Generation window for the --gens filter; updated each loop by the runner
+        # (None = no filter, process all pending candidates).
+        self.min_generation: Optional[int] = None
         self.workers: dict[int, subprocess.Popen] = {}  # pid -> process
 
     def spawn_worker(self) -> Optional[int]:
@@ -67,6 +71,8 @@ class WorkerPool:
             cmd.extend(['--config', self.config_path])
         if self.timeout:
             cmd.extend(['--timeout', str(self.timeout)])
+        if self.min_generation is not None:
+            cmd.extend(['--min-generation', str(self.min_generation)])
 
         try:
             # Don't capture output - let it stream directly to terminal
@@ -199,9 +205,24 @@ class EvolutionRunner:
                 }])
 
     def get_stats(self) -> dict:
-        """Get CSV statistics."""
+        """Get CSV statistics, restricted to the active generation window if set."""
+        min_gen = self.current_min_generation()
+        self.pool.min_generation = min_gen
         with EvolutionCSV(self.config.csv_path) as csv:
-            return csv.get_csv_stats()
+            return csv.get_csv_stats(min_generation=min_gen)
+
+    def current_min_generation(self) -> Optional[int]:
+        """Compute the lowest generation to process given the --gens window.
+
+        Returns None when no window is set. Otherwise returns
+        highest_generation - gens + 1 (clamped to >= 1), recomputed each call so
+        the window slides forward if ideation adds a new generation.
+        """
+        if not self.config.gens:
+            return None
+        with EvolutionCSV(self.config.csv_path) as csv:
+            highest = csv.get_highest_generation()
+        return max(1, highest - self.config.gens + 1)
 
     def should_ideate(self, stats: dict) -> bool:
         """Check if we should run ideation."""
@@ -263,6 +284,9 @@ class EvolutionRunner:
         log("Starting evolution run")
         log(f"Max workers: {self.config.max_workers}")
         log(f"Auto ideate: {self.config.auto_ideate}")
+        if self.config.gens:
+            min_gen = self.current_min_generation()
+            log(f"Generation window: last {self.config.gens} gen(s) (>= gen{min_gen:02d})")
 
         # Startup cleanup
         self.cleanup_csv()
@@ -395,6 +419,10 @@ def main():
     parser.add_argument('--parallel', type=int, help='Max parallel workers')
     parser.add_argument('--sequential', action='store_true', help='Run sequentially (1 worker)')
     parser.add_argument('--timeout', type=int, help='Worker timeout in seconds')
+    parser.add_argument('--no-ideate', action='store_true',
+                        help='Re-score / process pending candidates only; never ideate')
+    parser.add_argument('gens', nargs='?', type=int, default=None,
+                        help='Only process the last N generations (default: all)')
     args = parser.parse_args()
 
     try:
@@ -410,6 +438,15 @@ def main():
 
         if args.timeout:
             config.worker_timeout = args.timeout
+
+        if args.no_ideate:
+            config.auto_ideate = False
+
+        if args.gens is not None:
+            if args.gens < 1:
+                log_error("gens must be a positive integer")
+                sys.exit(1)
+            config.gens = args.gens
 
         runner = EvolutionRunner(config)
         sys.exit(runner.run())

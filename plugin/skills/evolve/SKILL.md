@@ -1,6 +1,6 @@
 ---
 name: evolve
-description: Run the full claude-evolve loop for a workspace — the omnibus. Drives evolution.csv through its cycle (code pending candidates, score them, ideate the next generation when the queue drains, repeat) as a self-respawning pool of background worker subagents, so the main conversation stays a clean dashboard. Use when the user says "run evolution", "evolve", "start the evolution run", "process the pending candidates", or wants the whole pipeline driven end to end. Equivalent to `claude-evolve run`: codex (GPT-5.5) codes each candidate first with the Sonnet worker judging the result and falling back to coding it itself, the evaluator scores, Opus ideates.
+description: Run the full claude-evolve loop for a workspace — the omnibus. Drives evolution.csv through its cycle (code pending candidates, score them, ideate the next generation when the queue drains, repeat) as a self-respawning pool of background worker subagents, so the main conversation stays a clean dashboard. Use when the user says "run evolution", "evolve", "start the evolution run", "process the pending candidates", or wants the whole pipeline driven end to end. Equivalent to `claude-evolve run`: codex (GPT-5.5) codes each candidate first with the Opus worker (high effort) judging the result and falling back to coding it itself, the evaluator scores, Fable (high effort) ideates.
 argument-hint: "[--working-dir DIR] [--max-workers N]"
 ---
 
@@ -8,9 +8,9 @@ argument-hint: "[--working-dir DIR] [--max-workers N]"
 
 `/evolve` is the orchestrator. It runs the evolution loop the way `claude-evolve run` does, but with subagents instead of external CLIs:
 
-1. **Code** each `pending` candidate (codex/GPT-5.5 edits `evolution_<id>.py` to match its idea; the Sonnet worker judges the result and codes it itself if codex falls short).
+1. **Code** each `pending` candidate (codex/GPT-5.5 edits `evolution_<id>.py` to match its idea; the Opus worker, high effort, judges the result and codes it itself if codex falls short).
 2. **Score** it (run the workspace evaluator under the sandbox; record the number).
-3. When no `pending` candidates remain, **ideate** the next generation (Opus at high effort, via the evolve-ideate skill).
+3. When no `pending` candidates remain, **ideate** the next generation (Fable at high effort, via the evolve-ideate skill).
 4. Repeat until ideation can't make progress or the user stops it.
 
 The design is stolen from the technical-lead `/ship` skill: **this conversation is a re-spawn pool.** The parent (this session) does almost nothing — it resolves setup once, launches a few background worker agents, and relaunches each one the instant it returns. All the noisy work (file reads, edits, evaluator output) happens *inside* the worker subagents, so the main thread stays a short, readable status feed. That isolation is the whole point of doing code+score in subagents.

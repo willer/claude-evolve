@@ -155,8 +155,8 @@ describe('classifyHealth', () => {
     expect(classifyHealth(emptyStats('ENOENT'), fresh, false, NOW).level).toBe('error');
   });
 
-  it('reports idle only when running with a stale CSV', () => {
-    expect(classifyHealth(goodStats(), stale, true, NOW).level).toBe('idle');
+  it('reports stale only when running with a stale CSV', () => {
+    expect(classifyHealth(goodStats(), stale, true, NOW).level).toBe('stale');
     expect(classifyHealth(goodStats(), stale, false, NOW).level).toBe('good'); // stopped → just old
   });
 
@@ -182,7 +182,7 @@ describe('classifyHealth', () => {
     const h = classifyHealth(s, fresh, true, NOW);
     expect(h.level).toBe('failing');
     expect(h.detail).toContain('4 failed');
-    // failing outranks idle — broken beats quiet
+    // failing outranks stale — broken beats quiet
     expect(classifyHealth(s, stale, true, NOW).level).toBe('failing');
   });
 
@@ -259,6 +259,55 @@ describe('classifyPane', () => {
     ].join('\n');
     const first = classifyPane(txt, null);
     expect(classifyPane(txt, first.hash).activity).not.toBe('working');
+  });
+
+  it('reports waiting once the agent is at rest, despite a lingering shell', () => {
+    // Real ev-1d-fas pane 2026-06-28: the run finished and printed its report,
+    // but one orphan background shell is still listed. The "new task?" rest hint
+    // proves the main agent is idle, so the stray "1 shell" must NOT pin it to
+    // 'working'.
+    const txt = [
+      '✻ Cogitated for 10h 34m 17s · 1 shell still running',
+      '                new task? /clear to save 413.3k tokens · ◉ /goal active (2d)',
+      '❯ ',
+      '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents',
+    ].join('\n');
+    const first = classifyPane(txt, null);
+    expect(classifyPane(txt, first.hash).activity).toBe('waiting');
+  });
+
+  it('reports waiting (not stuck) when it recovered from an earlier spend limit and finished', () => {
+    // Real ev-1d-vt: hit the spend limit early, recovered, kept evolving, then
+    // converged and came to rest on its own. The limit message is buried in
+    // scrollback with a full recovery turn + the final report after it, so it is
+    // resolved history — NOT a current wall. Must read 'waiting', not 'stuck'.
+    const txt = [
+      "  ⎿  You've hit your org's monthly spend limit · run /usage-credits to raise it",
+      '✻ Worked for 4m 02s',
+      '⏺ Recovered; resumed evolving.',
+      '✻ Worked for 2h 11m',
+      '⏺ gen435 ideation empty across all strategies — converged. I agree it is done.',
+      '✻ Cogitated for 10h 34m 17s',
+      '                new task? /clear to save 413.3k tokens',
+      '❯ ',
+    ].join('\n');
+    const first = classifyPane(txt, null);
+    expect(classifyPane(txt, first.hash).activity).toBe('waiting');
+  });
+
+  it('still reports stuck when the spend limit is the current wall (recent band)', () => {
+    // Hit the wall at the end of a long run: the failed turn that hit it is the
+    // last thing that happened, so the marker sits in the recent band even with
+    // a large-context "new task?" hint present.
+    const txt = [
+      '✻ Worked for 3m 20s',
+      "  ⎿  You've hit your org's monthly spend limit · run /usage-credits to raise it",
+      '✻ Cooked for 0s',
+      '                new task? /clear to save 413.3k tokens',
+      '❯ ',
+    ].join('\n');
+    const first = classifyPane(txt, null);
+    expect(classifyPane(txt, first.hash).activity).toBe('stuck');
   });
 
   it('reports stuck when byte-static on a spend/usage limit', () => {

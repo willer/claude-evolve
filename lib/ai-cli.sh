@@ -138,22 +138,22 @@ $prompt"
       ai_output=$(codex exec -m gpt-5.4-mini --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
-    # --- Gemini (subscription) ---
+    # --- Gemini (via Antigravity `agy` CLI) ---
     gemini-pro)
       local ai_output
-      # Auto-routing to best Gemini model - streams output while working
-      ai_output=$(gemini -y -m auto-gemini-3 -p "$prompt" 2>&1)
+      # Gemini Pro via Antigravity
+      ai_output=$(agy --dangerously-skip-permissions --model "Gemini 3.1 Pro (High)" -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     gemini-flash)
       local ai_output
-      ai_output=$(gemini -y -m gemini-2.5-flash -p "$prompt" 2>&1)
+      ai_output=$(agy --dangerously-skip-permissions --model "Gemini 3.5 Flash (High)" -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     gemini-cheap)
       local ai_output
-      # Fast cheap fallback via gemini CLI
-      ai_output=$(gemini -y -m gemini-3-flash-preview -p "$prompt" 2>&1)
+      # Fast cheap fallback via Antigravity
+      ai_output=$(agy --dangerously-skip-permissions --model "Gemini 3.5 Flash (Low)" -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     gemini-pro-openrouter)
