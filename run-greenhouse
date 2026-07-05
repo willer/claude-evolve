@@ -1,12 +1,7 @@
 #!/bin/bash
 # Build and launch the Evolve Greenhouse Electron app (greenhouse/).
 # Run from anywhere: ./run-greenhouse
+# Delegates to package-and-run.sh, which packages the real .app and opens it
+# (npm install/build happen inside its package.sh step).
 set -e
-cd "$(dirname "$0")/greenhouse"
-
-if [ ! -d node_modules ]; then
-  echo "node_modules missing — running npm install..."
-  npm install
-fi
-
-exec npm start
+exec "$(dirname "$0")/greenhouse/package-and-run.sh" "$@"

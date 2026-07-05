@@ -223,3 +223,5 @@ Implementation Notes ✅
 • One _feature branch_ per phase or sub-feature – keep PRs small.
 • Each merged PR must pass tests & pre-commit hooks.
 • Strict adherence to **YAGNI** – only ship what is necessary for the next user-visible increment.
+- [x] change the root run-greenhouse.sh to just run package-and-run.sh, because that works better anyway
+  > ✅ **DONE**: The root launcher (named `run-greenhouse`, no `.sh`) now just `exec`s `greenhouse/package-and-run.sh`, forwarding args. The old `npm install` guard was dropped — `package-and-run.sh` → `package.sh` already runs `npm install` itself.
