@@ -229,4 +229,14 @@ Implementation Notes ✅
   > ✅ **DONE**: Added a third session type `shell` (bare `zsh`, no claude) alongside evolution/adhoc. `shellSessionName` (`shell-<dir>`) + `SHELL_CMD='zsh'` in `core/state.ts`; `SessionHost.startShell` launches a detached tmux session running zsh in the workspace dir; `shell:start`/`shell:stop` IPC + preload bridge; the Poller classifies and pushes `row.shell`. Main view exposes a Shell ▶/⏹ control in both the fleet list (new "Shell" column) and grid cards; the detail view stacks a third "Shell session" terminal panel (attach/stop, keyboard focus fallback). Unit test covers `shellSessionName`; tmux launch verified live (zsh pane in the workspace cwd, killable).
 - [x] when the app is running in a dev environment, silently rebuild the app when there are changes every so often, so when I relaunch from Dock, I get the latest version
   > ✅ **DONE**: A PACKAGED `.app` running from inside its own source tree (`greenhouse/release/…` under `greenhouse/`) now silently re-packages itself when `src/` changes, so quitting and relaunching from the Dock always lands on the latest build. `core/devRebuild.ts` (`resolveDevSourceDir`, pure + unit-tested) climbs from `app.getPath('exe')` to the source dir by its markers (`esbuild.mjs`, `package.sh`, `src/main/main.ts`) — returns null for a shipped `/Applications` install, disabling the feature there. `main/DevRebuilder.ts` watches `src/` recursively and, after a 5 s quiet window following edits (editor `.swp`/`~` files ignored), runs `npm run package` (build + `electron-builder --mac dir`, no `npm install`) one build at a time, folding mid-build edits into a single follow-up, logging to `<userData>/dev-rebuild.log` (never a GUI prompt). Gated on `app.isPackaged` (off for `electron .`), and off under `EG_SHOT`/`EG_ROOTS` harnesses or `EG_NO_AUTOREBUILD=1`. Verified: real packaged-exe path resolves to the greenhouse dir (shipped path → null); watch→debounce→`npm run package`→log exercised end-to-end with a fake `npm` (swap files ignored, rapid saves collapse to one build, `stop()` halts further builds).
-- [ ] fix up the app icon so it has a transparent background, not white
+- [x] fix up the app icon so it has a transparent background, not white
+  > ✅ **DONE**: `greenhouse/assets/icon.svg` already drew a rounded panel on a
+  > transparent canvas, but `icon.png`/`icon.icns` had been exported against a
+  > white background — every pixel was opaque `(255,255,255,255)`, so macOS
+  > showed a white square. Added `greenhouse/scripts/render-icon.sh`
+  > (rsvg-convert → transparent 1024² PNG; per-size renders → `iconutil` .icns)
+  > and regenerated both assets: corners are now `(0,0,0,0)` transparent, the
+  > green-sprout panel unchanged. Regression guard `src/core/icon.test.ts`
+  > (dependency-free PNG RGBA decoder) asserts transparent corners + opaque
+  > center; `npm test` green (54/54). release/ is a build artifact (gitignored)
+  > and picks up the new `.icns` on the next `npm run package`/`dist`.
