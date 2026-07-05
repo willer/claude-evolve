@@ -15,7 +15,9 @@ echo "▶ 2/3  building renderer + main bundle…"
 npm run build
 
 echo "▶ 3/3  packaging .app (electron-builder)…"
-npx electron-builder --mac dir
+# electron-builder needs Node >= 22 to require() its ESM deps; the active nvm
+# node may be older, so run it under a new-enough one (see scripts/with-node22.sh).
+scripts/with-node22.sh npx electron-builder --mac dir
 
 app=$(find release -maxdepth 2 -name '*.app' -type d 2>/dev/null | head -1)
 echo

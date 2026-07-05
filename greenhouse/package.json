@@ -10,8 +10,8 @@
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
     "rebuild-native": "electron-rebuild -f -w node-pty",
-    "package": "npm run build && electron-builder --mac dir",
-    "dist": "npm run build && electron-builder --mac"
+    "package": "npm run build && scripts/with-node22.sh npx electron-builder --mac dir",
+    "dist": "npm run build && scripts/with-node22.sh npx electron-builder --mac"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.1",
