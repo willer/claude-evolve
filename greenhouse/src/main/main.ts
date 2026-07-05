@@ -2,8 +2,11 @@
 // in core/ and the main/ modules — this file only composes.
 
 import { BrowserWindow, Notification, app, nativeTheme, screen } from 'electron';
+import { existsSync } from 'node:fs';
 import * as path from 'node:path';
 
+import { resolveDevSourceDir } from '../core/devRebuild';
+import { DevRebuilder } from './DevRebuilder';
 import { Poller } from './Poller';
 import { PrefsStore } from './prefsStore';
 import { SessionHost } from './SessionHost';
@@ -124,9 +127,25 @@ app.whenReady().then(() => {
   const sys = new SystemMetrics();
   const sysTimer = setInterval(() => win?.webContents.send('system:update', sys.sample()), 2000);
 
+  // Dev convenience: a PACKAGED .app running from inside its own source tree
+  // (release/ under greenhouse/) silently re-packages itself when src/ changes,
+  // so a Dock relaunch always gets the latest. Off for shipped installs (no
+  // source tree resolves), unpackaged `electron .` runs (app.isPackaged false),
+  // and the side-effect-free EG_SHOT / EG_ROOTS harnesses. Set
+  // EG_NO_AUTOREBUILD=1 to disable.
+  let rebuilder: DevRebuilder | null = null;
+  if (app.isPackaged && !process.env.EG_SHOT && !process.env.EG_ROOTS && process.env.EG_NO_AUTOREBUILD !== '1') {
+    const srcDir = resolveDevSourceDir(app.getPath('exe'), existsSync);
+    if (srcDir) {
+      rebuilder = new DevRebuilder(srcDir, app.getPath('userData'));
+      rebuilder.start();
+    }
+  }
+
   app.on('before-quit', () => {
     poller.stop();
     clearInterval(sysTimer);
+    rebuilder?.stop();
   });
 
   if (process.env.EG_SHOT) devShots(process.env.EG_SHOT);

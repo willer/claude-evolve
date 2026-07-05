@@ -12,6 +12,7 @@ import {
   parseCandidates,
   parseCsv,
 } from './csv';
+import { resolveDevSourceDir } from './devRebuild';
 import { TRADING_METRICS, resolveProfile } from './profile';
 import {
   adhocSessionName,
@@ -482,5 +483,37 @@ describe('resolveProfile', () => {
   it('falls back to auto-detect on malformed YAML rather than throwing', () => {
     const p = resolveProfile('dashboard: : : not valid\n\t- broken', { hasEquityDir: true, metricColumns: [] });
     expect(p.kind).toBe('trading');
+  });
+});
+
+describe('resolveDevSourceDir', () => {
+  const SRC = '/Users/x/GitHub/claude-evolve/greenhouse';
+  // The markers `npm run package` needs: esbuild.mjs, package.sh, src/main/main.ts.
+  const present = new Set([
+    `${SRC}/esbuild.mjs`,
+    `${SRC}/package.sh`,
+    `${SRC}/src/main/main.ts`,
+  ]);
+  const exists = (p: string) => present.has(p);
+
+  it('walks up from the packaged .app exe to the source dir', () => {
+    const exe = `${SRC}/release/mac-arm64/Evolve Greenhouse.app/Contents/MacOS/Evolve Greenhouse`;
+    expect(resolveDevSourceDir(exe, exists)).toBe(SRC);
+  });
+
+  it('resolves an unpackaged electron exe nested under the source dir', () => {
+    const exe = `${SRC}/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron`;
+    expect(resolveDevSourceDir(exe, exists)).toBe(SRC);
+  });
+
+  it('returns null for a shipped install outside the source tree', () => {
+    const exe = '/Applications/Evolve Greenhouse.app/Contents/MacOS/Evolve Greenhouse';
+    expect(resolveDevSourceDir(exe, exists)).toBeNull();
+  });
+
+  it('requires ALL markers — a partial tree does not qualify', () => {
+    const partial = (p: string) => p === `${SRC}/esbuild.mjs`; // missing package.sh + main.ts
+    const exe = `${SRC}/release/mac-arm64/Evolve Greenhouse.app/Contents/MacOS/Evolve Greenhouse`;
+    expect(resolveDevSourceDir(exe, partial)).toBeNull();
   });
 });
