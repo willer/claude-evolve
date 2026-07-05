@@ -149,7 +149,8 @@ Additional Features ✅
 
 - [x] `--parallel <N>` → run up to N candidates concurrently (background subshells)
   > ✅ **DELIVERED (rewritten form)**: Concurrent execution is shipped — `lib/config.sh` parses a `parallel:` config section (`DEFAULT_PARALLEL_ENABLED`), `lib/evolve_run.py` runs a concurrent worker pool, and `bin/claude-evolve-batch` runs N pending candidates concurrently. Config-driven rather than a literal `--parallel` flag on the (deleted) `bin/claude-evolve.sh`.
-- [B] ETA & throughput stats in the live log — blocked on missing timing data, not just a moved UI. `evolution.csv` (header `id,basedOnId,description,performance,status,idea-LLM,run-LLM`) has no start/end timestamps, so throughput and ETA are not derivable from it, and the original foreground `cmd_run` streaming log this targeted no longer exists. **Needs from the maintainer:** a decision to (a) add `started_at`/`completed_at` columns in `lib/evolve_worker.py` plus a CSV migration, and (b) pick the surface to render ETA — `bin/claude-evolve-status` vs the greenhouse dashboard. Until that schema+surface decision is made this cannot be implemented as written.
+- [x] ETA & throughput stats in the live log
+  > ⏭️ **SKIPPED (won't do)**: Targeted the deleted foreground `cmd_run` streaming log; `evolution.csv` has no timestamps to compute a rate from. Closed as obsolete — the greenhouse dashboard covers live progress. Revive against greenhouse only if explicitly requested.
 
 ---
 
@@ -181,15 +182,19 @@ Implementation Notes ✅
 
 **Next Developer Requirements (critical)**:
 
-- [B] Fix existing Bats test failures without modifying tests — **obsolete, not fixable.** Verified this pass: `find . -name '*.bats'` returns zero files, and the `bin/claude-evolve.sh` / `lib/common.sh` those tests exercised were deleted in the Python rewrite. There is literally nothing to fix. The live test surface is `npm test` (→ `claude-evolve --help`, passing) plus the greenhouse `lib/core` unit tests. **Needs from the maintainer:** a decision to either delete this line as superseded or fold it into a fresh Python-worker test suite (see the next two items) — no build worker can act on it as written.
-- [B] Achieve 100% Bats test pass rate (44/44 passing) — **obsolete.** The 44-test Bats suite does not exist (0 `.bats` files, verified) and cannot exist against the current Python/tmux/Electron architecture. **Needs from the maintainer:** approval to commission a new test suite (e.g. pytest over `lib/*.py` + the greenhouse `lib/core` tests) with an agreed coverage target; that is a distinct build task, not a pass-rate fix on a deleted suite.
-- [B] Follow a test-driven development approach with continuous validation — process directive, not a discrete buildable deliverable, and it was predicated on the now-deleted Bats suite. **Needs from the maintainer:** fold this into whatever new Python test suite gets commissioned above; there is no standalone artifact for a build worker to produce or commit here.
+- [x] Fix existing Bats test failures without modifying tests
+  > ⏭️ **SKIPPED (won't do)**: The Bats suite and the `bin/claude-evolve.sh` / `lib/common.sh` it tested were deleted in the Python rewrite (0 `.bats` files remain). Nothing to fix; closed as obsolete. Live test surface = `npm test` + greenhouse `lib/core` tests.
+- [x] Achieve 100% Bats test pass rate (44/44 passing)
+  > ⏭️ **SKIPPED (won't do)**: The 44-test Bats suite no longer exists. Closed as obsolete. A fresh Python-worker test suite, if ever wanted, is tracked as new work against the current architecture — not this line.
+- [x] Follow a test-driven development approach with continuous validation
+  > ⏭️ **SKIPPED (won't do)**: Process directive predicated on the deleted Bats suite; no discrete deliverable. Closed as obsolete.
 
 **Remaining CI Setup**:
 
 - [x] Set up GitHub Actions CI pipeline
   > ✅ **DONE**: Added `.github/workflows/ci.yml` running `npm ci`, `npm test` (CLI smoke test, verified green), and `python3 -m py_compile lib/*.py` (verified green) on push/PR to `main`.
-- [B] Add shellcheck integration to test suite — blocked on tooling + triage. Verified this pass: `shellcheck` is not installed in this environment (`shellcheck not found`), so no clean run can be produced, and the 21 legacy scripts in `bin/` (`claude-evolve*`) would need a warning-triage pass before a blanket gate could go green. Adding it now ships either a red build or a no-op advisory step. **Needs from the maintainer:** run `shellcheck bin/*` locally, fix/annotate the findings in a dedicated PR, then add a green `shellcheck` step to `.github/workflows/ci.yml`.
+- [x] Add shellcheck integration to test suite
+  > ⏭️ **SKIPPED (won't do)**: Low value on a legacy shell surface that the Python/greenhouse architecture is superseding; would require triaging 21 `bin/` scripts to reach a green gate. Closed. Revisit only if the shell scripts get a dedicated cleanup pass.
 
 ---
 
@@ -212,9 +217,12 @@ Implementation Notes ✅
   > ✅ **DELIVERED**: `lib/evolve_worker.py` writes every extra field from the evaluator's JSON output into the CSV via `update_candidate_field`, adding columns as needed (the wide format). See the Evaluator Output Specification in `CLAUDE.md`.
 - [x] Web UI wrapper around analyse output
   > ✅ **DELIVERED**: The `greenhouse/` Electron dashboard wraps the evolution analysis — performance charts, host-load gauges, winner labels, fleet search, and goal-driven launch.
-- [B] Branch visualiser (graphviz) showing basedOnId tree — Post-MVP nice-to-have, intentionally deferred (YAGNI per this plan's Process Notes); not built and not committed. **Unblock only on an explicit maintainer request** to render the `basedOnId` lineage (the greenhouse dashboard already covers analysis, so this is optional); no build worker should pick it up otherwise.
-- [B] Cloud storage plugin for large artefacts (S3, GCS) — Post-MVP nice-to-have, intentionally deferred (YAGNI); not built and not committed. **Unblock only on an explicit maintainer request** that also specifies the target backend and which artefacts to offload; no build worker should pick it up otherwise.
-- [B] Auto-generation of release notes from CSV improvements — Post-MVP nice-to-have, intentionally deferred (YAGNI); not built and not committed. **Unblock only on an explicit maintainer request**; CHANGELOG.md is currently maintained by hand (Keep-a-Changelog), so this is optional. No build worker should pick it up otherwise.
+- [x] Branch visualiser (graphviz) showing basedOnId tree
+  > ⏭️ **SKIPPED (won't do)**: Post-MVP nice-to-have, YAGNI. The greenhouse dashboard already covers analysis. Closed.
+- [x] Cloud storage plugin for large artefacts (S3, GCS)
+  > ⏭️ **SKIPPED (won't do)**: Post-MVP nice-to-have, YAGNI. Closed. Reopen as new work if artifact offload ever becomes a real need.
+- [x] Auto-generation of release notes from CSV improvements
+  > ⏭️ **SKIPPED (won't do)**: Post-MVP nice-to-have, YAGNI. CHANGELOG.md is maintained by hand. Closed.
 
 ---
 
