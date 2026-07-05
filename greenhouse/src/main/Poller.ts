@@ -7,7 +7,14 @@ import * as path from 'node:path';
 
 import { computeStats, emptyStats } from '../core/csv';
 import { resolveProfile } from '../core/profile';
-import { TOOLS, adhocSessionName, classifyPane, sessionName, toolSessionName } from '../core/state';
+import {
+  TOOLS,
+  adhocSessionName,
+  classifyPane,
+  sessionName,
+  shellSessionName,
+  toolSessionName,
+} from '../core/state';
 import type { Activity, Prefs, SessionState, ToolState, WorkspaceRow, WorkspaceStats } from '../core/types';
 import type { SessionHost } from './SessionHost';
 
@@ -143,10 +150,11 @@ export class Poller {
         }
 
         // Evolution session fires native "asking" notifications (it runs
-        // unattended); the adhoc session is hand-driven, so its activity feeds
-        // the badge only — no notification noise.
+        // unattended); the adhoc and shell sessions are hand-driven, so their
+        // activity feeds the badge only — no notification noise.
         const session = await this.classifySession(sessionName(ws.name), live, ws.name);
         const adhoc = await this.classifySession(adhocSessionName(ws.name), live, null);
+        const shell = await this.classifySession(shellSessionName(ws.name), live, null);
 
         // Display profile: optional config.yaml `dashboard:` block, else
         // auto-detect trading (equity/ dir or stock-shaped columns) vs generic.
@@ -166,6 +174,7 @@ export class Poller {
           stats,
           session,
           adhoc,
+          shell,
           starred: starred.has(ws.name),
           profile,
         });

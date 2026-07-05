@@ -10,7 +10,7 @@ import { promisify } from 'node:util';
 
 import type { BacktestRow, PricePoint } from '../core/backtests';
 import { benchmarkReturns } from '../core/backtests';
-import { adhocSessionName, sessionName, toolSessionName } from '../core/state';
+import { adhocSessionName, sessionName, shellSessionName, toolSessionName } from '../core/state';
 import type { Prefs } from '../core/types';
 import type { Poller } from './Poller';
 import type { PrefsStore } from './prefsStore';
@@ -149,6 +149,20 @@ export function wireIpc(
 
   ipcMain.handle('adhoc:stop', async (_e, name: string) => {
     host.kill(adhocSessionName(name));
+    await new Promise((r) => setTimeout(r, 300));
+    await poller.poll();
+  });
+
+  // Shell session: a bare zsh in the workspace dir, run alongside evolution.
+  ipcMain.handle('shell:start', async (_e, name: string) => {
+    const ws = poller.current().find((r) => r.name === name);
+    if (!ws) throw new Error(`unknown workspace: ${name}`);
+    await host.startShell(ws.name, ws.path);
+    await poller.poll();
+  });
+
+  ipcMain.handle('shell:stop', async (_e, name: string) => {
+    host.kill(shellSessionName(name));
     await new Promise((r) => setTimeout(r, 300));
     await poller.poll();
   });

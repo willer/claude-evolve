@@ -13,7 +13,14 @@ import {
   parseCsv,
 } from './csv';
 import { TRADING_METRICS, resolveProfile } from './profile';
-import { adhocSessionName, classifyPane, hashText, sessionName, toolSessionName } from './state';
+import {
+  adhocSessionName,
+  classifyPane,
+  hashText,
+  sessionName,
+  shellSessionName,
+  toolSessionName,
+} from './state';
 
 const HEADER =
   'id,basedOnId,description,performance,status,sharpe,yearly_return,max_drawdown,return_2025,idea-LLM,run-LLM';
@@ -339,6 +346,10 @@ describe('sessionName', () => {
 
   it('names the adhoc session with its own prefix', () => {
     expect(adhocSessionName('ev-1d-tqqq-sigma')).toBe('adhoc-ev-1d-tqqq-sigma');
+  });
+
+  it('names the shell session with its own prefix', () => {
+    expect(shellSessionName('ev-1d-tqqq-sigma')).toBe('shell-ev-1d-tqqq-sigma');
   });
 });
 

@@ -8,7 +8,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { PERIOD_LABELS, buildBacktestTable } from '../core/backtests';
 import type { BacktestAlgo, BacktestRow } from '../core/backtests';
 import { FAILING_FAILS, PLATEAU_GENS, classifyHealth } from '../core/csv';
-import { adhocSessionName, sessionName, toolSessionName } from '../core/state';
+import { adhocSessionName, sessionName, shellSessionName, toolSessionName } from '../core/state';
 import type {
   Candidate,
   FleetPayload,
@@ -44,6 +44,10 @@ declare global {
         stop(name: string): Promise<void>;
       };
       adhoc: {
+        start(name: string): Promise<void>;
+        stop(name: string): Promise<void>;
+      };
+      shell: {
         start(name: string): Promise<void>;
         stop(name: string): Promise<void>;
       };
@@ -910,6 +914,13 @@ function adhocButtons(r: WorkspaceRow): string {
     : `<button data-act="adhoc-start" data-name="${n}" title="Launch a plain claude in this workspace (no /evolve)">▶ Adhoc</button>`;
 }
 
+function shellButtons(r: WorkspaceRow): string {
+  const n = esc(r.name);
+  return r.shell.running
+    ? `<button data-act="shell-stop" data-name="${n}" class="danger" title="Stop the shell session">⏹ Stop</button>`
+    : `<button data-act="shell-start" data-name="${n}" title="Launch a plain zsh in this workspace (no claude)">▶ Shell</button>`;
+}
+
 function renderTotals(): void {
   const running = rows.filter((r) => r.session.running).length;
   const asking = rows.filter((r) => r.session.activity === 'asking').length;
@@ -1075,6 +1086,7 @@ function listCols(): Array<{ label: string; sort?: string; cls?: string }> {
     { label: 'Score Trend' },
     { label: 'Evolution' },
     { label: 'Adhoc' },
+    { label: 'Shell' },
   ];
 }
 
@@ -1112,6 +1124,7 @@ function renderList(order: WorkspaceRow[]): void {
         <td>${sparklineSvg(s.sparkline, 120, 20, HEALTH_COLOR[h.level])}</td>
         <td><div class="actions">${evoButtons(r)}</div></td>
         <td><div class="actions">${adhocButtons(r)}</div></td>
+        <td><div class="actions">${shellButtons(r)}</div></td>
       </tr>`;
     })
     .join('');
@@ -1177,6 +1190,7 @@ function renderGridCards(order: WorkspaceRow[]): void {
         <div class="actions">
           <span class="act-grp"><span class="act-lbl">evo</span>${evoButtons(r)}</span>
           <span class="act-grp"><span class="act-lbl">adhoc</span>${adhocButtons(r)}</span>
+          <span class="act-grp"><span class="act-lbl">shell</span>${shellButtons(r)}</span>
         </div>
       </div>`;
     })
@@ -1283,10 +1297,11 @@ function renderHints(): void {
 // ── detail view ──────────────────────────────────────────────────────────────
 
 // Live attached terminals, keyed by full tmux session id (evolve-… / adhoc-… /
-// greenhouse-…). The detail view runs two at once (evolution + adhoc), the tool
-// page one — so the old single-terminal globals are now a map, one entry per
-// attached session. Each entry's .term-wrap DOM node must survive fleet-push
-// re-renders (moving a focused node blurs it); only attach/teardown touch slots.
+// shell-… / greenhouse-…). The detail view runs three at once (evolution +
+// adhoc + shell), the tool page one — so the old single-terminal globals are now
+// a map, one entry per attached session. Each entry's .term-wrap DOM node must
+// survive fleet-push re-renders (moving a focused node blurs it); only
+// attach/teardown touch slots.
 interface TermSession {
   sessId: string;
   term: Terminal;
@@ -1312,11 +1327,11 @@ function teardownAllTerminals(): void {
   for (const sessId of [...terms.keys()]) teardownTerminal(sessId);
 }
 
-/** Focus the primary terminal of the current view: evolution first, then adhoc
- *  (detail), or the tool terminal. Returns whether one was focused. */
+/** Focus the primary terminal of the current view: evolution first, then adhoc,
+ *  then shell (detail), or the tool terminal. Returns whether one was focused. */
 function focusPrimaryTerm(): boolean {
   const order = view
-    ? [sessionName(view), adhocSessionName(view)]
+    ? [sessionName(view), adhocSessionName(view), shellSessionName(view)]
     : toolView
       ? [toolSessionName(toolView)]
       : [];
@@ -1539,6 +1554,11 @@ function renderDetail(): void {
             <div id="adhoc-term-slot"></div>
             <div id="adhoc-term-ctl" class="term-ctl"></div>
           </div>
+          <div class="panel">
+            <h3>Shell session</h3>
+            <div id="shell-term-slot"></div>
+            <div id="shell-term-ctl" class="term-ctl"></div>
+          </div>
         </div>
       </div>`;
     detailBuiltFor = r.name;
@@ -1685,6 +1705,16 @@ function renderDetail(): void {
     () => void startAdhoc(r.name),
     () => void stopAdhoc(r.name),
     '▶ Start adhoc claude',
+  );
+  syncSessionPanel(
+    r.name,
+    shellSessionName(r.name),
+    'shell-term-slot',
+    'shell-term-ctl',
+    r.shell,
+    () => void startShell(r.name),
+    () => void stopShell(r.name),
+    '▶ Start shell (zsh)',
   );
 }
 
@@ -1932,6 +1962,17 @@ async function stopAdhoc(name: string): Promise<void> {
   await api.adhoc.stop(name);
 }
 
+async function startShell(name: string): Promise<void> {
+  // Bare zsh in the workspace dir; the fleet push re-renders the detail view,
+  // whose self-healing attach picks the new session up.
+  await api.shell.start(name);
+}
+
+async function stopShell(name: string): Promise<void> {
+  teardownTerminal(shellSessionName(name));
+  await api.shell.stop(name);
+}
+
 /** 's' toggle: start a stopped evolution, stop a running one. */
 async function toggleEvolution(name: string): Promise<void> {
   const r = rows.find((x) => x.name === name);
@@ -1984,6 +2025,12 @@ function fleetClick(e: MouseEvent): void {
         break;
       case 'adhoc-stop':
         void stopAdhoc(name);
+        break;
+      case 'shell-start':
+        void startShell(name);
+        break;
+      case 'shell-stop':
+        void stopShell(name);
         break;
     }
     return;
@@ -2170,6 +2217,7 @@ window.addEventListener('keydown', (e) => {
         const r = rows.find((x) => x.name === view);
         if (r?.session.running) void attachTerminal(sessionName(view), true, $('evo-term-slot'), 'dual');
         else if (r?.adhoc.running) void attachTerminal(adhocSessionName(view), true, $('adhoc-term-slot'), 'dual');
+        else if (r?.shell.running) void attachTerminal(shellSessionName(view), true, $('shell-term-slot'), 'dual');
       } else if (toolView) {
         const t = tools.find((x) => x.key === toolView);
         if (t?.running) void attachTerminal(toolSessionName(toolView), true, $('tool-term-slot'), 'solo');

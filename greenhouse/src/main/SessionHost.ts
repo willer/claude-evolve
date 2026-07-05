@@ -9,8 +9,10 @@ import {
   ADHOC_ARGS,
   EVOLVE_ARGS,
   EVOLVE_PROMPT,
+  SHELL_CMD,
   adhocSessionName,
   sessionName,
+  shellSessionName,
   toolSessionName,
 } from '../core/state';
 
@@ -83,6 +85,17 @@ export class SessionHost {
     await tmux('new-session', '-d', '-s', sess, '-x', '220', '-y', '50', '-c', workspacePath);
     const cmd = `claude${ADHOC_ARGS.length ? ' ' + ADHOC_ARGS.join(' ') : ''}; exit`;
     await tmux('send-keys', '-t', sess, cmd, 'Enter');
+    return sess;
+  }
+
+  /** Start a plain shell session: detached session in the workspace dir running
+   *  a straight `zsh` (no claude). Unlike evolution/adhoc, the shell IS the
+   *  session's command — so it dies the moment the user types `exit`, exactly
+   *  like a normal terminal, and the pane is gone (nothing to inspect). */
+  async startShell(dir: string, workspacePath: string): Promise<string> {
+    await assertServerOpts();
+    const sess = shellSessionName(dir);
+    await tmux('new-session', '-d', '-s', sess, '-x', '220', '-y', '50', '-c', workspacePath, SHELL_CMD);
     return sess;
   }
 

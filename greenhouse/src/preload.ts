@@ -29,6 +29,10 @@ contextBridge.exposeInMainWorld('greenhouse', {
     start: (name: string) => ipcRenderer.invoke('adhoc:start', name),
     stop: (name: string) => ipcRenderer.invoke('adhoc:stop', name),
   },
+  shell: {
+    start: (name: string) => ipcRenderer.invoke('shell:start', name),
+    stop: (name: string) => ipcRenderer.invoke('shell:stop', name),
+  },
   tools: {
     start: (key: string) => ipcRenderer.invoke('tools:start', key),
     stop: (key: string) => ipcRenderer.invoke('tools:stop', key),

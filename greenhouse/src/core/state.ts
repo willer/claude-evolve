@@ -151,6 +151,18 @@ export function adhocSessionName(dir: string): string {
   return `adhoc-${dir}`;
 }
 
+/** tmux session name for the plain shell session in a workspace dir — a bare
+ *  zsh (no claude at all), for running git/python/ls by hand while evolution
+ *  runs. Greenhouse-only, so it gets its own `shell-` prefix. */
+export function shellSessionName(dir: string): string {
+  return `shell-${dir}`;
+}
+
+// Shell launch: a straight interactive zsh in the workspace dir — no claude, no
+// prompt. Launched as the tmux session's own command (not send-keys'd) so the
+// session ends the moment the user types `exit`, same as any terminal.
+export const SHELL_CMD = 'zsh';
+
 // Evolution launch: claude driven by a /goal that runs /evolve until at least 2
 // generations pass with no improvement (so the session self-terminates on a
 // plateau instead of looping forever), pinned to Opus at medium effort — this

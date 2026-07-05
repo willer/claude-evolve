@@ -77,6 +77,9 @@ export interface WorkspaceRow {
   /** The adhoc session (plain claude, NOT told to evolve) — independent of the
    *  evolution session; either, both, or neither may be running. */
   adhoc: SessionState;
+  /** The shell session (a bare zsh, no claude) — independent of the other two;
+   *  for poking at the workspace with git/python/ls by hand. */
+  shell: SessionState;
   starred: boolean;
   /** Display profile (metric labels/ordering + trading-vs-generic kind). */
   profile: ResolvedProfile;
