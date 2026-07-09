@@ -1,6 +1,6 @@
 ---
 name: evolve-code
-description: Write the code for one evolution candidate. Resolves the candidate's parent algorithm, copies it to evolution_<id>.py, then implements the candidate's description from evolution.csv — codex (GPT-5.5) first, with you (Opus) judging the result and coding it yourself if codex falls short. Use when the user says "code gen02-003", "write the algorithm for this candidate", "implement idea <id>", or when a parent skill dispatches coding.
+description: Write the code for one evolution candidate. Resolves the candidate's parent algorithm, copies it to evolution_<id>.py, then implements the candidate's description from evolution.csv — codex (GPT-5.6 Terra) first, with you (Opus) judging the result and coding it yourself if codex falls short. Use when the user says "code gen02-003", "write the algorithm for this candidate", "implement idea <id>", or when a parent skill dispatches coding.
 argument-hint: "<candidate-id> [--working-dir DIR]"
 ---
 
@@ -8,7 +8,7 @@ argument-hint: "<candidate-id> [--working-dir DIR]"
 
 Implement one candidate's idea as working code. The candidate already exists in `evolution.csv` with a `description` (the idea) and a `basedOnId` (its parent). Your job: turn the description into a real, substantial code change on a copy of the parent algorithm.
 
-Coding is **codex-first**: codex (GPT-5.5) takes the first pass, and you (Opus) judge whether it did the job — coding the candidate yourself when it didn't. It needs genuine coding judgment either way. (The omnibus `/evolve` loop runs this same protocol via the plugin's `claude-evolve:coder` agent, which adds claim/score looping; this skill is the standalone one-candidate path.)
+Coding is **codex-first**: codex (GPT-5.6 Terra) takes the first pass, and you (Opus) judge whether it did the job — coding the candidate yourself when it didn't. It needs genuine coding judgment either way. (The omnibus `/evolve` loop runs this same protocol via the plugin's `claude-evolve:coder` agent, which adds claim/score looping; this skill is the standalone one-candidate path.)
 
 ## Resolve the plugin root
 
@@ -39,7 +39,7 @@ It prints one JSON line:
 
 ## Step 2 — Implement the idea (your real work)
 
-Code the candidate. **Try codex (GPT-5.5) first; fall back to coding it yourself** only if codex falls short.
+Code the candidate. **Try codex (GPT-5.6 Terra) first; fall back to coding it yourself** only if codex falls short.
 
 ### Step 2a — codex first
 
@@ -57,7 +57,7 @@ Read `summary` and `diff` and **judge for yourself** whether codex actually impl
 
 - **Good** (`ok:true` and your judgment agrees): codex coded it. Record the model and skip to Step 3.
   ```bash
-  python3 "$CLAUDE_PLUGIN_ROOT/scripts/evolve_csv.py" --working-dir "<WORKING_DIR>" set-field <CANDIDATE_ID> run-LLM gpt-5.5
+  python3 "$CLAUDE_PLUGIN_ROOT/scripts/evolve_csv.py" --working-dir "<WORKING_DIR>" set-field <CANDIDATE_ID> run-LLM gpt-5.6-terra
   ```
 - **Not good** (`ok:false`, codex left the file unchanged, or you reject the change): fall back to Step 2b. When `ok:false` the script has already restored the clean parent copy; when you're rejecting a compiling-but-wrong change, restore the parent yourself first (copy `evolution_<parent>.py` — or `algorithm.py` if baseline-rooted — over `target_path`) so you start clean.
 

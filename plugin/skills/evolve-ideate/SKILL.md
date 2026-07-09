@@ -52,7 +52,7 @@ This returns the exact IDs to use (e.g. `["gen03-001", ...]`), already skipping 
 
 ### Pick each strategy's idea source
 
-For variety, some strategies source their ideas from an external AI system instead of Fable — different model families produce genuinely different idea distributions. Roll the dice **once per active strategy** — 1/6 chance `codex`, 1/6 chance `gemini`, 1/6 chance `glm` (GLM-5.2 via opencode), otherwise `fable`:
+For variety, some strategies source their ideas from an external AI system instead of Fable — different model families produce genuinely different idea distributions. Roll the dice **once per active strategy** — 1/6 chance `codex` (GPT-5.6 Sol at high effort), 1/6 chance `gemini`, 1/6 chance `glm` (GLM-5.2 via opencode), otherwise `fable`:
 
 ```bash
 for s in novel_exploration hill_climbing structural_mutation crossover_hybrid; do
@@ -74,7 +74,7 @@ Launch the strategies **in parallel** — one `Agent` call per strategy, all in 
 For a strategy whose `src` (from Step 2) is `codex`, `gemini`, or `glm`, add this line to that subagent's prompt so it sources its ideas externally instead of generating them itself:
 
 ```
-Source these ideas from the external tool `<codex|gemini|glm>`: build one prompt carrying the strategy, parents, BRIEF, existing descriptions, and the exact IDs, run it via Bash (codex: `codex exec "<prompt>"`; gemini: `agy --dangerously-skip-permissions -p "<prompt>"` (the Antigravity CLI); glm: `opencode run -m openrouter/z-ai/glm-5.2 "<prompt>"`), then return its ideas in the required schema (sanity-checked for strategy fit and novelty). Fall back to generating them yourself only if the tool errors.
+Source these ideas from the external tool `<codex|gemini|glm>`: build one prompt carrying the strategy, parents, BRIEF, existing descriptions, and the exact IDs, run it via Bash (codex: `codex exec -m gpt-5.6-sol -c model_reasoning_effort="high" "<prompt>"`; gemini: `agy --dangerously-skip-permissions -p "<prompt>"` (the Antigravity CLI); glm: `opencode run -m openrouter/z-ai/glm-5.2 "<prompt>"`), then return its ideas in the required schema (sanity-checked for strategy fit and novelty). Fall back to generating them yourself only if the tool errors.
 ```
 
 Strategies whose `src` is `fable` get no extra line — they generate as usual.

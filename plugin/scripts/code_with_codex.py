@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Attempt to code one candidate with codex (GPT-5.5) — the first-choice coder in
+Attempt to code one candidate with codex (GPT-5.6 Terra) — the first-choice coder in
 the evolve loop, ahead of the Opus worker itself.
 
 The evolve worker (Opus) runs this AFTER prepare.py has copied the parent
@@ -50,7 +50,7 @@ from evolve_common import add_workspace_args, load_workspace, PLUGIN_ROOT
 sys.path.insert(0, str(PLUGIN_ROOT))
 from lib.evolution_csv import EvolutionCSV
 
-DEFAULT_MODEL = "gpt-5.5"
+DEFAULT_MODEL = "gpt-5.6-terra"
 DEFAULT_TIMEOUT = 900  # 15 min — coding a real algorithmic change can be slow
 
 # Compact but firm. codex runs unsandboxed *for git* (the path sandbox doesn't
@@ -127,7 +127,7 @@ def emit(obj: dict, code: int):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Code one candidate with codex (GPT-5.5)")
+    parser = argparse.ArgumentParser(description="Code one candidate with codex (GPT-5.6 Terra)")
     add_workspace_args(parser)
     parser.add_argument("id")
     parser.add_argument("--model", default=DEFAULT_MODEL, help=f"codex model (default {DEFAULT_MODEL})")

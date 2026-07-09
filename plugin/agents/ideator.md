@@ -25,7 +25,8 @@ AI system instead of generating them yourself. If the prompt names an external
 tool (`codex`, `gemini`, or `glm`), build a single prompt that hands that tool the
 strategy, the parents, the BRIEF excerpt, the existing descriptions, and the
 exact IDs, and ask it to return the same JSON array. Run it via Bash —
-`codex exec "<prompt>"`, `agy --dangerously-skip-permissions -p "<prompt>"` (the
+`codex exec -m gpt-5.6-sol -c model_reasoning_effort="high" "<prompt>"`,
+`agy --dangerously-skip-permissions -p "<prompt>"` (the
 `gemini` source, via the Antigravity CLI), or
 `opencode run -m openrouter/z-ai/glm-5.2 "<prompt>"` (the `glm` source) — then
 take its ideas, sanity-check them against the strategy and the novelty rule (drop
