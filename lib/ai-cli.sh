@@ -223,7 +223,7 @@ $prompt"
     kimi-openrouter)
       local ai_output
       # Latest Kimi via OpenRouter
-      ai_output=$(opencode -m openrouter/moonshotai/kimi-k2.6 run "$prompt" 2>&1)
+      ai_output=$(opencode -m openrouter/moonshotai/kimi-k3 run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     # --- Grok / xAI ---

@@ -52,7 +52,7 @@ This returns the exact IDs to use (e.g. `["gen03-001", ...]`), already skipping 
 
 ### Pick each strategy's idea source
 
-For variety, some strategies source their ideas from an external AI system instead of Fable — different model families produce genuinely different idea distributions. Roll the dice **once per active strategy** — 1/6 chance `codex` (GPT-5.6 Sol at high effort), 1/6 chance `gemini`, 1/6 chance `glm` (GLM-5.2 via opencode), otherwise `fable`:
+For variety, some strategies source their ideas from an external AI system instead of Fable — different model families produce genuinely different idea distributions. Roll the dice **once per active strategy** — 1/6 chance `codex` (GPT-5.6 Sol at high effort), 1/6 chance `gemini`, 1/6 chance `glm` (GLM-5.2 via opencode), 1/6 chance `kimi` (Kimi K3 via opencode), otherwise `fable`:
 
 ```bash
 for s in novel_exploration hill_climbing structural_mutation crossover_hybrid; do
@@ -60,21 +60,22 @@ for s in novel_exploration hill_climbing structural_mutation crossover_hybrid; d
   if   [ "$r" -eq 0 ]; then src=codex
   elif [ "$r" -eq 1 ]; then src=gemini
   elif [ "$r" -eq 2 ]; then src=glm
+  elif [ "$r" -eq 3 ]; then src=kimi
   else src=fable; fi
   echo "$s=$src"
 done
 ```
 
-Note each strategy's `src`. It controls two things below: a `codex`/`gemini`/`glm` strategy's subagent fetches its ideas from that external CLI (Step 3), and every idea from that strategy is tagged with that source in `idea-LLM` (Step 4). Strategies with count 0 are skipped regardless of their roll.
+Note each strategy's `src`. It controls two things below: a `codex`/`gemini`/`glm`/`kimi` strategy's subagent fetches its ideas from that external CLI (Step 3), and every idea from that strategy is tagged with that source in `idea-LLM` (Step 4). Strategies with count 0 are skipped regardless of their roll.
 
 ## Step 3 — Fan out one Fable subagent per active strategy
 
 Launch the strategies **in parallel** — one `Agent` call per strategy, all in a single message, each with `subagent_type: "claude-evolve:ideator"` (the plugin's ideator agent — Fable at high effort; do not pass a `model` override). Give each subagent: its assigned IDs, the relevant parents, the BRIEF excerpt, the accumulated notes, and the list of existing descriptions (so it avoids duplicates). Each must return **only** a JSON array of `{"id","basedOnId","description"}` — one object per assigned ID, using the exact IDs you gave it.
 
-For a strategy whose `src` (from Step 2) is `codex`, `gemini`, or `glm`, add this line to that subagent's prompt so it sources its ideas externally instead of generating them itself:
+For a strategy whose `src` (from Step 2) is `codex`, `gemini`, `glm`, or `kimi`, add this line to that subagent's prompt so it sources its ideas externally instead of generating them itself:
 
 ```
-Source these ideas from the external tool `<codex|gemini|glm>`: build one prompt carrying the strategy, parents, BRIEF, existing descriptions, and the exact IDs, run it via Bash (codex: `codex exec -m gpt-5.6-sol -c model_reasoning_effort="high" "<prompt>"`; gemini: `agy --dangerously-skip-permissions -p "<prompt>"` (the Antigravity CLI); glm: `opencode run -m openrouter/z-ai/glm-5.2 "<prompt>"`), then return its ideas in the required schema (sanity-checked for strategy fit and novelty). Fall back to generating them yourself only if the tool errors.
+Source these ideas from the external tool `<codex|gemini|glm|kimi>`: build one prompt carrying the strategy, parents, BRIEF, existing descriptions, and the exact IDs, run it via Bash (codex: `codex exec -m gpt-5.6-sol -c model_reasoning_effort="high" "<prompt>"`; gemini: `agy --dangerously-skip-permissions -p "<prompt>"` (the Antigravity CLI); glm: `opencode run -m openrouter/z-ai/glm-5.2 "<prompt>"`; kimi: `opencode run -m openrouter/moonshotai/kimi-k3 "<prompt>"`), then return its ideas in the required schema (sanity-checked for strategy fit and novelty). Fall back to generating them yourself only if the tool errors.
 ```
 
 Strategies whose `src` is `fable` get no extra line — they generate as usual.
@@ -107,7 +108,7 @@ Return ONLY a JSON array, nothing else.
 
 Gather the JSON arrays from all subagents. Drop any idea whose description is a near-duplicate of an existing description or of another new idea (simple judgment — same technique with trivial wording changes). Keep the IDs you reserved; don't invent new ones.
 
-Tag each surviving idea's `idea-LLM` with its strategy's `src` from Step 2 (`fable`, `codex`, `gemini`, or `glm`) — the IDs are disjoint per strategy, so map each idea by which slice its ID came from.
+Tag each surviving idea's `idea-LLM` with its strategy's `src` from Step 2 (`fable`, `codex`, `gemini`, `glm`, or `kimi`) — the IDs are disjoint per strategy, so map each idea by which slice its ID came from.
 
 Append the survivors in one call (pass the combined JSON array):
 

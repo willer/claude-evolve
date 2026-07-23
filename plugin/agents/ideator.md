@@ -22,13 +22,14 @@ verbatim.
 
 **External source.** Some launches ask you to source your ideas from another
 AI system instead of generating them yourself. If the prompt names an external
-tool (`codex`, `gemini`, or `glm`), build a single prompt that hands that tool the
+tool (`codex`, `gemini`, `glm`, or `kimi`), build a single prompt that hands that tool the
 strategy, the parents, the BRIEF excerpt, the existing descriptions, and the
 exact IDs, and ask it to return the same JSON array. Run it via Bash —
 `codex exec -m gpt-5.6-sol -c model_reasoning_effort="high" "<prompt>"`,
 `agy --dangerously-skip-permissions -p "<prompt>"` (the
-`gemini` source, via the Antigravity CLI), or
-`opencode run -m openrouter/z-ai/glm-5.2 "<prompt>"` (the `glm` source) — then
+`gemini` source, via the Antigravity CLI),
+`opencode run -m openrouter/z-ai/glm-5.2 "<prompt>"` (the `glm` source), or
+`opencode run -m openrouter/moonshotai/kimi-k3 "<prompt>"` (the `kimi` source) — then
 take its ideas, sanity-check them against the strategy and the novelty rule (drop
 or replace anything that's a near-duplicate or off-strategy), and return them in
 the required schema. The goal is genuinely different ideas from a different model,
