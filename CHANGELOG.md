@@ -14,6 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Divergent ideation (plugin 0.2.0)** — absorbed the parallel-divergence
+  mechanics from the ADHD ideation skill into `evolve-ideate`:
+  `novel_exploration` now fans out as three isolated branches (each with its
+  own cognitive frame and its own model dice-roll), the orchestrator pools
+  ~3× ideas and keeps the best N; `structural_mutation` gets a rolled frame
+  too. Framed branches ban the obvious first answers and overgenerate before
+  returning. Frames: inversion, biology, remove_assumption, crudest,
+  maximalist, speedrunner, transplant, oncall.
+
 - **Greenhouse dashboard** — an Electron desktop app (`greenhouse/`) for
   monitoring and driving claude-evolve workspaces: click-to-zoom performance
   charts, host-load gauges, winner labels, a fleet search filter, and
