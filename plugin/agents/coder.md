@@ -32,7 +32,7 @@ Repeat up to K times:
        python3 "<PLUGIN_ROOT>/scripts/evolve_csv.py" --working-dir "<WORKING_DIR>" set-status <id> failed-parent-missing
      continue to next candidate.
    - is_baseline true: skip coding (baseline scores algorithm.py as-is); go to step 3.
-   - otherwise code it. TRY CODEX (GPT-5.6 Terra) FIRST, then fall back to coding it yourself:
+   - otherwise code it. TRY CODEX (GPT-5.6 Luna) FIRST, then fall back to coding it yourself:
 
    2a. CODEX FIRST:
        python3 "<PLUGIN_ROOT>/scripts/code_with_codex.py" --working-dir "<WORKING_DIR>" <id>
@@ -45,7 +45,7 @@ Repeat up to K times:
      something off-description? (This judgment is yours, not the script's.)
      - codex's change is GOOD (ok==true AND your judgment is yes) → it's coded.
        Record the model and go to step 3:
-         python3 "<PLUGIN_ROOT>/scripts/evolve_csv.py" --working-dir "<WORKING_DIR>" set-field <id> run-LLM gpt-5.6-terra
+         python3 "<PLUGIN_ROOT>/scripts/evolve_csv.py" --working-dir "<WORKING_DIR>" set-field <id> run-LLM gpt-5.6-luna
      - otherwise (ok==false, OR codex left the file unchanged, OR you judge the
        change wrong/off-description) → FALL BACK to 2b. When ok==false the
        script has ALREADY restored the clean parent copy; when you are rejecting

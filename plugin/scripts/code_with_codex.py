@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Attempt to code one candidate with codex (GPT-5.6 Terra) — the first-choice coder in
+Attempt to code one candidate with codex (GPT-5.6 Luna, max effort) — the first-choice coder in
 the evolve loop, ahead of the Opus worker itself.
 
 The evolve worker (Opus) runs this AFTER prepare.py has copied the parent
@@ -16,14 +16,15 @@ which can read the diff. The script reports hard signals (exit code, whether the
 file changed, py_compile) and restores the clean parent copy whenever codex
 hard-fails, so the worker's fallback always starts from an unmodified parent.
 
-Sandbox: codex runs in its DEFAULT `workspace-write` mode — NOT
---dangerously-bypass-approvals-and-sandbox. That lets it READ shared files
-anywhere on disk but only WRITE inside the workspace, which is all coding needs
-and is strictly safer (it cannot clobber anything outside the workspace, which
-also neuters most of the prompt-injection blast radius of an untrusted idea
-string). `codex exec` is already non-interactive (approval: never), so no flag
-is needed to avoid prompts. The NEVER-USE-GIT warning still rides along in the
-prompt because the sandbox gates paths, not git.
+Sandbox: codex runs with an EXPLICIT `-s workspace-write` — NOT
+--dangerously-bypass-approvals-and-sandbox, and NOT the `codex exec` default,
+which is read-only and silently rejects every patch. workspace-write lets it
+READ shared files anywhere on disk but only WRITE inside the workspace, which is
+all coding needs and is strictly safer (it cannot clobber anything outside the
+workspace, which also neuters most of the prompt-injection blast radius of an
+untrusted idea string). `codex exec` is already non-interactive (approval:
+never), so no flag is needed to avoid prompts. The NEVER-USE-GIT warning still
+rides along in the prompt because the sandbox gates paths, not git.
 
 Output (one JSON line):
   {"id","model","invoked":true,"exit_code":0,"timed_out":false,
@@ -50,7 +51,12 @@ from evolve_common import add_workspace_args, load_workspace, PLUGIN_ROOT
 sys.path.insert(0, str(PLUGIN_ROOT))
 from lib.evolution_csv import EvolutionCSV
 
-DEFAULT_MODEL = "gpt-5.6-terra"
+DEFAULT_MODEL = "gpt-5.6-luna"
+# AIDEV-NOTE: Luna at max effort is the pareto pick for this job (CursorBench 3.2:
+# Luna-max 61.1 vs Terra-xhigh 59.2 at a third the cost, vs Terra-medium 50.3 —
+# the codex CLI default we were silently buying before). Only Terra-max (64.9)
+# scores higher, at ~6x Luna-max's cost. Revisit if the tier pricing moves again.
+DEFAULT_EFFORT = "max"
 DEFAULT_TIMEOUT = 900  # 15 min — coding a real algorithmic change can be slow
 
 # Compact but firm. codex runs unsandboxed *for git* (the path sandbox doesn't
@@ -127,10 +133,12 @@ def emit(obj: dict, code: int):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Code one candidate with codex (GPT-5.6 Terra)")
+    parser = argparse.ArgumentParser(description="Code one candidate with codex (GPT-5.6 Luna)")
     add_workspace_args(parser)
     parser.add_argument("id")
     parser.add_argument("--model", default=DEFAULT_MODEL, help=f"codex model (default {DEFAULT_MODEL})")
+    parser.add_argument("--effort", default=DEFAULT_EFFORT,
+                        help=f"codex reasoning effort (default {DEFAULT_EFFORT})")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT, help="seconds before codex is killed")
     parser.add_argument("--print-prompt", action="store_true",
                         help="print the codex prompt and resolved paths, then exit (no codex call)")
@@ -154,7 +162,8 @@ def main():
 
     if args.print_prompt:
         print(json.dumps({
-            "id": args.id, "model": args.model, "timeout": args.timeout,
+            "id": args.id, "model": args.model, "effort": args.effort,
+            "timeout": args.timeout,
             "workdir": str(ws.output_dir), "target": str(target),
             "prompt": prompt,
         }, indent=2))
@@ -166,9 +175,16 @@ def main():
 
     original = target.read_text()
 
-    # workspace-write (default for `codex exec`): reads anywhere, writes only
-    # inside the workdir. -C makes the workspace dir the writable root.
-    cmd = ["codex", "exec", "-m", args.model, "-C", str(ws.output_dir),
+    # AIDEV-NOTE: -s workspace-write is REQUIRED, not decorative. `codex exec`
+    # defaults to a read-only sandbox (verified on codex v0.145.0), under which
+    # every patch is rejected with "writing is blocked by read-only sandbox" —
+    # codex burns a full turn, leaves the file untouched, and the worker falls
+    # back to Opus every single time. workspace-write reads anywhere but writes
+    # only inside the workdir; -C makes the workspace dir that writable root.
+    cmd = ["codex", "exec", "-m", args.model,
+           "-c", f'model_reasoning_effort="{args.effort}"',
+           "-s", "workspace-write",
+           "-C", str(ws.output_dir),
            "--skip-git-repo-check", prompt]
 
     timed_out = False

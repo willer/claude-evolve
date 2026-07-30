@@ -43,7 +43,7 @@ no flag they auto-detect `evolution/config.yaml` or `./config.yaml`. The
   installed — no npm, no `pip` — falling back to a minimal config parser when
   PyYAML is absent. This plugin is the home of that engine, not a copy of it.
 - **Fixed model roles, defined in `agents/`.** Fable at high effort ideates
-  (`agents/ideator.md`); codex (GPT-5.6 Terra) codes first with the Opus worker
+  (`agents/ideator.md`); codex (GPT-5.6 Luna) codes first with the Opus worker
   (`agents/coder.md`, restricted tools) judging and falling back to coding
   itself; the evaluator scores. Each agent definition pins its model/effort and
   carries the role's protocol as a system prompt — which also keeps the
