@@ -32,9 +32,13 @@ Output (one JSON line):
    "summary":"<codex's final message>","diff":"<unified diff of the attempt>"}
   - ok = invoked AND exit 0 AND changed AND compiles (hard signals ONLY).
   - invoked:false means the codex CLI is missing → worker codes it itself.
+  - environment_fault:true means codex was BLOCKED from writing (sandbox), so
+    it cannot code anything → the worker must STOP, not fall back.
 
-Exit code: 0 if ok, 1 otherwise. The worker should ALSO read summary+diff and
-MAY reject a hard-ok change on semantic grounds, then redo it from the parent.
+Exit codes: 0 = ok, 1 = codex tried and fell short (worker codes it itself),
+2 = environment fault (broken toolchain — abort the run and fix it).
+The worker should ALSO read summary+diff and MAY reject a hard-ok change on
+semantic grounds, then redo it from the parent.
 """
 
 import argparse
@@ -50,6 +54,15 @@ from evolve_common import add_workspace_args, load_workspace, PLUGIN_ROOT
 
 sys.path.insert(0, str(PLUGIN_ROOT))
 from lib.evolution_csv import EvolutionCSV
+
+# Substrings that mean codex was PREVENTED from writing (broken toolchain),
+# as opposed to codex choosing to write nothing (a real coding outcome).
+SANDBOX_FAULTS = (
+    "blocked by read-only sandbox",
+    "patch rejected",
+    "rejected by user approval settings",
+    "sandbox denied",
+)
 
 DEFAULT_MODEL = "gpt-5.6-luna"
 # AIDEV-NOTE: Luna at max effort is the pareto pick for this job (CursorBench 3.2:
@@ -187,9 +200,15 @@ def main():
            "-C", str(ws.output_dir),
            "--skip-git-repo-check", prompt]
 
+    # AIDEV-NOTE: stdin MUST be DEVNULL. `codex exec` appends stdin to the
+    # prompt ("Reading additional input from stdin..."), so with an inherited
+    # pipe that never EOFs it blocks forever — measured: hangs past a 120s
+    # timeout with stdin inherited, finishes in 19s with /dev/null. Inheriting
+    # would burn the entire --timeout on EVERY candidate before failing.
     timed_out = False
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True,
+                              stdin=subprocess.DEVNULL,
                               cwd=str(ws.output_dir), timeout=args.timeout)
         exit_code = proc.returncode
         out = (proc.stdout or "") + (proc.stderr or "")
@@ -199,8 +218,29 @@ def main():
         out = ((e.stdout or "") if isinstance(e.stdout, str) else "") + \
               ((e.stderr or "") if isinstance(e.stderr, str) else "")
 
+    # AIDEV-NOTE: An environment fault must NOT look like "codex tried and came
+    # up empty". A Homebrew bump to codex 0.145.0 flipped the `exec` sandbox
+    # default to read-only, every patch was rejected, and because the worker
+    # treats an empty diff as a normal fallback it silently paid for a dead
+    # codex turn AND a full Opus recode on every candidate for four days.
+    # Anything matching here is a broken toolchain, not a coding outcome:
+    # it exits 2 and the worker must STOP the run rather than fall back.
+    blocked = next((m for m in SANDBOX_FAULTS if m in out), None)
+
     current = target.read_text()
     changed = current != original
+
+    if blocked and not changed:
+        emit({
+            "id": args.id, "model": args.model, "invoked": True,
+            "exit_code": exit_code, "environment_fault": True,
+            "changed": False, "ok": False,
+            "error": (f"codex could not write: {blocked!r}. The sandbox is "
+                      f"misconfigured, so codex CANNOT code anything — this is "
+                      f"not a fallback case. Check `codex exec -s` support and "
+                      f"the sandbox default (it changed in codex 0.145.0). "
+                      f"Fix the toolchain before running evolution again."),
+        }, 2)
     compiles = py_compiles(ws.python_cmd, target) if changed else False
     ok = (exit_code == 0) and changed and compiles and not timed_out
 

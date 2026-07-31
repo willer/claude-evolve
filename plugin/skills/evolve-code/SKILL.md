@@ -47,11 +47,13 @@ Code the candidate. **Try codex (GPT-5.6 Luna) first; fall back to coding it you
 python3 "$CLAUDE_PLUGIN_ROOT/scripts/code_with_codex.py" --working-dir "<WORKING_DIR>" <CANDIDATE_ID>
 ```
 
-It runs codex on the prepared file (default `workspace-write` sandbox — codex reads anywhere but writes only inside the workspace; the NEVER-USE-GIT warning rides along in the prompt) and prints one JSON line:
+It runs codex on the prepared file (explicit `-s workspace-write` — codex reads anywhere but writes only inside the workspace; the NEVER-USE-GIT warning rides along in the prompt) and prints one JSON line:
 
 ```json
 {"ok":true,"changed":true,"compiles":true,"timed_out":false,"restored_parent":false,"summary":"...","diff":"..."}
 ```
+
+**Environment fault — check this before anything else.** If the JSON has `"environment_fault": true` (exit code 2), codex was *blocked* from writing rather than having tried and fallen short. It cannot code any candidate in this state, so falling back to Step 2b would hide a broken toolchain while every candidate still pays for a dead codex call. **Do not fall back.** Stop and report the `error` field verbatim — the fix is to the toolchain (`codex exec` sandbox handling changed in codex 0.145.0), not to this candidate.
 
 Read `summary` and `diff` and **judge for yourself** whether codex actually implemented `description`, preserved the interface, and made a real behavioral change — not a no-op, rename, or off-description edit. The script reports only hard signals (`ok` = exit 0 + file changed + compiles); the semantic call is yours.
 

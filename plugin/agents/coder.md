@@ -36,9 +36,16 @@ Repeat up to K times:
 
    2a. CODEX FIRST:
        python3 "<PLUGIN_ROOT>/scripts/code_with_codex.py" --working-dir "<WORKING_DIR>" <id>
-     It runs codex on the prepared file (default workspace-write sandbox: reads
+     It runs codex on the prepared file (explicit `-s workspace-write`: reads
      anywhere, writes only inside the workspace) and prints ONE JSON line:
        {"ok":bool,"changed":bool,"compiles":bool,"timed_out":bool,"restored_parent":bool,"summary":"<codex's words>","diff":"<unified diff of the attempt>"}
+     STOP FIRST IF IT IS AN ENVIRONMENT FAULT: if the JSON has
+     `"environment_fault": true` (exit code 2), codex was BLOCKED from writing —
+     it cannot code ANY candidate, so falling back to 2b would quietly hide a
+     broken toolchain while you pay for a dead codex call on every candidate.
+     Do NOT fall back and do NOT claim the candidate. STOP the whole run
+     immediately and report the `error` field verbatim as your final line:
+       ABORTED — codex environment fault: <error>
      READ `summary` and `diff` and JUDGE for yourself: did codex actually
      implement `description`, preserve the interface (same entry points/IO the
      parent had), and make a real behavioral change — not a no-op, rename, or
