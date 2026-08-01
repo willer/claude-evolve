@@ -15,7 +15,11 @@ at the top), presses Space for `shots/peek.png`
 (quick-status popover), opens the
 first tool page for `shots/tool.png` (never presses ▶ Run), toggles to the
 grid for `shots/grid.png`, then clicks the first card for `shots/detail.png`
-(auto-attaches the terminal when the session is running), then clicks a detail
+(auto-attaches the visible session tab's terminal when it's running), switches
+to the Shell tab for `shots/detail-tab-shell.png` and back (logs
+`session-tab shell=… back=…`: the active pane id plus the live `.term-wrap`
+count — leaving a tab must drop its terminal to 0, returning must restore 1),
+then clicks a detail
 chart to enlarge it for `shots/detail-zoom.png` (the overlay repaints the chart
 at full size with a labeled Y-axis gutter), then opens the leader NAV chart in
 the interactive viewer for `shots/detail-zoom-nav.png` (full range: %-return Y
@@ -106,10 +110,17 @@ to verify the NAV chart deterministically.
 - [ ] Evolution + adhoc columns (list) / button groups (grid): each workspace
       has independent Evolve and Adhoc start/stop controls; NO Attach button
       (click the row/card to open the detail and attach there)
-- [ ] Detail: two stacked session panels on the right — Evolution and Adhoc.
-      Each running session auto-attaches its terminal (unfocused); a stopped
-      session shows a "▶ Start …" launch button in its slot. Both can be live
-      at once; ⏎/a focuses the evolution terminal first, then adhoc
+- [ ] Detail: ONE session panel on the right with a tab strip — Evolution /
+      Adhoc / Shell — and a single tall terminal below it (no scrolling to
+      reach the 2nd and 3rd session). Each tab carries an activity dot
+      (green working / yellow waiting / magenta asking / red stuck / hollow
+      when not running), so the two hidden sessions stay legible
+- [ ] Detail tabs: opening a workspace lands on the first RUNNING session
+      (evolution first), else Evolution. Clicking a tab (or 1/2/3) switches
+      without focusing the terminal; the visible tab auto-attaches (unfocused)
+      and the tab you left detaches — exactly one tmux client per session, so
+      a hidden pane can never resize the session. A stopped tab shows its
+      "▶ Start …" launch button; ⏎/a focuses the visible tab's terminal
 - [ ] Adhoc launch runs a plain `claude` (no /evolve prompt, no model pin) in
       the workspace dir under the adhoc-<dir> tmux session; stopping it kills
       only that session and leaves the evolution session untouched (and vice

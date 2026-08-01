@@ -8,7 +8,16 @@ import { FitAddon } from '@xterm/addon-fit';
 import { PERIOD_LABELS, buildBacktestTable } from '../core/backtests';
 import type { BacktestAlgo, BacktestRow } from '../core/backtests';
 import { FAILING_FAILS, PLATEAU_GENS, classifyHealth } from '../core/csv';
-import { adhocSessionName, sessionName, shellSessionName, toolSessionName } from '../core/state';
+import {
+  SESSION_KINDS,
+  adhocSessionName,
+  pickSessionTab,
+  sessionDotClass,
+  sessionName,
+  shellSessionName,
+  toolSessionName,
+} from '../core/state';
+import type { SessionKind } from '../core/state';
 import type {
   Candidate,
   FleetPayload,
@@ -1290,18 +1299,19 @@ function render(): void {
 function renderHints(): void {
   $('hints').innerHTML =
     view || toolView
-      ? `<b>esc</b> back · <b>⌘esc</b> back (even from terminal) · <b>⏎/a</b> focus terminal${view ? ' · <b>s</b> start/stop' : ''} · click a chart to enlarge · click terminal to type · wheel scrolls the session`
+      ? `<b>esc</b> back · <b>⌘esc</b> back (even from terminal) · <b>⏎/a</b> focus terminal${view ? ' · <b>1 2 3</b> evolution/adhoc/shell tab · <b>s</b> start/stop' : ''} · click a chart to enlarge · click terminal to type · wheel scrolls the session`
       : `<b>↑↓ j k</b> select · <b>⏎</b> open + attach · <b>space</b> peek stats · <b>v</b> ${viewMode === 'list' ? 'grid' : 'list'} · <b>s</b> start/stop · <b>*</b> star`;
 }
 
 // ── detail view ──────────────────────────────────────────────────────────────
 
 // Live attached terminals, keyed by full tmux session id (evolve-… / adhoc-… /
-// shell-… / greenhouse-…). The detail view runs three at once (evolution +
-// adhoc + shell), the tool page one — so the old single-terminal globals are now
-// a map, one entry per attached session. Each entry's .term-wrap DOM node must
-// survive fleet-push re-renders (moving a focused node blurs it); only
-// attach/teardown touch slots.
+// shell-… / greenhouse-…). It's a map rather than a single global because
+// attach/teardown are driven per session id — the detail view swaps between
+// three of them as the session tabs change, and a stale entry from the tab you
+// left must be tearable by id. Each entry's .term-wrap DOM node must survive
+// fleet-push re-renders (moving a focused node blurs it); only attach/teardown
+// touch slots.
 interface TermSession {
   sessId: string;
   term: Terminal;
@@ -1311,6 +1321,11 @@ interface TermSession {
   ro: ResizeObserver;
 }
 const terms = new Map<string, TermSession>();
+
+// Which session tab the detail view is showing. Only this one holds a live tmux
+// attach (see syncSessionTabs); the other two are represented by their dot in
+// the tab strip. Re-picked from the running sessions on each openDetail.
+let detailTab: SessionKind = 'evolution';
 
 function teardownTerminal(sessId: string): void {
   const ts = terms.get(sessId);
@@ -1327,28 +1342,29 @@ function teardownAllTerminals(): void {
   for (const sessId of [...terms.keys()]) teardownTerminal(sessId);
 }
 
-/** Focus the primary terminal of the current view: evolution first, then adhoc,
- *  then shell (detail), or the tool terminal. Returns whether one was focused. */
+/** Focus the terminal of the current view — the visible session tab (detail) or
+ *  the tool terminal. Returns whether one was focused. */
 function focusPrimaryTerm(): boolean {
-  const order = view
-    ? [sessionName(view), adhocSessionName(view), shellSessionName(view)]
-    : toolView
-      ? [toolSessionName(toolView)]
-      : [];
-  for (const id of order) {
-    const ts = terms.get(id);
-    if (ts) {
-      ts.term.focus();
-      return true;
-    }
-  }
-  return false;
+  const id = view ? detailSessId(view, detailTab) : toolView ? toolSessionName(toolView) : null;
+  const ts = id ? terms.get(id) : undefined;
+  if (!ts) return false;
+  ts.term.focus();
+  return true;
+}
+
+/** tmux session id for one workspace's session kind. */
+function detailSessId(name: string, kind: SessionKind): string {
+  return kind === 'evolution' ? sessionName(name) : kind === 'adhoc' ? adhocSessionName(name) : shellSessionName(name);
 }
 
 function openDetail(name: string, focusTerm = false): void {
   view = name;
   selectedName = name;
   teardownAllTerminals();
+  // Land on whichever session is actually running (evolution first) instead of
+  // always on an empty Evolution tab.
+  const r = rows.find((x) => x.name === name);
+  detailTab = r ? pickSessionTab({ evolution: r.session, adhoc: r.adhoc, shell: r.shell }) : 'evolution';
   render(); // renderDetail attaches running sessions (unfocused) as part of rendering
   // Re-read the latest backtest-all run from sqlite on each open: btLatest is
   // otherwise fetched once at startup, so a run that finished after launch
@@ -1545,19 +1561,13 @@ function renderDetail(): void {
         <div class="left" id="d-left"></div>
         <div class="right">
           <div class="panel">
-            <h3>Evolution session</h3>
-            <div id="evo-term-slot"></div>
-            <div id="evo-term-ctl" class="term-ctl"></div>
-          </div>
-          <div class="panel">
-            <h3>Adhoc session</h3>
-            <div id="adhoc-term-slot"></div>
-            <div id="adhoc-term-ctl" class="term-ctl"></div>
-          </div>
-          <div class="panel">
-            <h3>Shell session</h3>
-            <div id="shell-term-slot"></div>
-            <div id="shell-term-ctl" class="term-ctl"></div>
+            <div class="tabs" id="d-tabs"></div>
+            ${SESSION_KINDS.map(
+              (k) => `<div class="tabpane" id="${k}-pane">
+                <div id="${k}-term-slot"></div>
+                <div id="${k}-term-ctl" class="term-ctl"></div>
+              </div>`,
+            ).join('')}
           </div>
         </div>
       </div>`;
@@ -1694,39 +1704,87 @@ function renderDetail(): void {
       </div>
     </div>`;
 
-  // Both session panels sync every poll-driven re-render (self-healing attach +
-  // control row). A session that starts WHILE this view is open attaches as
-  // soon as it's listed.
-  syncSessionPanel(
-    r.name,
-    sessionName(r.name),
-    'evo-term-slot',
-    'evo-term-ctl',
-    r.session,
-    () => void startEvolution(r.name),
-    () => void stopEvolution(r.name),
-    '▶ Start evolution',
-  );
-  syncSessionPanel(
-    r.name,
-    adhocSessionName(r.name),
-    'adhoc-term-slot',
-    'adhoc-term-ctl',
-    r.adhoc,
-    () => void startAdhoc(r.name),
-    () => void stopAdhoc(r.name),
-    '▶ Start adhoc claude',
-  );
-  syncSessionPanel(
-    r.name,
-    shellSessionName(r.name),
-    'shell-term-slot',
-    'shell-term-ctl',
-    r.shell,
-    () => void startShell(r.name),
-    () => void stopShell(r.name),
-    '▶ Start shell (zsh)',
-  );
+  syncSessionTabs(r);
+}
+
+/** Per-kind wiring for the detail session tabs — session id, tab label, and the
+ *  start/stop actions. Built fresh per render (closes over the current row). */
+interface SessionTabSpec {
+  state: SessionState;
+  sessId: string;
+  label: string;
+  startLabel: string;
+  start: () => void;
+  stop: () => void;
+}
+
+function sessionTabSpecs(r: WorkspaceRow): Record<SessionKind, SessionTabSpec> {
+  return {
+    evolution: {
+      state: r.session,
+      sessId: sessionName(r.name),
+      label: 'Evolution',
+      startLabel: '▶ Start evolution',
+      start: () => void startEvolution(r.name),
+      stop: () => void stopEvolution(r.name),
+    },
+    adhoc: {
+      state: r.adhoc,
+      sessId: adhocSessionName(r.name),
+      label: 'Adhoc',
+      startLabel: '▶ Start adhoc claude',
+      start: () => void startAdhoc(r.name),
+      stop: () => void stopAdhoc(r.name),
+    },
+    shell: {
+      state: r.shell,
+      sessId: shellSessionName(r.name),
+      label: 'Shell',
+      startLabel: '▶ Start shell (zsh)',
+      start: () => void startShell(r.name),
+      stop: () => void stopShell(r.name),
+    },
+  };
+}
+
+/** Render the tab strip (with a live activity dot per kind) and sync the panes.
+ *  Runs on every poll-driven re-render, so a session that starts/stops WHILE
+ *  this view is open updates its dot and — if it's the active tab — attaches or
+ *  tears down on its own.
+ *
+ *  AIDEV-NOTE: only the ACTIVE tab keeps a live tmux attach. tmux is configured
+ *  `window-size latest`, so a client attached inside a display:none pane (zero
+ *  cols/rows) would resize the session for everyone; detaching the hidden ones
+ *  keeps exactly one correctly-sized client per session. */
+function syncSessionTabs(r: WorkspaceRow): void {
+  const specs = sessionTabSpecs(r);
+  $('d-tabs').innerHTML = SESSION_KINDS.map((k) => {
+    const sp = specs[k];
+    const dot = sessionDotClass(sp.state);
+    const title = sp.state.running ? `${sp.label} session — ${dot}` : `${sp.label} session — not running`;
+    return `<button class="tab${k === detailTab ? ' active' : ''}" data-tab="${k}" title="${esc(title)}">
+      <span class="tab-dot ${dot}"></span>${esc(sp.label)}</button>`;
+  }).join('');
+  $('d-tabs')
+    .querySelectorAll<HTMLElement>('[data-tab]')
+    .forEach((b) => b.addEventListener('click', () => selectSessionTab(b.dataset.tab as SessionKind)));
+
+  for (const k of SESSION_KINDS) {
+    const sp = specs[k];
+    const active = k === detailTab;
+    $(`${k}-pane`).classList.toggle('active', active);
+    if (active) syncSessionPanel(sp.sessId, `${k}-term-slot`, `${k}-term-ctl`, sp.state, sp.start, sp.stop, sp.startLabel);
+    else teardownTerminal(sp.sessId); // hidden panes hold no tmux client (see note above)
+  }
+}
+
+/** Switch the visible session tab. Re-renders (which attaches the newly visible
+ *  session and detaches the one we left) without focusing — focus stays an
+ *  explicit act (click the terminal / ⏎ / a), so stray keys can't reach claude. */
+function selectSessionTab(kind: SessionKind): void {
+  if (detailTab === kind) return;
+  detailTab = kind;
+  render();
 }
 
 /** Sync one detail session panel: when running, self-heal the attach into its
@@ -1734,7 +1792,6 @@ function renderDetail(): void {
  *  show a launch button in the slot. Never rewrites the slot while a live
  *  terminal occupies it (moving a focused node blurs it). */
 function syncSessionPanel(
-  name: string,
   sessId: string,
   slotId: string,
   ctlId: string,
@@ -1748,7 +1805,7 @@ function syncSessionPanel(
   if (state.running) {
     // Skipped once attached this visit — a dead client leaves the entry in the
     // map, so an externally killed attach doesn't auto-reattach-loop.
-    if (!terms.has(sessId)) void attachTerminal(sessId, false, slot, 'dual');
+    if (!terms.has(sessId)) void attachTerminal(sessId, false, slot, 'tabbed');
     const attached = terms.has(sessId);
     ctl.innerHTML =
       `${sessBadge(state, sessId)} ` +
@@ -1765,12 +1822,12 @@ function syncSessionPanel(
   ctl.querySelector('[data-sess-stop]')?.addEventListener('click', stopAct);
   ctl
     .querySelector('[data-sess-attach]')
-    ?.addEventListener('click', () => void attachTerminal(sessId, true, slot, 'dual'));
+    ?.addEventListener('click', () => void attachTerminal(sessId, true, slot, 'tabbed'));
 }
 
 /** Attach xterm to a tmux session by full id, in the given slot. Multiple may
  *  be live at once (detail runs evolution + adhoc); each is tracked in `terms`
- *  keyed by session id. heightClass ('dual' stacked / 'solo' full) sizes the
+ *  keyed by session id. heightClass ('tabbed' detail tab / 'solo' tool page) sizes the
  *  wrap. */
 async function attachTerminal(
   sessId: string,
@@ -1807,6 +1864,9 @@ async function attachTerminal(
   // claude), so claude scrolls its own conversation. tmux `mouse off` means tmux
   // forwards to the app rather than grabbing the wheel for itself.
   ts.ro = new ResizeObserver(() => {
+    // A hidden (display:none) wrap measures 0×0; fitting to that would ask tmux
+    // to resize the session to a degenerate size for every other client too.
+    if (!wrap.clientWidth || !wrap.clientHeight) return;
     fit.fit();
     ts.port?.postMessage({ type: 'resize', cols: term.cols, rows: term.rows });
   });
@@ -2220,15 +2280,15 @@ window.addEventListener('keydown', (e) => {
     // right after losing terminal focus) can't scroll the page.
     if (e.key === 'Escape') view ? closeDetail() : closeTool();
     else if (e.key === 's' && view) void toggleEvolution(view);
+    else if (view && ['1', '2', '3'].includes(e.key)) selectSessionTab(SESSION_KINDS[Number(e.key) - 1]);
     else if (e.key === 'Enter' || e.key === 'a') {
       if (focusPrimaryTerm()) return; // a live terminal — just focus it
-      // none attached yet (attach in flight / not started): attach the first
-      // running session and focus it.
+      // Not attached yet (attach in flight / not started): attach the visible
+      // tab's session, if it's running, and focus it.
       if (view) {
         const r = rows.find((x) => x.name === view);
-        if (r?.session.running) void attachTerminal(sessionName(view), true, $('evo-term-slot'), 'dual');
-        else if (r?.adhoc.running) void attachTerminal(adhocSessionName(view), true, $('adhoc-term-slot'), 'dual');
-        else if (r?.shell.running) void attachTerminal(shellSessionName(view), true, $('shell-term-slot'), 'dual');
+        const running = r && { evolution: r.session, adhoc: r.adhoc, shell: r.shell }[detailTab].running;
+        if (running) void attachTerminal(detailSessId(view, detailTab), true, $(`${detailTab}-term-slot`), 'tabbed');
       } else if (toolView) {
         const t = tools.find((x) => x.key === toolView);
         if (t?.running) void attachTerminal(toolSessionName(toolView), true, $('tool-term-slot'), 'solo');

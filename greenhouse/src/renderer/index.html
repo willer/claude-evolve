@@ -352,11 +352,40 @@
     tr.bt-row:hover td { background: var(--panel2); }
     tr.bt-row .caret { color: var(--dim); }
     tr.bt-chart td { padding: 6px 8px 10px; }
-    /* live terminal wrap — multiple may exist (detail stacks evolution + adhoc) */
+    /* session tabs (detail view): one terminal visible at a time, the other two
+       represented by their activity dot in the strip */
+    .tabs { display: flex; gap: 2px; margin: -4px -4px 10px; border-bottom: 1px solid var(--border); }
+    .tab {
+      background: none;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: var(--dim);
+      font: inherit;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      padding: 6px 10px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .tab:hover { color: var(--text); }
+    .tab.active { color: var(--text); border-bottom-color: var(--cyan); }
+    .tab-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--dim); }
+    .tab-dot.working { background: var(--green); }
+    .tab-dot.waiting { background: var(--yellow); }
+    .tab-dot.asking { background: var(--magenta); }
+    .tab-dot.stuck { background: var(--red); }
+    .tab-dot.stopped { background: transparent; border: 1px solid var(--dim); }
+    .tabpane { display: none; }
+    .tabpane.active { display: block; }
+
+    /* live terminal wrap — one per attached tmux session */
     .term-wrap { background: #000; border-radius: 6px; padding: 4px; }
     /* viewport-relative so more of the conversation shows on bigger windows;
        min-height keeps them usable when the window is short */
-    .term-wrap.dual { height: 46vh; min-height: 300px; }  /* stacked detail panes */
+    .term-wrap.tabbed { height: 74vh; min-height: 420px; }  /* detail session tab */
     .term-wrap.solo { height: 82vh; min-height: 480px; }  /* single tool-page terminal */
     .term-ctl, #tool-term-hint { color: var(--dim); font-size: 11px; margin-top: 6px; display: flex; align-items: center; gap: 8px; }
     .term-ctl .badge { flex: none; }

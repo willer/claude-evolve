@@ -209,6 +209,22 @@ function devShots(dir: string): void {
     await js(`document.querySelector('.card')?.click()`);
     await pause(1500);
     await shot('detail.png');
+    // Session tabs: switching to Shell must detach the evolution terminal (only
+    // the visible tab holds a tmux client) and switching back must re-attach it.
+    // Read-only — a stopped tab just shows its ▶ launch button, never clicked.
+    await js(`document.querySelector('#d-tabs [data-tab="shell"]')?.click()`);
+    await pause(800);
+    await shot('detail-tab-shell.png');
+    const tabState = await js(
+      `JSON.stringify({ active: document.querySelector('.tabpane.active')?.id, terms: document.querySelectorAll('#detail .term-wrap').length })`,
+    );
+    console.log(`EG_SHOT session-tab shell=${tabState}`);
+    await js(`document.querySelector('#d-tabs [data-tab="evolution"]')?.click()`);
+    await pause(1500);
+    const backState = await js(
+      `JSON.stringify({ active: document.querySelector('.tabpane.active')?.id, terms: document.querySelectorAll('#detail .term-wrap').length })`,
+    );
+    console.log(`EG_SHOT session-tab back=${backState}`);
     // Click-to-enlarge: open the best-score sparkline in the zoom overlay (it
     // repaints at a larger size with a labeled min/max Y-axis gutter it omits at
     // tile size), capture, then close. The sparkline is always present (no

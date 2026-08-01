@@ -112,9 +112,15 @@ sessions: the evolution session (evolve-<dir>, claude /evolve) and an adhoc
 session (adhoc-<dir>, a plain `claude` with no prompt, for poking at the
 workspace by hand). The fleet list/grid expose separate Evolve and Adhoc
 start/stop controls (no Attach button — click the row to open the detail);
-the detail view stacks both session terminals on the right and the renderer
-now drives MULTIPLE live xterms at once (terms Map keyed by session id,
-MessagePort routed by meta.attachId), not the old single-terminal global.
+the detail view shows the three sessions (evolution / adhoc / shell) as TABS
+in a single right-hand panel — one tall terminal, no scrolling to reach the
+2nd and 3rd — with a per-tab activity dot so the hidden ones stay legible.
+Only the VISIBLE tab holds a tmux client (tmux runs `window-size latest`, so a
+client in a display:none pane would resize the session for everyone); the tab
+you leave is detached and re-attaches on return. Tab picking/indicators are
+pure (`core/state.ts` pickSessionTab / sessionDotClass, unit-tested); the
+renderer keeps the terms Map keyed by session id (MessagePort routed by
+meta.attachId), since attach/teardown is driven per session id.
 Dragging a file onto a terminal types its path into that session (preload
 webUtils.getPathForFile — File.path is gone in Electron 39; a window-wide
 drop preventDefault stops Electron from navigating to the file:// URL). The

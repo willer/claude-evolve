@@ -15,13 +15,18 @@ import {
 import { resolveDevSourceDir } from './devRebuild';
 import { TRADING_METRICS, resolveProfile } from './profile';
 import {
+  SESSION_KINDS,
   adhocSessionName,
   classifyPane,
   hashText,
+  pickSessionTab,
+  sessionDotClass,
   sessionName,
   shellSessionName,
   toolSessionName,
 } from './state';
+import type { SessionKind } from './state';
+import type { Activity, SessionState } from './types';
 
 const HEADER =
   'id,basedOnId,description,performance,status,sharpe,yearly_return,max_drawdown,return_2025,idea-LLM,run-LLM';
@@ -351,6 +356,42 @@ describe('sessionName', () => {
 
   it('names the shell session with its own prefix', () => {
     expect(shellSessionName('ev-1d-tqqq-sigma')).toBe('shell-ev-1d-tqqq-sigma');
+  });
+});
+
+describe('session tabs', () => {
+  const st = (running: boolean, activity: Activity | null = null): SessionState => ({ running, activity });
+  const states = (
+    evolution: SessionState,
+    adhoc: SessionState,
+    shell: SessionState,
+  ): Record<SessionKind, SessionState> => ({ evolution, adhoc, shell });
+  const off = st(false);
+
+  it('lists the three kinds in display order', () => {
+    expect(SESSION_KINDS).toEqual(['evolution', 'adhoc', 'shell']);
+  });
+
+  it('opens on the evolution tab when nothing runs', () => {
+    expect(pickSessionTab(states(off, off, off))).toBe('evolution');
+  });
+
+  it('prefers evolution whenever it is running', () => {
+    expect(pickSessionTab(states(st(true, 'working'), st(true, 'waiting'), st(true, 'working')))).toBe('evolution');
+  });
+
+  it('falls through to the first running session in order', () => {
+    expect(pickSessionTab(states(off, st(true, 'waiting'), st(true, 'working')))).toBe('adhoc');
+    expect(pickSessionTab(states(off, off, st(true, 'working')))).toBe('shell');
+  });
+
+  it('maps session state to an indicator class', () => {
+    expect(sessionDotClass(off)).toBe('stopped');
+    expect(sessionDotClass(st(true, 'working'))).toBe('working');
+    expect(sessionDotClass(st(true, 'asking'))).toBe('asking');
+    expect(sessionDotClass(st(true, 'stuck'))).toBe('stuck');
+    // running but unclassified (capture failed / brand-new pane) still reads live
+    expect(sessionDotClass(st(true, null))).toBe('working');
   });
 });
 

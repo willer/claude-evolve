@@ -1,7 +1,7 @@
 // Pane-state classification + launch constants, shared vocabulary with
 // trading-strategies/autostatus (the TUI this app replaces).
 
-import type { Activity } from './types';
+import type { Activity, SessionState } from './types';
 
 // Footer text Claude shows ONLY in an interactive selection dialog — a
 // question (AskUserQuestion) or a permission prompt. Absent from both the idle
@@ -156,6 +156,32 @@ export function adhocSessionName(dir: string): string {
  *  runs. Greenhouse-only, so it gets its own `shell-` prefix. */
 export function shellSessionName(dir: string): string {
   return `shell-${dir}`;
+}
+
+// ── session tabs ────────────────────────────────────────────────────────────
+// Each workspace runs three independent sessions. The detail view shows them as
+// TABS (one terminal visible at a time) rather than a vertical stack — three
+// stacked panes pushed the 2nd and 3rd below the fold, so reaching them meant
+// scrolling the whole page. The tab strip carries a per-kind activity dot, so
+// the two hidden sessions are still legible at a glance.
+
+export type SessionKind = 'evolution' | 'adhoc' | 'shell';
+
+/** Display (and fallthrough) order of the session tabs. */
+export const SESSION_KINDS: readonly SessionKind[] = ['evolution', 'adhoc', 'shell'] as const;
+
+/** Which tab a freshly opened detail view lands on: the first RUNNING session in
+ *  display order, else evolution (the one you'd usually start). */
+export function pickSessionTab(states: Record<SessionKind, SessionState>): SessionKind {
+  return SESSION_KINDS.find((k) => states[k].running) ?? 'evolution';
+}
+
+/** Indicator class for a tab's activity dot — the badge vocabulary
+ *  (working/waiting/asking/stuck) plus 'stopped'. A running-but-unclassified
+ *  session (capture failed, pane just spawned) reads as working, matching
+ *  sessBadge. */
+export function sessionDotClass(s: SessionState): string {
+  return s.running ? (s.activity ?? 'working') : 'stopped';
 }
 
 // Shell launch: a straight interactive zsh in the workspace dir — no claude, no
