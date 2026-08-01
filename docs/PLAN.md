@@ -1,4 +1,4 @@
-- [x] move the terminal windows so they're within tabs, with indicators whether the terminals are active for each type or not. it's hard to work with having to scroll the main window to get to the 2nd and 3rd terminal
+- [T] move the terminal windows so they're within tabs, with indicators whether the terminals are active for each type or not. it's hard to work with having to scroll the main window to get to the 2nd and 3rd terminal
   > ✅ **DONE**: The detail view's three stacked session panels (Evolution /
   > Adhoc / Shell) are now ONE panel with a tab strip and a single tall terminal
   > (74vh) — the 2nd and 3rd sessions no longer sit below the fold. Each tab
