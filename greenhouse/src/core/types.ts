@@ -83,6 +83,11 @@ export interface WorkspaceRow {
   starred: boolean;
   /** Display profile (metric labels/ordering + trading-vs-generic kind). */
   profile: ResolvedProfile;
+  /** Algo id this workspace's PRODUCTION signal pins via inference-all `--pin=` (e.g.
+   *  gen823-001), or null if production deploys the best-by-performance champion. A pin is
+   *  a live-trading decision, NOT what R&D shows — surfaced here only to flag when the
+   *  leader shown on the dashboard is not what production actually trades. */
+  productionPin: string | null;
 }
 
 /** Overall workspace health: error (CSV unreadable) > failing (>3 failures

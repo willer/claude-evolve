@@ -78,6 +78,11 @@ Do this instead:
    `opencode run -m openrouter/moonshotai/kimi-k3 "$(cat <scratchpad>/ext_prompt.txt)" >/tmp/ext_out.txt 2>/tmp/ext_err.txt`
 3. Poll by `Read`ing the output file every so often, doing other useful work
    (re-reading the BRIEF, drafting your own fallback ideas) between checks.
+   **Poll INSIDE your turn — NEVER end your turn to wait for the run.** Ending
+   your turn marks you complete, and nothing resumes you: the launch is wasted
+   and the orchestrator gets no ideas at all. No notification is coming to you.
+   You must loop on `Read` yourself until the file has content or your budget
+   expires. "I'll wait for it to finish" is a failure, not a plan.
 4. Give it a genuinely long budget — **at least 15 minutes** — before concluding
    it has failed. Only then fall back to your own ideas, and say in your summary
    that the external tool timed out rather than that it errored.

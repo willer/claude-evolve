@@ -23,6 +23,43 @@ interface CacheEntry {
   stats: WorkspaceStats;
 }
 
+// inference-all pin map, cached by (path, mtime). Every workspace under a root shares one
+// inference-all, so it is parsed at most once per change, not once per workspace per poll.
+const pinCache = new Map<string, { mtimeMs: number; pins: Map<string, string> }>();
+
+/** Parse `<root>/inference-all` and return the production `--pin=<id>` for a workspace, or
+ *  null. inference-all declares each live signal as a tuple
+ *  `("<dir>", "<sym>", "<tf>", [..., "--pin=<id>"])`; a leading `#` comments a signal OUT,
+ *  so those lines are ignored (that signal isn't live, hence not pinned). */
+function readProductionPin(root: string, wsName: string): string | null {
+  const file = path.join(root, 'inference-all');
+  let mtimeMs: number;
+  try {
+    mtimeMs = fs.statSync(file).mtimeMs;
+  } catch {
+    return null; // no inference-all in this root
+  }
+  let entry = pinCache.get(file);
+  if (!entry || entry.mtimeMs !== mtimeMs) {
+    const pins = new Map<string, string>();
+    try {
+      for (const raw of fs.readFileSync(file, 'utf8').split('\n')) {
+        const line = raw.trim();
+        if (!line || line.startsWith('#')) continue; // blanks + commented-out signals
+        const dir = line.match(/^\(\s*"([^"]+)"/);
+        if (!dir) continue;
+        const pin = line.match(/--pin=([A-Za-z0-9._-]+)/);
+        if (pin) pins.set(dir[1], pin[1]);
+      }
+    } catch {
+      return null;
+    }
+    entry = { mtimeMs, pins };
+    pinCache.set(file, entry);
+  }
+  return entry.pins.get(wsName) ?? null;
+}
+
 export class Poller {
   private rows: WorkspaceRow[] = [];
   private tools: ToolState[] = [];
@@ -167,6 +204,11 @@ export class Poller {
         const hasEquityDir = fs.existsSync(path.join(ws.path, 'equity'));
         const profile = resolveProfile(configText, { hasEquityDir, metricColumns: stats.metricColumns });
 
+        // Production pin: the parent-root `inference-all` may pin this workspace's live
+        // signal to an exact algo id (`--pin=<id>`) instead of the champion. Read it so the
+        // detail view can flag when the leader shown here is NOT what production trades.
+        const productionPin = readProductionPin(path.dirname(ws.path), ws.name);
+
         rows.push({
           name: ws.name,
           path: ws.path,
@@ -177,6 +219,7 @@ export class Poller {
           shell,
           starred: starred.has(ws.name),
           profile,
+          productionPin,
         });
       }
 
