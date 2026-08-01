@@ -27,7 +27,8 @@ This prints one JSON object:
 {"generation": 3, "evolution_dir": "/abs/ws", "top_performers": [...],
  "brief": "...", "notes": "...", "existing_descriptions": [...],
  "num_elites": 3, "total_ideas": 15,
- "strategies": {"novel_exploration":3,"hill_climbing":5,"structural_mutation":3,"crossover_hybrid":4}}
+ "strategies": {"novel_exploration":3,"hill_climbing":5,"structural_mutation":3,"crossover_hybrid":4},
+ "novel_intents": {"alpha":{"count":1,"rule":"..."},"defense":{"count":1,"rule":"..."}}}
 ```
 
 Take the lock (auto-expires after 30 min in case a prior run crashed):
@@ -49,6 +50,10 @@ python3 "$CLAUDE_PLUGIN_ROOT/scripts/evolve_csv.py" --working-dir "<WORKING_DIR>
 ```
 
 This returns the exact IDs to use (e.g. `["gen03-001", ...]`), already skipping any taken. Split them across the four strategies according to the `strategies` counts (skip any strategy with count 0). Each strategy gets a disjoint slice of the ID list.
+
+### Assign intents to the novel slots
+
+If `novel_intents` is non-empty, split the `novel_exploration` ID slice by its counts, in the order the intents appear: the first `count` IDs carry the first intent, the next slice the second, and so on; leftover novel IDs are unconstrained (call them FREE). Each intent's `rule` is workspace-authored text (extracted from the workspace's intents file) describing what ideas in that slot must and must not be — the harness doesn't interpret it, it just enforces the quota. Intents exist so a population can't collapse into a monoculture of whatever the fitness function prices cheapest. The other three strategies carry no intent. If `novel_intents` is empty, skip everything intent-related below.
 
 ### Pick each branch's idea source
 
@@ -110,7 +115,11 @@ Branches whose `src` is `fable` get no extra source line — they generate as us
 
 Per-strategy instructions to put in each prompt:
 
-- **novel_exploration** (each of the three branches) — Ambitious, creative directions not tried before, generated through your assigned frame. `basedOnId` must be `""` (empty, no parent). One clear sentence each describing a genuinely new algorithmic approach.
+- **novel_exploration** (each of the three branches) — Ambitious, creative directions not tried before, generated through your assigned frame. `basedOnId` must be `""` (empty, no parent). One clear sentence each describing a genuinely new algorithmic approach. If intents are assigned, list each novel ID with its intent name, quote each intent's `rule` text **verbatim**, and add:
+
+  ```
+  Some of your assigned IDs carry an INTENT. An idea in an intent slot must satisfy that intent's rule (quoted above) — ideas that violate their slot's rule are discarded at selection. Start each intent-slot description with "[<INTENT NAME, UPPERCASED>] ". FREE slots are unconstrained and untagged.
+  ```
 - **hill_climbing** — Small parameter tweaks / local optimizations of a single top performer. Set `basedOnId` to one of the top-performer IDs. Say which parent and exactly what you're adjusting.
 - **structural_mutation** — A significant architectural change to one top performer (new feature, changed data flow, swapped technique), with your assigned frame steering *which* piece to change and what to replace it with. `basedOnId` = that parent's ID.
 - **crossover_hybrid** — Combine elements of 2+ top performers. Set `basedOnId` to the primary parent (comma-separate multiple, e.g. `"gen02-001,gen02-004"`). Describe how the approaches merge.
@@ -136,7 +145,7 @@ Return ONLY a JSON array, nothing else.
 
 Gather the JSON arrays from all subagents.
 
-**Select the novel winners.** The three novel branches each returned a full slate, so you hold ~3× ideas for N novel slots. Pool them, drop near-duplicates within the pool, then keep the best N — judge by novelty (distance from the existing descriptions and from each other) and fit (does it plausibly attack the BRIEF's metric); prefer a diverse set over N variations of the pool's single best angle. Reassign the reserved novel IDs to the winners in order, ignoring the IDs the branches returned (novel ideas have no parent, so nothing else references them). Remember which branch each winner came from.
+**Select the novel winners.** The three novel branches each returned a full slate, so you hold ~3× ideas for N novel slots. If intents are assigned, select **per intent group**: pool the three branches' candidates for each intent's slots (and for FREE) and pick that group's best — never promote an idea across groups. Within each pool, drop near-duplicates, then keep the best — judge by novelty (distance from the existing descriptions and from each other) and fit (does it plausibly attack the BRIEF's metric); prefer a diverse set over N variations of the pool's single best angle. **Enforce intents honestly:** judge every intent-slot candidate against its intent's `rule` text and disqualify violators no matter how promising they look — the quota exists precisely because such ideas outcompete everything else at selection time. If a pool has no compliant candidate, leave those slots unfilled and say so in the final report; never backfill from another group. Verify each winner's description starts with its `[<INTENT NAME>] ` tag (add it if the branch forgot; FREE ideas carry no tag). Reassign the reserved novel IDs to the winners in order, keeping each winner on a slot of its own intent, ignoring the IDs the branches returned (novel ideas have no parent, so nothing else references them). Remember which branch each winner came from.
 
 Then drop any idea (all strategies) whose description is a near-duplicate of an existing description or of another new idea (simple judgment — same technique with trivial wording changes). Keep the IDs you reserved; don't invent new ones.
 

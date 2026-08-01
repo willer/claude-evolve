@@ -31,6 +31,7 @@ Commands:
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -255,6 +256,38 @@ def cmd_params(ws):
     })
 
 
+def _load_intent_rules(ws):
+    """Resolve configured novel-intent names to their rule text.
+
+    Each `novel_intent_<name>` config key needs a matching `### intent: <name>`
+    block in the workspace's intents file (config `intents_file`, default the
+    BRIEF). The harness stays domain-agnostic: it carries the rule text into
+    ideator prompts verbatim and never interprets it. A configured intent with
+    no definition is a hard error — a silently unconstrained slot would defeat
+    the quota while looking like it worked.
+    """
+    if not ws.novel_intents:
+        return {}
+    if not ws.intents_path.exists():
+        print(f"[ERROR] intents configured but intents file not found: {ws.intents_path}",
+              file=sys.stderr)
+        sys.exit(1)
+    text = ws.intents_path.read_text()
+    rules = {}
+    for name, count in ws.novel_intents.items():
+        m = re.search(
+            rf"^#{{2,4}}\s*intent:\s*{re.escape(name)}\s*$(.*?)(?=^#{{1,4}}\s|\Z)",
+            text, re.MULTILINE | re.DOTALL | re.IGNORECASE,
+        )
+        if not m or not m.group(1).strip():
+            print(f"[ERROR] intent '{name}' (novel_intent_{name}) has no "
+                  f"'### intent: {name}' definition in {ws.intents_path}",
+                  file=sys.stderr)
+            sys.exit(1)
+        rules[name] = {"count": count, "rule": m.group(1).strip()}
+    return rules
+
+
 def cmd_context(csv, ws, args):
     top = csv.get_top_performers(args.n)
     existing = csv.get_all_descriptions()
@@ -291,6 +324,7 @@ def cmd_context(csv, ws, args):
         "num_elites": ws.num_elites,
         "total_ideas": ws.total_ideas,
         "strategies": ws.strategies,
+        "novel_intents": _load_intent_rules(ws),
     })
 
 

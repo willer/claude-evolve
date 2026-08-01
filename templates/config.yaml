@@ -31,7 +31,21 @@ ideation_strategies:
   hill_climbing: 5          # Parameter tuning of top performers
   structural_mutation: 3    # Algorithmic changes to top performers
   crossover_hybrid: 4       # Combine successful approaches
-  
+
+  # Intent quotas for the novel_exploration slots (optional). Each
+  # novel_intent_<name> reserves that many novel slots for ideas satisfying the
+  # workspace-defined intent <name>; leftover novel slots are unconstrained.
+  # Every configured <name> MUST have a "### intent: <name>" section (its rule
+  # text) in the intents file — `intents_file` below, default the BRIEF —
+  # or ideation fails loud. The harness never interprets rule text; it only
+  # enforces the quota and injects the rules into ideator prompts.
+  # novel_intent_alpha: 1
+  # novel_intent_defense: 1
+
+# File holding "### intent: <name>" definitions (relative to this config).
+# Defaults to brief_file. Useful when several workspaces share one master brief.
+# intents_file: "../BRIEF-shared.md"
+
   # Number of top performers to use as parents
   num_elites: 3
 

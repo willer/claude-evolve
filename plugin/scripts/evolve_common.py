@@ -101,6 +101,8 @@ class Workspace:
     num_elites: int
     total_ideas: int
     strategies: dict
+    novel_intents: dict
+    intents_path: Path
     max_workers: int
     worker_max_candidates: int
     auto_ideate: bool
@@ -161,6 +163,26 @@ def load_workspace(working_dir: str = None, config_path: str = None) -> Workspac
     ideation = data.get("ideation_strategies", data.get("ideation", {})) or {}
     parallel = data.get("parallel", {}) or {}
 
+    # AIDEV-NOTE: novel-intent quota (2026-07-31). Reserves slices of the
+    # novel_exploration slots for named intents so a population can't drift into a
+    # monoculture of whatever the fitness function prices cheapest. The harness is
+    # DOMAIN-AGNOSTIC: intent names and counts come from `novel_intent_<name>` keys
+    # under ideation_strategies, and each name's meaning (the rule text injected
+    # into ideator prompts) must be defined in the workspace's intents file (an
+    # "## Ideation intents" section; `intents_file` key, default = the BRIEF).
+    # No configured intents -> no quota -> behavior unchanged.
+    novel_n = int(ideation.get("novel_exploration", 3))
+    novel_intents = {}
+    remaining = novel_n
+    for key, val in ideation.items():
+        if key.startswith("novel_intent_"):
+            name = key[len("novel_intent_"):]
+            count = max(0, min(int(val), remaining))
+            novel_intents[name] = count
+            remaining -= count
+
+    intents_rel = data.get("intents_file", ideation.get("intents_file", "")) or ""
+
     return Workspace(
         config_path=cfg,
         evolution_dir=base.resolve(),
@@ -176,6 +198,8 @@ def load_workspace(working_dir: str = None, config_path: str = None) -> Workspac
         cpu_limit_seconds=int(sandbox.get("cpu_limit_seconds", 0)),
         num_elites=int(ideation.get("num_elites", 3)),
         total_ideas=int(ideation.get("total_ideas", 15)),
+        novel_intents=novel_intents,
+        intents_path=resolve(intents_rel) if intents_rel else resolve(data.get("brief_file", "BRIEF.md")),
         strategies={
             "novel_exploration": int(ideation.get("novel_exploration", 3)),
             "hill_climbing": int(ideation.get("hill_climbing", 5)),
