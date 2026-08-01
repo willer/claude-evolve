@@ -50,6 +50,34 @@ so prefer its substance; don't just paraphrase your own. If the external tool
 errors or returns nothing usable, fall back to generating the ideas yourself —
 just return valid ideas either way.
 
+**These calls are SLOW — never wait on one synchronously.** The tool is being
+asked to read a whole BRIEF, a top-performer table, and a long list of existing
+descriptions, then think hard about all of it; reasoning models (kimi-k3 and
+`gpt-5.6-sol` at high effort especially) routinely burn many minutes and a large
+number of thinking tokens before emitting a single character. A foreground Bash
+call caps out at 300s, so wrapping the CLI in `timeout 280` — or any bare
+foreground invocation — kills a healthy run mid-thought and returns empty
+output. **An empty result from a `timeout`-wrapped call is a TIMEOUT, not a
+model failure, and must never be reported as "the tool returned nothing".**
+
+Do this instead:
+
+1. Write the prompt to a file (it can be 30KB+; keep it off the command line):
+   `Write` it to `<scratchpad>/ext_prompt.txt`.
+2. Launch the CLI with Bash `run_in_background: true`, no `timeout` wrapper,
+   redirecting both streams to a file:
+   `opencode run -m openrouter/moonshotai/kimi-k3 "$(cat <scratchpad>/ext_prompt.txt)" >/tmp/ext_out.txt 2>/tmp/ext_err.txt`
+3. Poll by `Read`ing the output file every so often, doing other useful work
+   (re-reading the BRIEF, drafting your own fallback ideas) between checks.
+4. Give it a genuinely long budget — **at least 15 minutes** — before concluding
+   it has failed. Only then fall back to your own ideas, and say in your summary
+   that the external tool timed out rather than that it errored.
+
+If the run does produce nothing, check `/tmp/ext_err.txt` and report what it
+actually said. Distinguish three cases honestly in your summary: the tool
+**succeeded** (used its ideas), **timed out** (fell back to your own), or
+**errored** (fell back, and quote the error).
+
 Return ONLY a JSON array of `{"id","basedOnId","description"}` objects, using
 the exact IDs you were given. Your final message is parsed as data, not read
 as prose — no preamble, no commentary, no markdown fences.

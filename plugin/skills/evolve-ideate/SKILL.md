@@ -103,6 +103,7 @@ For a branch whose `src` (from Step 2) is `codex`, `gemini`, `glm`, or `kimi`, a
 
 ```
 Source these ideas from the external tool `<codex|gemini|glm|kimi>`: build one prompt carrying the strategy, parents, BRIEF, existing descriptions, and the exact IDs, run it via Bash (codex: `codex exec -m gpt-5.6-sol -c model_reasoning_effort="high" "<prompt>"`; gemini: `agy --dangerously-skip-permissions -p "<prompt>"` (the Antigravity CLI); glm: `opencode run -m openrouter/z-ai/glm-5.2 "<prompt>"`; kimi: `opencode run -m openrouter/moonshotai/kimi-k3 "<prompt>"`), then return its ideas in the required schema (sanity-checked for strategy fit and novelty). Fall back to generating them yourself only if the tool errors.
+These calls are SLOW — the tool must read the whole BRIEF and idea history and think hard about all of it, which routinely takes MANY MINUTES and a large number of thinking tokens. Launch it with Bash `run_in_background: true` and poll its output file; NEVER wrap it in `timeout` and never block on it in the foreground (a foreground Bash call is killed at 300s and returns empty, which looks exactly like a model failure but is not). Allow at least 15 minutes before falling back, and report a timeout as a timeout, not as "the tool returned nothing".
 ```
 
 Branches whose `src` is `fable` get no extra source line — they generate as usual.
