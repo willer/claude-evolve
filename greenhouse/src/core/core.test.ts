@@ -13,6 +13,7 @@ import {
   parseCsv,
 } from './csv';
 import { resolveDevSourceDir } from './devRebuild';
+import { parseInferenceAll, productionTags } from './inferenceAll';
 import { TRADING_METRICS, resolveProfile } from './profile';
 import {
   SESSION_KINDS,
@@ -556,5 +557,135 @@ describe('resolveDevSourceDir', () => {
     const partial = (p: string) => p === `${SRC}/esbuild.mjs`; // missing package.sh + main.ts
     const exe = `${SRC}/release/mac-arm64/Evolve Greenhouse.app/Contents/MacOS/Evolve Greenhouse`;
     expect(resolveDevSourceDir(exe, partial)).toBeNull();
+  });
+});
+
+describe('parseInferenceAll', () => {
+  // Shapes taken verbatim from ~/GitHub/trading-strategies/inference-all.
+  const SOLO = `("ev-1d-soxl", "SOXL", "1d", ["--signal", "--signal-name=SOXL-MED", "--pin=gen823-001"]),`;
+  const BLEND = `    ("ev-1d-tqqq-high+ev-1d-htqqq", "TQQQ", "1d", ["--signal", "--signal-name=TQQQ-MIX",
+                                                   "--pin=ev-1d-htqqq:gen78-001",
+                                                   "--pin=ev-1d-tqqq-high:gen246-011"]),`;
+
+  it('reads a solo entry: one member, its signal name, its unqualified pin', () => {
+    const m = parseInferenceAll(SOLO);
+    expect(m.get('ev-1d-soxl')).toEqual({
+      signalName: 'SOXL-MED',
+      members: ['ev-1d-soxl'],
+      pin: 'gen823-001',
+    });
+  });
+
+  it('reads a MIXED entry: both members, each with its own workspace-qualified pin', () => {
+    const m = parseInferenceAll(BLEND);
+    expect(m.get('ev-1d-tqqq-high')).toEqual({
+      signalName: 'TQQQ-MIX',
+      members: ['ev-1d-tqqq-high', 'ev-1d-htqqq'],
+      pin: 'gen246-011',
+    });
+    expect(m.get('ev-1d-htqqq')).toEqual({
+      signalName: 'TQQQ-MIX',
+      members: ['ev-1d-tqqq-high', 'ev-1d-htqqq'],
+      pin: 'gen78-001',
+    });
+  });
+
+  it('leaves a blend member unpinned when only its partner is pinned', () => {
+    const m = parseInferenceAll(
+      `("a+b", "TQQQ", "1d", ["--signal", "--signal-name=MIX", "--pin=b:gen1-001"]),`,
+    );
+    expect(m.get('a')!.pin).toBeNull();
+    expect(m.get('b')!.pin).toBe('gen1-001');
+  });
+
+  it('applies an unqualified pin in a blend to every member', () => {
+    const m = parseInferenceAll(`("a+b", "X", "1d", ["--signal", "--pin=gen5-002"]),`);
+    expect(m.get('a')!.pin).toBe('gen5-002');
+    expect(m.get('b')!.pin).toBe('gen5-002');
+  });
+
+  it('records a live UNPINNED signal (production deploys the champion)', () => {
+    const m = parseInferenceAll(`("ev-1d-urnm", "URNM", "1d", ["--signal", "--signal-name=URNM-MED"]),`);
+    expect(m.get('ev-1d-urnm')).toEqual({ signalName: 'URNM-MED', members: ['ev-1d-urnm'], pin: null });
+  });
+
+  it('ignores commented-out signals — they are not live, hence not pinned', () => {
+    const m = parseInferenceAll(
+      `  # ("1d-qqq-inv", "QQQ", "1d", ["--signal", "--signal-name=QQQ-INV", "--pin=gen280-007"]),\n${SOLO}`,
+    );
+    expect(m.has('1d-qqq-inv')).toBe(false);
+    expect(m.get('ev-1d-soxl')!.pin).toBe('gen823-001');
+  });
+
+  it('ignores a --pin= mentioned in a trailing or preceding comment', () => {
+    const m = parseInferenceAll(
+      `    # Re-pin only after a gate clears; old pin was --pin=gen999-999.\n` +
+        `("ev-1d-tna", "TNA", "1d", ["--signal", "--signal-name=TNA-MED", "--pin=gen281-009"]),  # TEMP flush pin --pin=gen000-000\n`,
+    );
+    expect(m.get('ev-1d-tna')!.pin).toBe('gen281-009');
+  });
+
+  it('parses every live entry of a multi-entry file, blends and solos alike', () => {
+    const m = parseInferenceAll([SOLO, BLEND, `("1d-gld-inv", "GLD", "1d", ["--signal", "--pin=gen42-005"]),`].join('\n'));
+    expect([...m.keys()].sort()).toEqual(
+      ['1d-gld-inv', 'ev-1d-htqqq', 'ev-1d-soxl', 'ev-1d-tqqq-high'],
+    );
+  });
+
+  it('returns an empty map for a file with no signal tuples', () => {
+    expect(parseInferenceAll('#!/usr/bin/env python\nimport os\n').size).toBe(0);
+  });
+});
+
+describe('productionTags', () => {
+  const solo = { signalName: 'SOXL-MED', members: ['ev-1d-soxl'], pin: 'gen823-001' };
+  const blend = {
+    signalName: 'TQQQ-MIX',
+    members: ['ev-1d-tqqq-high', 'ev-1d-htqqq'],
+    pin: 'gen246-011',
+  };
+
+  it('shows nothing for a workspace that is not live in inference-all', () => {
+    expect(productionTags('ev-1d-boil', null, 'gen1-001')).toEqual([]);
+  });
+
+  it('marks a solo pin that matches the leader as deployed', () => {
+    const t = productionTags('ev-1d-soxl', solo, 'gen823-001');
+    expect(t.map((x) => x.cls)).toEqual(['winner']);
+    expect(t[0].text).toBe('\u2713 deployed');
+  });
+
+  it('warns when a solo pin is NOT the leader, naming the pinned algo', () => {
+    const t = productionTags('ev-1d-soxl', solo, 'gen868-004');
+    expect(t.map((x) => x.cls)).toEqual(['prev']);
+    expect(t[0].text).toContain('gen823-001');
+  });
+
+  it('flags blend membership FIRST and names the partner leg', () => {
+    const t = productionTags('ev-1d-tqqq-high', blend, 'gen302-016');
+    expect(t.map((x) => x.cls)).toEqual(['mix', 'prev']);
+    expect(t[0].text).toContain('TQQQ-MIX');
+    expect(t[0].title).toContain('ev-1d-htqqq');
+    expect(t[0].title).not.toContain('ev-1d-tqqq-high,'); // never lists itself as a partner
+    expect(t[1].text).toContain('gen246-011');
+  });
+
+  it('says a matching blend leg is deployed AS a leg, not as the whole signal', () => {
+    const t = productionTags('ev-1d-tqqq-high', blend, 'gen246-011');
+    expect(t.map((x) => x.cls)).toEqual(['mix', 'winner']);
+    expect(t[1].text).toContain('TQQQ-MIX leg');
+  });
+
+  it('shows blend membership alone when that leg is unpinned (champion deploys)', () => {
+    const t = productionTags('ev-1d-htqqq', { ...blend, pin: null }, 'gen146-007');
+    expect(t.map((x) => x.cls)).toEqual(['mix']);
+  });
+
+  it('shows no pill for a live solo workspace with no pin — the champion is what trades', () => {
+    expect(productionTags('ev-1d-urnm', { signalName: 'URNM-MED', members: ['ev-1d-urnm'], pin: null }, 'g1-1')).toEqual([]);
+  });
+
+  it('does not call a pin deployed when there is no leader yet', () => {
+    expect(productionTags('ev-1d-soxl', solo, null)[0].cls).toBe('prev');
   });
 });

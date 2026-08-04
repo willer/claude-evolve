@@ -16,3 +16,4 @@
   > logging `session-tab shell={"active":"shell-pane","terms":0}` →
   > `back={"active":"evolution-pane","terms":1}` — verified live, along with
   > `focus-after-poll=true` surviving the round trip.
+- [x] change Greenhouse to understand the new method of pinning, in cases where an algo is being used by inference-all mixed with another one. there's a different pinning there, which it doesn't show.

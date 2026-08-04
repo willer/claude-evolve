@@ -6,6 +6,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { computeStats, emptyStats } from '../core/csv';
+import { parseInferenceAll } from '../core/inferenceAll';
 import { resolveProfile } from '../core/profile';
 import {
   TOOLS,
@@ -15,7 +16,15 @@ import {
   shellSessionName,
   toolSessionName,
 } from '../core/state';
-import type { Activity, Prefs, SessionState, ToolState, WorkspaceRow, WorkspaceStats } from '../core/types';
+import type {
+  Activity,
+  Prefs,
+  ProductionSignal,
+  SessionState,
+  ToolState,
+  WorkspaceRow,
+  WorkspaceStats,
+} from '../core/types';
 import type { SessionHost } from './SessionHost';
 
 interface CacheEntry {
@@ -23,15 +32,13 @@ interface CacheEntry {
   stats: WorkspaceStats;
 }
 
-// inference-all pin map, cached by (path, mtime). Every workspace under a root shares one
+// inference-all signal map, cached by (path, mtime). Every workspace under a root shares one
 // inference-all, so it is parsed at most once per change, not once per workspace per poll.
-const pinCache = new Map<string, { mtimeMs: number; pins: Map<string, string> }>();
+const signalCache = new Map<string, { mtimeMs: number; signals: Map<string, ProductionSignal> }>();
 
-/** Parse `<root>/inference-all` and return the production `--pin=<id>` for a workspace, or
- *  null. inference-all declares each live signal as a tuple
- *  `("<dir>", "<sym>", "<tf>", [..., "--pin=<id>"])`; a leading `#` comments a signal OUT,
- *  so those lines are ignored (that signal isn't live, hence not pinned). */
-function readProductionPin(root: string, wsName: string): string | null {
+/** The production signal `<root>/inference-all` declares for a workspace (pin + blend
+ *  membership), or null when it declares none. Parsing is pure — see core/inferenceAll.ts. */
+function readProductionSignal(root: string, wsName: string): ProductionSignal | null {
   const file = path.join(root, 'inference-all');
   let mtimeMs: number;
   try {
@@ -39,25 +46,18 @@ function readProductionPin(root: string, wsName: string): string | null {
   } catch {
     return null; // no inference-all in this root
   }
-  let entry = pinCache.get(file);
+  let entry = signalCache.get(file);
   if (!entry || entry.mtimeMs !== mtimeMs) {
-    const pins = new Map<string, string>();
+    let signals: Map<string, ProductionSignal>;
     try {
-      for (const raw of fs.readFileSync(file, 'utf8').split('\n')) {
-        const line = raw.trim();
-        if (!line || line.startsWith('#')) continue; // blanks + commented-out signals
-        const dir = line.match(/^\(\s*"([^"]+)"/);
-        if (!dir) continue;
-        const pin = line.match(/--pin=([A-Za-z0-9._-]+)/);
-        if (pin) pins.set(dir[1], pin[1]);
-      }
+      signals = parseInferenceAll(fs.readFileSync(file, 'utf8'));
     } catch {
       return null;
     }
-    entry = { mtimeMs, pins };
-    pinCache.set(file, entry);
+    entry = { mtimeMs, signals };
+    signalCache.set(file, entry);
   }
-  return entry.pins.get(wsName) ?? null;
+  return entry.signals.get(wsName) ?? null;
 }
 
 export class Poller {
@@ -204,10 +204,11 @@ export class Poller {
         const hasEquityDir = fs.existsSync(path.join(ws.path, 'equity'));
         const profile = resolveProfile(configText, { hasEquityDir, metricColumns: stats.metricColumns });
 
-        // Production pin: the parent-root `inference-all` may pin this workspace's live
-        // signal to an exact algo id (`--pin=<id>`) instead of the champion. Read it so the
-        // detail view can flag when the leader shown here is NOT what production trades.
-        const productionPin = readProductionPin(path.dirname(ws.path), ws.name);
+        // Production signal: the parent-root `inference-all` says whether this workspace is
+        // live, whether it is BLENDED with another workspace into one webhook, and which algo
+        // production pins it to. Read it so the detail view can flag when the leader shown
+        // here is NOT what production trades.
+        const production = readProductionSignal(path.dirname(ws.path), ws.name);
 
         rows.push({
           name: ws.name,
@@ -219,7 +220,7 @@ export class Poller {
           shell,
           starred: starred.has(ws.name),
           profile,
-          productionPin,
+          production,
         });
       }
 

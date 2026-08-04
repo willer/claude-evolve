@@ -155,4 +155,12 @@ viewer (drag/shift-wheel pan, wheel/± zoom, reset) that re-slices the series so
 the Y axis autoscales and the return/CAGR/maxDD/Sharpe badge reflect the visible
 window; every other chart still uses the static enlarge. Unverified (need a
 human with a real wheel + live claude session): that claude now scrolls on wheel.
+The detail Leader heading carries PRODUCTION pills read from the parent root's
+inference-all (core/inferenceAll.ts, pure + tested): a blend pill when this
+workspace is only one leg of a MIXED signal (`("a+b", …)` — inference.py
+averages the legs into ONE webhook, each leg pinned separately via
+`--pin=<workspace>:<algo>`), then the pin verdict (deployed / not deployed —
+prod pins <id>). The parser is brace-balanced (blend tuples span lines) and
+quote-aware (a `--pin=` inside a comment is not in force); its grammar is a
+LOCKSTEP contract with trading-strategies/inference-all. See ../docs/TRUTH.md.
 Open: equity/ artifact retention (claude-evolve side).

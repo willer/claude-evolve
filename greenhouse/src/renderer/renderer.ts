@@ -8,6 +8,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { PERIOD_LABELS, buildBacktestTable } from '../core/backtests';
 import type { BacktestAlgo, BacktestRow } from '../core/backtests';
 import { FAILING_FAILS, PLATEAU_GENS, classifyHealth } from '../core/csv';
+import { productionTags } from '../core/inferenceAll';
 import {
   SESSION_KINDS,
   adhocSessionName,
@@ -1622,16 +1623,14 @@ function renderDetail(): void {
        </div>`
     : '';
 
-  // Production pin badge: inference-all can pin this workspace's LIVE signal to an exact
-  // algo (`--pin=`) instead of the champion. The Leader/Backtest panels always show the R&D
-  // champion, so flag whether that champion is actually what production trades. Pins are a
-  // production-trading decision and never change what R&D resolves.
-  const pin = r.productionPin;
-  const pinTag = pin
-    ? pin.toLowerCase() === (leader?.id ?? '').toLowerCase()
-      ? `<span class="tag tag-winner" title="inference-all pins production to this exact algo — the leader shown here is what trades live">✓ deployed</span>`
-      : `<span class="tag tag-prev" title="inference-all pins production to ${esc(pin)}, NOT this leader. The leader is the R&D champion; production deliberately trades the pinned algo.">⚠ not deployed — prod pins ${esc(pin)}</span>`
-    : '';
+  // Production badges: inference-all says whether this workspace is live, whether it is
+  // BLENDED with another workspace into one averaged webhook (each leg pinned separately by
+  // `--pin=<workspace>:<algo>`), and which algo it pins. The Leader/Backtest panels always
+  // show the R&D champion, so flag whether that champion is actually what production trades.
+  // Pins are a production-trading decision and never change what R&D resolves.
+  const pinTag = productionTags(r.name, r.production, leaderId)
+    .map((t) => `<span class="tag tag-${t.cls}" title="${esc(t.title)}">${esc(t.text)}</span>`)
+    .join('');
 
   // Start/stop for both sessions live in the right-column panels (below); the
   // bar just identifies the workspace and shows the evolution badge. Badge order

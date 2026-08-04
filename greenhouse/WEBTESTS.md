@@ -100,6 +100,14 @@ to verify the NAV chart deterministically.
       B&H, computed in workspace:benchmark from data/raw/<SYM>_1d_*.csv over each
       period window. Absent (no extra columns) when the workspace has no
       resolvable symbol / no price files
+- [ ] Detail Leader heading production pills (from the parent root's
+      `inference-all`): a magenta "blended into <SIGNAL>" pill when this
+      workspace is one leg of a MIXED signal (`("a+b", …)` — the tooltip names
+      the partner legs), followed by the pin verdict — green "deployed" when
+      the pinned algo IS the leader shown, yellow "not deployed — prod pins
+      <id>" when it is not. No pill at all when the workspace is unpinned or
+      absent from inference-all. Verify with
+      `EG_ROOTS=<root with an inference-all>`
 - [ ] Fluid charts: detail + backtest NAV/sparkline/year charts fill the column
       width (no fixed ~560/720px box) and reflow on window resize
 - [ ] Click-to-enlarge (any chart-zoom chart, detail-zoom.png): the overlay

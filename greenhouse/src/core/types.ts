@@ -83,11 +83,24 @@ export interface WorkspaceRow {
   starred: boolean;
   /** Display profile (metric labels/ordering + trading-vs-generic kind). */
   profile: ResolvedProfile;
-  /** Algo id this workspace's PRODUCTION signal pins via inference-all `--pin=` (e.g.
-   *  gen823-001), or null if production deploys the best-by-performance champion. A pin is
-   *  a live-trading decision, NOT what R&D shows — surfaced here only to flag when the
-   *  leader shown on the dashboard is not what production actually trades. */
-  productionPin: string | null;
+  /** The inference-all signal this workspace feeds in production, or null when it feeds
+   *  none (not live, or commented out). */
+  production: ProductionSignal | null;
+}
+
+/** One workspace's place in a LIVE inference-all signal. A signal can be fed by ONE
+ *  workspace or by several BLENDED together (`("a+b", …)` — inference.py averages the raw
+ *  signals into a single webhook), and in a blend each leg carries its own
+ *  workspace-qualified pin (`--pin=<workspace>:<algo>`). */
+export interface ProductionSignal {
+  /** `--signal-name=` of the entry (e.g. SOXL-MED, TQQQ-MIX), or null if unnamed. */
+  signalName: string | null;
+  /** Every workspace in the entry, in declaration order. Length > 1 means a blend. */
+  members: string[];
+  /** Algo id production pins THIS workspace to, or null when it deploys the
+   *  best-by-performance champion. A pin is a live-trading decision, NOT what R&D shows —
+   *  surfaced only to flag when the leader on the dashboard is not what production trades. */
+  pin: string | null;
 }
 
 /** Overall workspace health: error (CSV unreadable) > failing (>3 failures
