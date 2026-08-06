@@ -13,6 +13,7 @@ import {
   parseCsv,
 } from './csv';
 import { resolveDevSourceDir } from './devRebuild';
+import { chartFracs, genFrac, genTicks, sharedGenDomain } from './genAxis';
 import { parseInferenceAll, productionTags } from './inferenceAll';
 import { TRADING_METRICS, resolveProfile } from './profile';
 import {
@@ -117,6 +118,39 @@ describe('computeStats', () => {
       row('gen02-001', '2.0', 'complete'),
     ].join('\n');
     expect(computeStats(text).sparkline).toEqual([1.0, 2.0, 3.0]);
+  });
+
+  it('picks a yearRow from year data alone, so unscored gens still plot', () => {
+    // gen02 was never walk-forward scored — no performance, status skipped — but a cheap
+    // single-window backtest filled return_2025. It must still back a year-chart point,
+    // otherwise archived generations are unplottable without a full 15-window re-score.
+    const text = [
+      HEADER,
+      row('gen01-001', '1.0', 'complete', ['', '', '', '0.11']),
+      row('gen02-001', '', 'skipped', ['', '', '', '0.22']),
+    ].join('\n');
+    const s = computeStats(text);
+    const g2 = s.generations.find((g) => g.gen === 2);
+    expect(g2?.best).toBeNull(); // no score → absent from the sparkline
+    expect(g2?.yearRow?.id).toBe('gen02-001'); // but present on the year chart
+    expect(s.sparkline).toEqual([1.0]);
+  });
+
+  it('prefers the champion as yearRow when it carries year data', () => {
+    const text = [
+      HEADER,
+      row('gen01-001', '1.0', 'complete', ['', '', '', '0.11']),
+      row('gen01-002', '9.0', 'complete', ['', '', '', '0.99']),
+    ].join('\n');
+    const g1 = computeStats(text).generations.find((g) => g.gen === 1);
+    // gen01-001 is seen first, but the champion must win — otherwise the year chart
+    // would describe a different algorithm than the score chart above it.
+    expect(g1?.yearRow?.id).toBe('gen01-002');
+  });
+
+  it('leaves yearRow null when a generation has no year data at all', () => {
+    const text = [HEADER, row('gen01-001', '1.0', 'complete')].join('\n');
+    expect(computeStats(text).generations[0]?.yearRow).toBeNull();
   });
 
   it('counts statuses and computes recent success rate excluding the latest gen', () => {
@@ -687,5 +721,85 @@ describe('productionTags', () => {
 
   it('does not call a pin deployed when there is no leader yet', () => {
     expect(productionTags('ev-1d-soxl', solo, null)[0].cls).toBe('prev');
+  });
+});
+
+describe('sharedGenDomain / genFrac / genTicks', () => {
+  it('spans min(min) and max(max) across both charts lists', () => {
+    // Score sparkline covers gens 820-892; the year chart also carries an old
+    // backfilled gen 3 — the shared axis must cover 3..892, not one list's range.
+    expect(sharedGenDomain([[820, 850, 892], [3, 850]])).toEqual({ min: 3, max: 892 });
+  });
+
+  it('ignores empty lists and reports null when nothing is plottable', () => {
+    expect(sharedGenDomain([[], [5, 7]])).toEqual({ min: 5, max: 7 });
+    expect(sharedGenDomain([[], []])).toBeNull();
+  });
+
+  it('places the same generation at the same fraction for both charts', () => {
+    const ax = sharedGenDomain([[0, 100], [50, 100]])!;
+    expect(genFrac(0, ax)).toBe(0);
+    expect(genFrac(50, ax)).toBeCloseTo(0.5);
+    expect(genFrac(100, ax)).toBe(1);
+  });
+
+  it('gives two charts with different coverage the same position for a shared gen', () => {
+    // The defect this replaced: positions came from ARRAY INDEX, so gen 850 landed at
+    // 1/2 of the width in the 3-point score chart and at 1/1 in the 2-point year chart.
+    const spark = [820, 850, 892];
+    const year = [3, 850];
+    const ax = sharedGenDomain([spark, year])!;
+    const sf = chartFracs(spark, ax);
+    const yf = chartFracs(year, ax);
+    expect(sf[1]).toBeCloseTo(yf[1]);
+    expect(yf[0]).toBe(0); // the year chart, not the score chart, owns the left edge
+    expect(sf[2]).toBe(1);
+  });
+
+  it('collapses a one-generation domain instead of dividing by zero', () => {
+    expect(genFrac(7, { min: 7, max: 7 })).toBe(0);
+    expect(genTicks({ min: 7, max: 7 }, 5)).toEqual([[7, 0]]);
+  });
+
+  it('labels whole generations evenly across the domain, endpoints included', () => {
+    expect(genTicks({ min: 0, max: 100 }, 3)).toEqual([
+      [0, 0],
+      [50, 0.5],
+      [100, 1],
+    ]);
+  });
+});
+
+describe('computeStats yearRow', () => {
+  it('plots the generation champion when it carries year data', () => {
+    const csv = [
+      HEADER,
+      row('gen05-001', '1.0', 'complete', ['2', '0.1', '0.2', '0.30']),
+      row('gen05-002', '2.0', 'complete', ['3', '0.2', '0.2', '0.44']),
+      '',
+    ].join('\n');
+    const g = computeStats(csv).generations.find((x) => x.gen === 5)!;
+    expect(g.best!.id).toBe('gen05-002');
+    expect(g.yearRow!.id).toBe('gen05-002');
+  });
+
+  it('plots an unscored generation from any row that has year data', () => {
+    // Cheap single-window backtests fill return_YYYY without a walk-forward score,
+    // so this generation has no `best` but still belongs on the year chart.
+    const csv = [
+      HEADER,
+      row('gen06-001', '', 'pending', ['', '', '', '']),
+      row('gen06-002', '', 'pending', ['', '', '', '0.12']),
+      row('gen06-003', '', 'pending', ['', '', '', '0.99']),
+      '',
+    ].join('\n');
+    const g = computeStats(csv).generations.find((x) => x.gen === 6)!;
+    expect(g.best).toBeNull();
+    expect(g.yearRow!.id).toBe('gen06-002'); // earliest id with year data wins
+  });
+
+  it('leaves yearRow null when no row in the generation has year data', () => {
+    const csv = [HEADER, row('gen07-001', '1.0', 'complete', ['2', '0.1', '0.2', '']), ''].join('\n');
+    expect(computeStats(csv).generations.find((x) => x.gen === 7)!.yearRow).toBeNull();
   });
 });

@@ -82,6 +82,14 @@ to verify the NAV chart deterministically.
 - [ ] Detail: generation table latest-first, leader row highlighted green;
       leader returns-by-year bars; year-returns-by-generation chart with
       legend when ≥2 gens have year data
+- [ ] Shared generation X axis: "Best score by generation" and "Year returns by
+      generation" position points by real generation number over ONE domain
+      (min of the two mins → max of the two maxes), so a vertical line through
+      the two stacked panels is the same generation and each enlarged view
+      prints the SAME gen ticks. Verify with a synthetic root whose two charts
+      have different coverage (e.g. scores only on late gens, return_YYYY only
+      on early ones): the year lines must stop mid-panel, not be squashed to an
+      edge, and the score line must start mid-panel
 - [ ] NAV chart (detail + peek, needs equity/<leader-id>.csv): NAV line with
       year gridlines/labels, red underwater drawdown pane, +total%/maxDD
       summary; honest "no NAV artifact" note when the file is absent

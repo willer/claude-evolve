@@ -162,5 +162,14 @@ averages the legs into ONE webhook, each leg pinned separately via
 `--pin=<workspace>:<algo>`), then the pin verdict (deployed / not deployed —
 prod pins <id>). The parser is brace-balanced (blend tuples span lines) and
 quote-aware (a `--pin=` inside a comment is not in force); its grammar is a
-LOCKSTEP contract with trading-strategies/inference-all. See ../docs/TRUTH.md.
+LOCKSTEP contract with trading-strategies/inference-all. The two per-generation
+detail charts (best score, year returns) now share ONE x domain —
+`core/genAxis.ts` (pure + tested) gives min(min)/max(max) of both charts'
+generation coverage and maps each chart's gens to 0..1 positions on it, so a
+vertical line through the stacked panels is the same generation and both
+enlarged views print the same gen ticks; the year chart plots
+`GenStats.yearRow` (chosen by HAVING return_YYYY, champion preferred) instead
+of `best`, so a generation with year data but no walk-forward score still
+appears. The small list/grid sparklines pass no axis and keep index positions.
+See ../docs/TRUTH.md.
 Open: equity/ artifact retention (claude-evolve side).

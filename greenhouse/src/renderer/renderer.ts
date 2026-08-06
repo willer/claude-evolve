@@ -8,6 +8,8 @@ import { FitAddon } from '@xterm/addon-fit';
 import { PERIOD_LABELS, buildBacktestTable } from '../core/backtests';
 import type { BacktestAlgo, BacktestRow } from '../core/backtests';
 import { FAILING_FAILS, PLATEAU_GENS, classifyHealth } from '../core/csv';
+import { chartFracs, genTicks, sharedGenDomain } from '../core/genAxis';
+import type { GenAxis } from '../core/genAxis';
 import { productionTags } from '../core/inferenceAll';
 import {
   SESSION_KINDS,
@@ -251,30 +253,39 @@ function yAxisGutter(
   return marks.map((v) => gLine(yOf(v)) + yLab(yOf(v), axisNum(v))).join('');
 }
 
-// Bottom (generation) axis for the spark/multiline charts when enlarged: an
-// axis baseline plus a handful of evenly-spaced "gen N" labels across the plot
-// width. gens[i] is the generation number at plot position i (aligned 1:1 with
-// the series). Endpoints anchor inward so they don't clip the chart edges.
+// A chart's points placed on the SHARED generation domain: `fracs[i]` is point i's
+// 0..1 position across the plot width (from core/genAxis), `ax` is the domain both
+// per-generation charts draw on so a given generation sits at the same x in each.
+// Absent ⇒ the chart falls back to index positioning (the tiny list/grid sparklines,
+// which have no axis and no sibling to line up with).
+type ChartX = { fracs: number[]; ax: GenAxis };
+
+/** Shared X positioning for the two per-generation charts: real generation numbers over
+ *  min(min)/max(max) of both charts' coverage. */
+function chartX(gens: number[], ax: GenAxis): ChartX {
+  return { fracs: chartFracs(gens, ax), ax };
+}
+
+// Bottom (generation) axis for the spark/multiline charts when enlarged: an axis
+// baseline plus a handful of evenly-spaced "gen N" labels across the plot width. Labels
+// come from the shared DOMAIN, not from the point list, so both charts print identical
+// ticks even when they plot different generations. Endpoints anchor inward so they don't
+// clip the chart edges.
 function xAxisGen(
   w: number,
   x0: number,
   baseY: number,
   labelY: number,
-  xOf: (i: number) => number,
-  gens: number[],
+  xOfFrac: (f: number) => number,
+  ax: GenAxis,
 ): string {
-  const n = gens.length;
-  if (n < 2) return '';
-  const maxLabels = Math.max(2, Math.floor((w - 2 - x0) / 44));
-  const step = Math.max(1, Math.ceil((n - 1) / (maxLabels - 1)));
-  const idxs: number[] = [];
-  for (let i = 0; i < n; i += step) idxs.push(i);
-  if (idxs[idxs.length - 1] !== n - 1) idxs.push(n - 1);
+  const ticks = genTicks(ax, Math.max(2, Math.floor((w - 2 - x0) / 44)));
+  if (ticks.length < 2) return '';
   let out = `<line x1="${x0}" y1="${baseY.toFixed(1)}" x2="${(w - 2).toFixed(1)}" y2="${baseY.toFixed(1)}" style="stroke: var(--border)"/>`;
-  for (const i of idxs) {
-    const anchor = i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle';
-    out += `<text x="${xOf(i).toFixed(1)}" y="${labelY}" style="fill: var(--dim); ${HALO}" font-size="9" text-anchor="${anchor}">${gens[i]}</text>`;
-  }
+  ticks.forEach(([gen, f], i) => {
+    const anchor = i === 0 ? 'start' : i === ticks.length - 1 ? 'end' : 'middle';
+    out += `<text x="${xOfFrac(f).toFixed(1)}" y="${labelY}" style="fill: var(--dim); ${HALO}" font-size="9" text-anchor="${anchor}">${gen}</text>`;
+  });
   return out;
 }
 
@@ -284,7 +295,7 @@ function sparklineSvg(
   h: number,
   color = 'var(--green)',
   axes = false,
-  xLabels?: number[],
+  xa?: ChartX,
 ): string {
   if (values.length < 2) {
     return `<svg class="spark" width="${w}" height="${h}"><line x1="0" y1="${h / 2}" x2="${w}" y2="${h / 2}" style="stroke: var(--border)" stroke-dasharray="3,3"/></svg>`;
@@ -296,13 +307,14 @@ function sparklineSvg(
   const bottomPad = axes ? 16 : 0;
   const x0 = leftPad + 2;
   const plotW = w - 4 - leftPad;
-  const x = (i: number) => x0 + (i / (values.length - 1)) * plotW;
+  const xf = (f: number) => x0 + f * plotW;
+  const x = (i: number) => (xa ? xf(xa.fracs[i] ?? 0) : x0 + (i / (values.length - 1)) * plotW);
   const y = (v: number) => h - 3 - bottomPad - ((v - min) / span) * (h - 6 - bottomPad);
   const pts = values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`);
   const last = pts[pts.length - 1].split(',');
   const axisG = axes
     ? yAxisGutter(w, leftPad, x0, y, max === min ? [max] : [max, min]) +
-      (xLabels ? xAxisGen(w, x0, h - 3 - bottomPad, h - 4, x, xLabels) : '')
+      (xa ? xAxisGen(w, x0, h - 3 - bottomPad, h - 4, xf, xa.ax) : '')
     : '';
   return (
     `<svg class="spark" width="${w}" height="${h}">` +
@@ -322,7 +334,7 @@ interface Series {
 }
 
 /** Multi-line chart over generation positions; series may have gaps (nulls). */
-function multiLineSvg(series: Series[], w: number, h: number, axes = false, xLabels?: number[]): string {
+function multiLineSvg(series: Series[], w: number, h: number, axes = false, xa?: ChartX): string {
   const all = series.flatMap((s) => s.values.filter((v): v is number => v !== null));
   const n = Math.max(...series.map((s) => s.values.length));
   if (all.length < 2 || n < 2) return '';
@@ -333,12 +345,13 @@ function multiLineSvg(series: Series[], w: number, h: number, axes = false, xLab
   const bottomPad = axes ? 16 : 0;
   const x0 = leftPad + 2;
   const plotW = w - 4 - leftPad;
-  const x = (i: number) => x0 + (i / (n - 1)) * plotW;
+  const xf = (f: number) => x0 + f * plotW;
+  const x = (i: number) => (xa ? xf(xa.fracs[i] ?? 0) : x0 + (i / (n - 1)) * plotW);
   const y = (v: number) => h - 3 - bottomPad - ((v - min) / span) * (h - 6 - bottomPad);
   const zero = y(0);
   let out = `<svg class="spark" width="${w}" height="${h}">`;
   if (axes) out += yAxisGutter(w, leftPad, x0, y, [max, min].filter((v) => v !== 0));
-  if (axes && xLabels) out += xAxisGen(w, x0, h - 3 - bottomPad, h - 4, x, xLabels);
+  if (axes && xa) out += xAxisGen(w, x0, h - 3 - bottomPad, h - 4, xf, xa.ax);
   out += `<line x1="${axes ? x0 : 0}" y1="${zero.toFixed(1)}" x2="${axes ? (w - 2).toFixed(1) : w}" y2="${zero.toFixed(1)}" style="stroke: var(--border)" stroke-dasharray="3,3"/>`;
   if (axes)
     out += `<text x="${leftPad - 4}" y="${(zero + 3).toFixed(1)}" style="fill: var(--dim); ${HALO}" font-size="9" text-anchor="end">0</text>`;
@@ -616,12 +629,23 @@ function navByPeriodPanel(name: string, cw: number, tag: string): string {
     </div>`;
 }
 
-/** Best-of-generation return_YYYY series, one per year column in the CSV. */
+/** Best-of-generation return_YYYY series, one per year column in the CSV.
+ *
+ * Skips generations with no completed candidate, matching the sparkline in
+ * csv.ts. Previously this spanned EVERY generation and emitted null for the
+ * empty ones, which is why a board that has scored 73 of 892 generations drew
+ * its year lines squashed into the right-hand 8% of the panel while the score
+ * sparkline beside it — same 73 points, empty gens dropped — appeared to span
+ * the full history. Same coverage, two different x-axes, and the mismatch read
+ * as "the year data is missing" when it was only unreadable. Both panels now
+ * plot scored generations in order; `yearGens` is filtered in step so the
+ * enlarged view still labels each point with its real generation number. */
 function yearSeries(r: WorkspaceRow): Series[] {
   const years = r.stats.metricColumns.filter((k) => /^return_\d{4}$/.test(k)).sort();
+  const withYears = r.stats.generations.filter((g) => g.yearRow !== null);
   return years.map((col, i) => ({
     name: col.replace('return_', ''),
-    values: r.stats.generations.map((g) => g.best?.metrics[col] ?? null),
+    values: withYears.map((g) => g.yearRow?.metrics[col] ?? null),
     color: SERIES_COLORS[i % SERIES_COLORS.length],
   }));
 }
@@ -1586,11 +1610,19 @@ function renderDetail(): void {
   const h = healthOf(r);
   const leader = s.leader;
   const years = yearSeries(r);
-  // Generation numbers behind each chart's X positions, so the enlarged view
-  // labels a real "gen N" axis. sparkline drops gens with no best (matching
-  // csv.ts); yearSeries spans every generation (best?.metric ?? null).
+  // Generation numbers behind each chart's X positions. Each chart drops the generations
+  // IT cannot plot, so the two lists differ whenever a generation has year data but no
+  // walk-forward score (cheap single-window backfill) or the reverse — each list must stay
+  // filtered in step with its own series. They then share ONE x domain (min of the two
+  // mins, max of the two maxes) and position points by real generation number, so a
+  // vertical line through the two stacked panels is the same generation in both and the
+  // enlarged views print identical "gen N" ticks. Index positioning could not do that: it
+  // stretched each chart's own subset over the full width, which is why a board with year
+  // data on only its recent generations drew those lines crushed against one edge while
+  // the score chart beside it looked like it spanned the whole history.
   const sparkGens = s.generations.filter((g) => g.best !== null).map((g) => g.gen);
-  const yearGens = s.generations.map((g) => g.gen);
+  const yearGens = s.generations.filter((g) => g.yearRow !== null).map((g) => g.gen);
+  const genAx = sharedGenDomain([sparkGens, yearGens]);
   // Enough data to draw? Mirrors multiLineSvg's own emptiness guard so we can
   // decide whether to show the panel without rendering a throwaway SVG.
   const yearVals = years.flatMap((sr) => sr.values.filter((v): v is number => v !== null));
@@ -1668,13 +1700,13 @@ function renderDetail(): void {
     }
     <div class="panel">
       <h3>Best score by generation</h3>
-      ${zoomable('spark-gen', (w, ht, zoom) => sparklineSvg(s.sparkline, w, ht, HEALTH_COLOR[h.level], zoom, sparkGens), cw, 60)}
+      ${zoomable('spark-gen', (w, ht, zoom) => sparklineSvg(s.sparkline, w, ht, HEALTH_COLOR[h.level], zoom, genAx ? chartX(sparkGens, genAx) : undefined), cw, 60)}
     </div>
     ${
       hasYearChart
         ? `<div class="panel">
              <h3>Year returns by generation (best of gen)</h3>
-             ${zoomable('year-gen', (w, ht, zoom) => multiLineSvg(years, w, ht, zoom, yearGens), cw, 80)}
+             ${zoomable('year-gen', (w, ht, zoom) => multiLineSvg(years, w, ht, zoom, genAx ? chartX(yearGens, genAx) : undefined), cw, 80)}
              <div class="legend">${years
                .map((y) => `<span><span class="sw" style="background:${y.color}"></span>${esc(y.name)}</span>`)
                .join('')}</div>

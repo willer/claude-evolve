@@ -47,3 +47,40 @@ gen246-011), and visually against a synthetic root through the `EG_SHOT` harness
 **Lockstep contract:** the tuple/flag grammar is owned by trading-strategies. If inference-all
 grows a new pin or blend syntax, `core/inferenceAll.ts` must move with it or Greenhouse
 silently reports a stale production picture.
+
+## Greenhouse: the two per-generation charts share one X axis
+
+The detail view stacks "Best score by generation" (sparkline) and "Year returns by
+generation" (multi-line). Both read "by generation", so a reader compares them
+left-to-right — but each can only plot the generations it has data for, and those sets
+differ:
+
+- a generation with no completed candidate has no score, so it is absent from the sparkline;
+- a generation whose rows carry `return_YYYY` but never got a walk-forward score (cheap
+  single-window backfill) has year points but no score point.
+
+Both charts used to position points by ARRAY INDEX, which stretched each chart's own subset
+across the same pixel width. Gen 850 then sat at 40% of one panel and 92% of the other, and
+on a board with year data only on recent generations the year lines were crushed against one
+edge — which read as "the year data is missing" when it was only unreadable.
+
+Now positions come from real generation numbers on ONE domain: `core/genAxis.ts` (pure,
+unit-tested) computes `sharedGenDomain([sparkGens, yearGens])` = min of the two mins, max of
+the two maxes, and `chartFracs` maps each chart's generations to 0..1 positions on it. The
+renderer passes `ChartX = {fracs, ax}` to `sparklineSvg` / `multiLineSvg`; both call the same
+`xAxisGen`, whose ticks come from `genTicks(ax, …)` — the DOMAIN, not the point list — so the
+two enlarged views print identical "gen N" labels. A vertical line through the two panels is
+the same generation.
+
+`ChartX` is optional: the tiny fleet-list/grid sparklines pass none and keep index
+positioning (no axis, no sibling chart to line up with).
+
+Related and committed with it: `GenStats.yearRow` (csv.ts) — the row that backs the year
+chart, chosen by HAVING year data rather than by performance (earliest id wins, but the
+generation champion wins whenever it has the columns). That is what lets a scored-but-not-
+walk-forward generation appear on the year chart at all; `best` alone hid it.
+
+Verified 2026-08-06 through the `EG_SHOT` harness against a synthetic root built for the
+mismatch (scores on gens 20–40, `return_YYYY` on gens 0–30): shared domain 0–40, the score
+line starts at 50% of the panel, the year lines end at 75%, and the enlarged score chart
+labels 0…40. 88/88 unit tests green, typecheck clean.

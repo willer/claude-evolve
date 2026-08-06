@@ -114,6 +114,7 @@ export function parseCandidates(text: string): { candidates: Candidate[]; metric
 
 export function computeStats(text: string): WorkspaceStats {
   const { candidates, metricColumns } = parseCandidates(text);
+  const yearCols = metricColumns.filter((k) => /^return_\d{4}$/.test(k));
   const counts = { pending: 0, running: 0, complete: 0, failed: 0, skipped: 0 };
   const byGen = new Map<number, GenStats>();
   let leader: Candidate | null = null;
@@ -129,10 +130,18 @@ export function computeStats(text: string): WorkspaceStats {
     latestGen = Math.max(latestGen, gen);
     let g = byGen.get(gen);
     if (!g) {
-      g = { gen, pending: 0, running: 0, complete: 0, failed: 0, skipped: 0, best: null };
+      g = { gen, pending: 0, running: 0, complete: 0, failed: 0, skipped: 0, best: null, yearRow: null };
       byGen.set(gen, g);
     }
     (g as unknown as Record<string, number>)[bucket]++;
+
+    // Year-chart row: selected on HAVING year data, deliberately independent of
+    // performance and status. An archived generation whose rows were never walk-forward
+    // scored can still be plotted from a cheap single-window backtest that fills only
+    // return_YYYY. Earliest id wins so the pick is stable; `best` overrides below.
+    if (yearCols.length > 0 && !g.yearRow && yearCols.some((k) => c.metrics[k] !== undefined)) {
+      g.yearRow = c;
+    }
 
     if (c.status === 'complete' && c.performance !== null) {
       // Highest score wins; ties go to the earliest id (matches autostatus).
@@ -152,6 +161,12 @@ export function computeStats(text: string): WorkspaceStats {
         leaderGen = gen;
       }
     }
+  }
+
+  // A fully-scored generation should plot its CHAMPION, not an arbitrary sibling that
+  // happens to carry year data — so `best` wins wherever it has the columns.
+  for (const g of byGen.values()) {
+    if (g.best && yearCols.some((k) => g.best!.metrics[k] !== undefined)) g.yearRow = g.best;
   }
 
   const generations = [...byGen.values()].sort((a, b) => a.gen - b.gen);
