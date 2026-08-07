@@ -209,6 +209,13 @@ function devShots(dir: string): void {
     await js(`document.querySelector('.card')?.click()`);
     await pause(1500);
     await shot('detail.png');
+    // Leader summary panel: the labels the profile resolved, in order — this is
+    // where an evaluator column like `ulcer` must surface as "Ulcer" beside the
+    // other pain metrics rather than trailing raw after the unknown columns.
+    const leaderKs = await js(
+      `JSON.stringify([...document.querySelectorAll('#d-left .panel .metric .k')].map((e) => e.textContent))`,
+    );
+    console.log(`EG_SHOT leader-metrics=${leaderKs}`);
     // Session tabs: switching to Shell must detach the evolution terminal (only
     // the visible tab holds a tmux client) and switching back must re-attach it.
     // Read-only — a stopped tab just shows its ▶ launch button, never clicked.

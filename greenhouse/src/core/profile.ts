@@ -25,6 +25,14 @@ export const TRADING_METRICS: MetricSpec[] = [
   { col: 'total_trades', label: 'Trades' },
   { col: 'alpha', label: 'Alpha', pct: true },
   { col: 'pain_score', label: 'Pain' },
+  // Ulcer index — depth×duration of drawdown, a raw number (backtest.py prints
+  // `Ulcer: {:.2f}`), not a fraction. Two spellings are in play: backtest.py's
+  // metrics key is `ulcer`, while the algorithms themselves compute
+  // `ulcer_index`, so whichever an evaluator writes into evolution.csv gets the
+  // same label and the same slot beside the other pain measures. Absent columns
+  // are skipped, so a workspace without either shows neither.
+  { col: 'ulcer', label: 'Ulcer' },
+  { col: 'ulcer_index', label: 'Ulcer' },
   { col: 'cagr_pain_ratio', label: 'CAGR/Pain' },
   { col: 'alpha_pain_ratio', label: 'Alpha/Pain' },
 ];
@@ -79,4 +87,57 @@ export function resolveProfile(
   if (explicit.length) return { kind: declaredKind ?? 'custom', metrics: explicit };
   const kind = declaredKind ?? autodetectKind(opts.hasEquityDir, opts.metricColumns);
   return { kind, metrics: kind === 'trading' ? TRADING_METRICS : [] };
+}
+
+// ── leader metric panel ──────────────────────────────────────────────────────
+
+/** One rendered metric: display label, formatted value, and pos/neg class. */
+export interface RenderedMetric {
+  k: string;
+  v: string;
+  cls: string;
+}
+
+// Fraction-valued columns with no profile spec (the generic fallback path).
+const PCT_KEYS = new Set(['total_return', 'benchmark_return', 'volatility']);
+
+const IS_YEAR = (k: string) => /^return_\d{4}$/.test(k);
+
+function fmtNum(v: number): string {
+  if (Math.abs(v) >= 1000) return v.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  if (Number.isInteger(v)) return String(v);
+  return v.toFixed(Math.abs(v) < 1 ? 3 : 2);
+}
+
+/** Format one evaluator column with no profile spec: fraction-valued columns as
+ *  percents (colored), everything else as a plain number. */
+export function fmtGeneric(key: string, v: number): RenderedMetric {
+  if (PCT_KEYS.has(key) || IS_YEAR(key)) {
+    return { k: key, v: `${(v * 100).toFixed(1)}%`, cls: v >= 0 ? 'pos' : 'neg' };
+  }
+  return { k: key, v: fmtNum(v), cls: '' };
+}
+
+function fmtSpec(m: MetricSpec, v: number): RenderedMetric {
+  if (m.pct) return { k: m.label, v: `${(v * 100).toFixed(1)}%`, cls: m.neg ? 'neg' : v >= 0 ? 'pos' : 'neg' };
+  return { k: m.label, v: fmtNum(v), cls: '' };
+}
+
+/** The leader's metric panel: the profile's columns first, in profile order and
+ *  with its labels, then whatever else the evaluator emitted, raw. Year returns
+ *  (return_YYYY) are excluded — they get their own by-year section. */
+export function leaderMetrics(metrics: Record<string, number>, profile: ResolvedProfile): RenderedMetric[] {
+  const out: RenderedMetric[] = [];
+  const seen = new Set<string>();
+  for (const m of profile.metrics) {
+    if (metrics[m.col] !== undefined) {
+      seen.add(m.col);
+      out.push(fmtSpec(m, metrics[m.col]));
+    }
+  }
+  for (const [key, val] of Object.entries(metrics)) {
+    if (seen.has(key) || IS_YEAR(key)) continue;
+    out.push(fmtGeneric(key, val));
+  }
+  return out;
 }

@@ -84,3 +84,35 @@ Verified 2026-08-06 through the `EG_SHOT` harness against a synthetic root built
 mismatch (scores on gens 20–40, `return_YYYY` on gens 0–30): shared domain 0–40, the score
 line starts at 50% of the panel, the year lines end at 75%, and the enlarged score chart
 labels 0…40. 88/88 unit tests green, typecheck clean.
+
+## Greenhouse: the leader summary panel is pure, and knows the ulcer index
+
+The leader "algorithm summary" (detail view, peek popover) used to build its
+metric list inside `renderer.ts` (`ratioMetrics` + `fmtMetric`/`fmtSpec`/`fmtNum`),
+where nothing could test it. That logic is now `core/profile.ts` `leaderMetrics()`
+— pure and unit-tested; the renderer keeps a one-line alias. Its contract is
+unchanged: the workspace profile's columns first, in profile order and with the
+profile's labels, then every remaining evaluator column raw, with `return_YYYY`
+excluded (year returns have their own section).
+
+`TRADING_METRICS` now carries the ulcer index, placed with the other pain
+measures (Pain · **Ulcer** · CAGR/Pain · Alpha/Pain). Two spellings are accepted
+because two exist upstream: `backtest.py`'s metrics dict key is `ulcer` (it
+prints `Ulcer: {:.2f}`), while the evolved algorithms compute `ulcer_index`.
+Whichever an evaluator writes into evolution.csv gets the same "Ulcer" label and
+the same slot; a workspace with neither shows neither, so this is inert until an
+evaluator emits it.
+
+It is a RAW number, not a fraction — no percent formatting. As of 2026-08-07 NO
+evolution.csv under `~/GitHub/trading-strategies` has an ulcer column yet (the
+closest shipped pain columns are `pain_score`, `matspain`, `cagr_pain_ratio`,
+`alpha_pain_ratio`, `alpha_matspain_ratio`), so this is forward-looking by
+design — before the change an ulcer column would still have appeared, but
+unlabelled and trailing after unrelated columns.
+
+Verified 2026-08-07 through the `EG_SHOT` harness against a synthetic root whose
+CSV carries `ulcer`: the harness now logs `leader-metrics=[…]` (the summary's
+labels in render order) and printed
+`["Sharpe","Sortino","CAGR","MaxDD","Win rate","PF","Trades","Alpha","Pain","Ulcer","CAGR/Pain","matspain"]`,
+confirmed on the screenshot (`ULCER 7.11` between PAIN and CAGR/PAIN). 100/100
+unit tests green, typecheck clean.

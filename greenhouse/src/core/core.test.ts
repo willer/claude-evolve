@@ -15,7 +15,7 @@ import {
 import { resolveDevSourceDir } from './devRebuild';
 import { chartFracs, genFrac, genTicks, sharedGenDomain } from './genAxis';
 import { parseInferenceAll, productionTags } from './inferenceAll';
-import { TRADING_METRICS, resolveProfile } from './profile';
+import { TRADING_METRICS, leaderMetrics, resolveProfile } from './profile';
 import {
   SESSION_KINDS,
   adhocSessionName,
@@ -559,6 +559,42 @@ describe('resolveProfile', () => {
   it('falls back to auto-detect on malformed YAML rather than throwing', () => {
     const p = resolveProfile('dashboard: : : not valid\n\t- broken', { hasEquityDir: true, metricColumns: [] });
     expect(p.kind).toBe('trading');
+  });
+});
+
+describe('leaderMetrics', () => {
+  const TRADING = { kind: 'trading', metrics: TRADING_METRICS };
+  const keys = (m: Record<string, number>) => leaderMetrics(m, TRADING).map((x) => x.k);
+
+  it('renders profile metrics in profile order, labelled', () => {
+    const out = leaderMetrics({ max_drawdown: -0.2, sharpe: 1.5 }, TRADING);
+    expect(out).toEqual([
+      { k: 'Sharpe', v: '1.50', cls: '' },
+      { k: 'MaxDD', v: '-20.0%', cls: 'neg' },
+    ]);
+  });
+
+  it('labels the ulcer index and places it with the pain metrics', () => {
+    const out = keys({ sharpe: 1, pain_score: 3, ulcer: 12.5, cagr_pain_ratio: 0.4 });
+    expect(out).toEqual(['Sharpe', 'Pain', 'Ulcer', 'CAGR/Pain']);
+  });
+
+  it('accepts either ulcer column name, and never shows both labels twice', () => {
+    expect(leaderMetrics({ ulcer_index: 8.25 }, TRADING)).toEqual([{ k: 'Ulcer', v: '8.25', cls: '' }]);
+    expect(keys({ ulcer: 1, ulcer_index: 2 })).toEqual(['Ulcer', 'Ulcer']); // both present ⇒ both shown, both labelled
+  });
+
+  it('omits absent columns and appends unknown evaluator columns raw', () => {
+    expect(keys({ sharpe: 2, matspain: 1.75 })).toEqual(['Sharpe', 'matspain']);
+  });
+
+  it('keeps year returns out (they get their own section)', () => {
+    expect(keys({ sharpe: 2, return_2025: 0.3 })).toEqual(['Sharpe']);
+  });
+
+  it('formats percent columns and colors losses', () => {
+    const out = leaderMetrics({ total_return: -0.125 }, { kind: 'generic', metrics: [] });
+    expect(out).toEqual([{ k: 'total_return', v: '-12.5%', cls: 'neg' }]);
   });
 });
 

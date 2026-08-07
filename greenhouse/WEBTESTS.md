@@ -15,7 +15,10 @@ at the top), presses Space for `shots/peek.png`
 (quick-status popover), opens the
 first tool page for `shots/tool.png` (never presses ▶ Run), toggles to the
 grid for `shots/grid.png`, then clicks the first card for `shots/detail.png`
-(auto-attaches the visible session tab's terminal when it's running), switches
+(auto-attaches the visible session tab's terminal when it's running; logs
+`leader-metrics=[…]` — the leader summary's metric labels in render order, so a
+profile column like `ulcer` can be confirmed to land as "Ulcer" beside Pain
+rather than trailing raw among the unknown columns), switches
 to the Shell tab for `shots/detail-tab-shell.png` and back (logs
 `session-tab shell=… back=…`: the active pane id plus the live `.term-wrap`
 count — leaving a tab must drop its terminal to 0, returning must restore 1),

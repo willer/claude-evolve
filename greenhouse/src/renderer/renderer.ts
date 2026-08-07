@@ -11,6 +11,7 @@ import { FAILING_FAILS, PLATEAU_GENS, classifyHealth } from '../core/csv';
 import { chartFracs, genTicks, sharedGenDomain } from '../core/genAxis';
 import type { GenAxis } from '../core/genAxis';
 import { productionTags } from '../core/inferenceAll';
+import { fmtGeneric, leaderMetrics } from '../core/profile';
 import {
   SESSION_KINDS,
   adhocSessionName,
@@ -25,7 +26,6 @@ import type {
   Candidate,
   FleetPayload,
   Health,
-  MetricSpec,
   ResolvedProfile,
   Prefs,
   SessionState,
@@ -105,12 +105,6 @@ function fmtScore(v: number | null | undefined): string {
   return v === null || v === undefined ? '—' : v.toFixed(4);
 }
 
-function fmtNum(v: number): string {
-  if (Math.abs(v) >= 1000) return v.toLocaleString(undefined, { maximumFractionDigits: 0 });
-  if (Number.isInteger(v)) return String(v);
-  return v.toFixed(Math.abs(v) < 1 ? 3 : 2);
-}
-
 function fmtAge(mtimeMs: number | null): { text: string; stale: boolean } {
   if (mtimeMs === null) return { text: 'n/a', stale: false };
   const secs = (Date.now() - mtimeMs) / 1000;
@@ -144,43 +138,9 @@ const HEALTH_COLOR: Record<Health['level'], string> = {
   error: 'var(--red)',
 };
 
-// Leader metrics, label-mapped and percent-aware. Year returns (return_YYYY)
-// are kept out of here — they get their own by-year section.
-// Percent-formatted columns NOT in the profile's metric list (e.g. trading's
-// total_return/benchmark_return), used by the generic fallback below.
-const PCT_KEYS = new Set([
-  'total_return', 'benchmark_return', 'volatility',
-]);
-
-function fmtMetric(key: string, v: number): { v: string; cls: string } {
-  if (PCT_KEYS.has(key) || /^return_\d{4}$/.test(key)) {
-    return { v: `${(v * 100).toFixed(1)}%`, cls: v >= 0 ? 'pos' : 'neg' };
-  }
-  return { v: fmtNum(v), cls: '' };
-}
-
-function fmtSpec(m: MetricSpec, v: number): { v: string; cls: string } {
-  if (m.pct) return { v: `${(v * 100).toFixed(1)}%`, cls: m.neg ? 'neg' : v >= 0 ? 'pos' : 'neg' };
-  return { v: fmtNum(v), cls: '' };
-}
-
-// Leader metrics in the workspace profile's preferred order/labels, then any
-// remaining evaluator columns generically (year returns get their own section).
-function ratioMetrics(c: Candidate, profile: ResolvedProfile): Array<{ k: string; v: string; cls: string }> {
-  const out: Array<{ k: string; v: string; cls: string }> = [];
-  const seen = new Set<string>();
-  for (const m of profile.metrics) {
-    if (c.metrics[m.col] !== undefined) {
-      seen.add(m.col);
-      out.push({ k: m.label, ...fmtSpec(m, c.metrics[m.col]) });
-    }
-  }
-  for (const [key, val] of Object.entries(c.metrics)) {
-    if (seen.has(key) || /^return_\d{4}$/.test(key)) continue;
-    out.push({ k: key, ...fmtMetric(key, val) });
-  }
-  return out;
-}
+// Leader metrics (label-mapped, percent-aware, profile-ordered) are pure and
+// live in core/profile.ts — `leaderMetrics`. Year returns get their own section.
+const ratioMetrics = (c: Candidate, profile: ResolvedProfile) => leaderMetrics(c.metrics, profile);
 
 /** [year label, value] pairs from return_YYYY metric columns, ascending. */
 function yearReturns(c: Candidate): Array<{ year: string; v: number }> {
@@ -210,7 +170,7 @@ function yearBarsHtml(years: Array<{ year: string; v: number }>): string {
 function headlineMetrics(c: Candidate): Array<{ k: string; v: string; cls: string }> {
   const out: Array<{ k: string; v: string; cls: string }> = [];
   const m = c.metrics;
-  if (m.yearly_return !== undefined) out.push({ k: 'CAGR', ...fmtMetric('yearly_return', m.yearly_return) });
+  if (m.yearly_return !== undefined) out.push({ ...fmtGeneric('yearly_return', m.yearly_return), k: 'CAGR' });
   if (m.sharpe !== undefined) out.push({ k: 'Sharpe', v: m.sharpe.toFixed(2), cls: m.sharpe >= 1 ? 'pos' : '' });
   if (m.max_drawdown !== undefined) {
     out.push({ k: 'MaxDD', v: `${(Math.abs(m.max_drawdown) * 100).toFixed(1)}%`, cls: 'neg' });
@@ -1101,7 +1061,7 @@ function availableMetricCols(): string[] {
 function winnerCell(r: WorkspaceRow, col: string): string {
   const val = r.stats.leader?.metrics[col];
   if (val === undefined) return '<td class="num">—</td>';
-  const f = fmtMetric(col, val);
+  const f = fmtGeneric(col, val);
   return `<td class="num ${f.cls}">${f.v}</td>`;
 }
 
