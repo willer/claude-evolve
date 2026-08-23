@@ -52,8 +52,12 @@ assigned — and ask it to return the same JSON array. Run it via Bash —
 `gemini` source, via the Antigravity CLI),
 `opencode run -m openrouter/z-ai/glm-5.3 "<prompt>"` (the `glm` source),
 `opencode run -m openrouter/moonshotai/kimi-k3 "<prompt>"` (the `kimi` source), or
-`opencode run -m openrouter/qwen/qwen3.8-max "<prompt>"` (the `qwen` source) — then
-take its ideas, sanity-check them against the strategy and the novelty rule (drop
+`opencode run -m openrouter/qwen/qwen3.8-max "<prompt>"` (the `qwen` source).
+For every opencode call, run `source ~/.zprofile` FIRST in the same Bash
+invocation: the session environment may carry a corporate OPENROUTER_API_KEY
+whose data policy blocks these providers ("no endpoints available matching
+your guardrail restrictions"), and the personal key set in ~/.zprofile must
+override it. Then take its ideas, sanity-check them against the strategy and the novelty rule (drop
 or replace anything that's a near-duplicate or off-strategy), and return them in
 the required schema. The goal is genuinely different ideas from a different model,
 so prefer its substance; don't just paraphrase your own. If the external tool
@@ -76,7 +80,7 @@ Do this instead:
    `Write` it to `<scratchpad>/ext_prompt.txt`.
 2. Launch the CLI with Bash `run_in_background: true`, no `timeout` wrapper,
    redirecting both streams to a file:
-   `opencode run -m openrouter/moonshotai/kimi-k3 "$(cat <scratchpad>/ext_prompt.txt)" >/tmp/ext_out.txt 2>/tmp/ext_err.txt`
+   `source ~/.zprofile; opencode run -m openrouter/moonshotai/kimi-k3 "$(cat <scratchpad>/ext_prompt.txt)" >/tmp/ext_out.txt 2>/tmp/ext_err.txt`
 3. Poll by `Read`ing the output file every so often, doing other useful work
    (re-reading the BRIEF, drafting your own fallback ideas) between checks.
    **Poll INSIDE your turn — NEVER end your turn to wait for the run.** Ending
