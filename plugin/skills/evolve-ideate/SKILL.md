@@ -57,21 +57,22 @@ If `novel_intents` is non-empty, split the `novel_exploration` ID slice by its c
 
 ### Pick each branch's idea source
 
-For variety, some branches source their ideas from an external AI system instead of Fable — different model families produce genuinely different idea distributions. `novel_exploration` runs as **three isolated branches** (see Step 3), so it gets three rolls; the other strategies get one each. Roll the dice **once per branch** — 1/6 chance `codex` (GPT-5.6 Sol at high effort), 1/6 chance `gemini`, 1/6 chance `glm` (GLM-5.2 via opencode), 1/6 chance `kimi` (Kimi K3 via opencode), otherwise `fable`:
+For variety, some branches source their ideas from an external AI system instead of Fable — different model families produce genuinely different idea distributions. `novel_exploration` runs as **three isolated branches** (see Step 3), so it gets three rolls; the other strategies get one each. Roll the dice **once per branch** — 1/7 chance `codex` (GPT-5.6 Sol at high effort), 1/7 chance `gemini`, 1/7 chance `glm` (GLM-5.3 via opencode), 1/7 chance `kimi` (Kimi K3 via opencode), 1/7 chance `qwen` (Qwen3.8-Max via opencode), otherwise `fable`:
 
 ```bash
 for s in novel_A novel_B novel_C hill_climbing structural_mutation crossover_hybrid; do
-  r=$(( RANDOM % 6 ))
+  r=$(( RANDOM % 7 ))
   if   [ "$r" -eq 0 ]; then src=codex
   elif [ "$r" -eq 1 ]; then src=gemini
   elif [ "$r" -eq 2 ]; then src=glm
   elif [ "$r" -eq 3 ]; then src=kimi
+  elif [ "$r" -eq 4 ]; then src=qwen
   else src=fable; fi
   echo "$s=$src"
 done
 ```
 
-Note each branch's `src`. It controls two things below: a `codex`/`gemini`/`glm`/`kimi` branch's subagent fetches its ideas from that external CLI (Step 3), and every idea kept from that branch is tagged with that source in `idea-LLM` (Step 4). Strategies with count 0 are skipped regardless of their roll.
+Note each branch's `src`. It controls two things below: a `codex`/`gemini`/`glm`/`kimi`/`qwen` branch's subagent fetches its ideas from that external CLI (Step 3), and every idea kept from that branch is tagged with that source in `idea-LLM` (Step 4). Strategies with count 0 are skipped regardless of their roll.
 
 ### Roll cognitive frames for the divergent strategies
 
@@ -104,10 +105,10 @@ Frame injection: for each framed branch (the three novel branches and structural
 Generate through that vantage point. The first three obvious ideas anyone would propose for this BRIEF are banned — push past them into approaches nobody would list first.
 ```
 
-For a branch whose `src` (from Step 2) is `codex`, `gemini`, `glm`, or `kimi`, add this line to that subagent's prompt so it sources its ideas externally instead of generating them itself (the frame and ban-the-obvious lines must be carried into the external tool's prompt too):
+For a branch whose `src` (from Step 2) is `codex`, `gemini`, `glm`, `kimi`, or `qwen`, add this line to that subagent's prompt so it sources its ideas externally instead of generating them itself (the frame and ban-the-obvious lines must be carried into the external tool's prompt too):
 
 ```
-Source these ideas from the external tool `<codex|gemini|glm|kimi>`: build one prompt carrying the strategy, parents, BRIEF, existing descriptions, and the exact IDs, run it via Bash (codex: `codex exec -m gpt-5.6-sol -c model_reasoning_effort="high" "<prompt>"`; gemini: `agy --dangerously-skip-permissions -p "<prompt>"` (the Antigravity CLI); glm: `opencode run -m openrouter/z-ai/glm-5.2 "<prompt>"`; kimi: `opencode run -m openrouter/moonshotai/kimi-k3 "<prompt>"`), then return its ideas in the required schema (sanity-checked for strategy fit and novelty). Fall back to generating them yourself only if the tool errors.
+Source these ideas from the external tool `<codex|gemini|glm|kimi|qwen>`: build one prompt carrying the strategy, parents, BRIEF, existing descriptions, and the exact IDs, run it via Bash (codex: `codex exec -m gpt-5.6-sol -c model_reasoning_effort="high" "<prompt>"`; gemini: `agy --dangerously-skip-permissions -p "<prompt>"` (the Antigravity CLI); glm: `opencode run -m openrouter/z-ai/glm-5.3 "<prompt>"`; kimi: `opencode run -m openrouter/moonshotai/kimi-k3 "<prompt>"`; qwen: `opencode run -m openrouter/qwen/qwen3.8-max "<prompt>"`), then return its ideas in the required schema (sanity-checked for strategy fit and novelty). Fall back to generating them yourself only if the tool errors.
 These calls are SLOW — the tool must read the whole BRIEF and idea history and think hard about all of it, which routinely takes MANY MINUTES and a large number of thinking tokens. Launch it with Bash `run_in_background: true` and poll its output file; NEVER wrap it in `timeout` and never block on it in the foreground (a foreground Bash call is killed at 300s and returns empty, which looks exactly like a model failure but is not). Allow at least 15 minutes before falling back, and report a timeout as a timeout, not as "the tool returned nothing".
 ```
 
@@ -149,7 +150,7 @@ Gather the JSON arrays from all subagents.
 
 Then drop any idea (all strategies) whose description is a near-duplicate of an existing description or of another new idea (simple judgment — same technique with trivial wording changes). Keep the IDs you reserved; don't invent new ones.
 
-Tag each surviving idea's `idea-LLM` with its branch's `src` from Step 2 (`fable`, `codex`, `gemini`, `glm`, or `kimi`) — non-novel IDs are disjoint per strategy so map by ID slice; novel winners are tagged by the branch that produced them.
+Tag each surviving idea's `idea-LLM` with its branch's `src` from Step 2 (`fable`, `codex`, `gemini`, `glm`, `kimi`, or `qwen`) — non-novel IDs are disjoint per strategy so map by ID slice; novel winners are tagged by the branch that produced them.
 
 Append the survivors in one call (pass the combined JSON array):
 
