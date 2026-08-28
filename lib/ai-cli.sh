@@ -165,8 +165,8 @@ $prompt"
     # --- GLM / Z.AI ---
     glm)
       local ai_output
-      # Latest GLM flagship via OpenRouter
-      ai_output=$(opencode -m openrouter/z-ai/glm-5.1 run "$prompt" 2>&1)
+      # GLM 5.3 Flash via OpenRouter
+      ai_output=$(opencode -m openrouter/z-ai/glm-5.3-flash run "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     glm-zai)
