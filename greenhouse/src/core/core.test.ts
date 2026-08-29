@@ -120,6 +120,18 @@ describe('computeStats', () => {
     expect(computeStats(text).sparkline).toEqual([1.0, 2.0, 3.0]);
   });
 
+  it('resolves the production pin to its row only when it is NOT the leader', () => {
+    const text = [
+      HEADER,
+      row('gen01-001', '2.0', 'complete'),
+      row('gen02-001', '1.5', 'complete'),
+    ].join('\n');
+    expect(computeStats(text).pinned).toBeNull(); // unpinned
+    expect(computeStats(text, 'gen01-001').pinned).toBeNull(); // pin IS the leader → one view
+    expect(computeStats(text, 'GEN02-001').pinned?.id).toBe('gen02-001'); // case-insensitive
+    expect(computeStats(text, 'gen09-009').pinned).toBeNull(); // pinned id not in the CSV
+  });
+
   it('picks a yearRow from year data alone, so unscored gens still plot', () => {
     // gen02 was never walk-forward scored — no performance, status skipped — but a cheap
     // single-window backtest filled return_2025. It must still back a year-chart point,

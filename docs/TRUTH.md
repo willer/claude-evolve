@@ -116,3 +116,36 @@ labels in render order) and printed
 `["Sharpe","Sortino","CAGR","MaxDD","Win rate","PF","Trades","Alpha","Pain","Ulcer","CAGR/Pain","matspain"]`,
 confirmed on the screenshot (`ULCER 7.11` between PAIN and CAGR/PAIN). 100/100
 unit tests green, typecheck clean.
+
+## Greenhouse: Winner / Pinned focus tabs in the detail view
+
+When inference-all pins a workspace to an algo that is NOT the evolution
+leader, the detail view used to show only the leader's summary, NAV chart, and
+year returns, with a yellow "not deployed — prod pins <id>" pill as the sole
+trace of what actually trades. Now a tab strip sits above the summary panel:
+"★ Winner · <leader id>" (default) and "📌 Pinned · <pinned id>". Pinned swaps
+the summary heading/description/metric grid, the walk-forward NAV chart
+(`equity/<pinned id>.csv`), and the returns-by-year bars to the pinned row;
+the `p` key toggles; the focus resets to Winner each time a workspace opens.
+While Pinned is shown, the production pill reads green "deployed" — the algo on
+screen IS what trades — and the pinned generation's row in the generation table
+is cyan with a 📌.
+
+What does NOT switch: the per-generation charts, the generation table, and the
+Backtest panel are workspace-wide (backtest-all tests whichever champion it saw),
+so they stay as they were. The tab strip is absent when the workspace is
+unpinned, when the pin IS the leader (one view suffices), or when the pinned id
+is not in the CSV.
+
+The pinned row is resolved in `core/csv.ts`: `computeStats(text, pinId)` sets
+`WorkspaceStats.pinned` (case-insensitive id match, null when it equals the
+leader). The Poller reads the inference-all signal BEFORE stats and keys its
+mtime cache on the pin too, so re-pinning in inference-all refreshes the tab
+without a CSV change. Pure and unit-tested; the renderer only picks `focus`.
+
+Verified 2026-08-29 through the `EG_SHOT` harness against a synthetic root
+(leader gen03-001, `--pin=gen02-001`): `focus-tabs=["★ Winner · gen03-001","📌
+Pinned · gen02-001"]`, then `focus-pinned head="Pinned — gen02-001 · 1.6000📌
+production pin✓ deployed"`, then `focus-winner head="Leader — gen03-001 · 2.3000★
+current winner⚠ not deployed — prod pins gen02-001"`; screenshot confirmed the
+NAV chart and year bars changed with it. 95/95 unit tests green, typecheck clean.

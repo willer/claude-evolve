@@ -95,6 +95,10 @@ let btLatest: BacktestSummary | undefined; // latest run, joined into the per-wo
 let btLoaded = false; // have we fetched the summary at least once (distinguishes "no DB" from "not yet loaded")
 let selectedName: string | null = null; // keyboard cursor, stable across pushes
 let peekFor: string | null = null; // quick-status popover target
+/** Which algo the detail view's summary/NAV/year panels describe: the evolution winner
+ *  (default) or the row production pins. Only offered when the two differ; resets to
+ *  'winner' whenever a workspace is opened. */
+let detailFocus: 'winner' | 'pinned' = 'winner';
 let searchQuery = ''; // fleet name/leader filter ('/' focuses the search box)
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -637,9 +641,12 @@ function candidateIdOf(algoName: string): string | null {
 //   'winner'   — the current evolution leader (green)
 //   'previous' — backtest-all scored an older champion than today's leader (yellow)
 //   'unknown'  — no completed leader yet to compare against (neutral)
-function winnerTag(state: 'winner' | 'previous' | 'unknown', tested?: string | null, leader?: string | null): string {
+//   'pinned'   — the algo production pins, which is NOT the leader (cyan)
+function winnerTag(state: 'winner' | 'previous' | 'unknown' | 'pinned', tested?: string | null, leader?: string | null): string {
   if (state === 'winner')
     return `<span class="tag tag-winner" title="Shows the current evolution leader">★ current winner</span>`;
+  if (state === 'pinned')
+    return `<span class="tag tag-pinned" title="Shows the algo inference-all pins for production — not the evolution leader">📌 production pin</span>`;
   if (state === 'previous')
     return `<span class="tag tag-prev" title="Shows ${esc(tested ?? 'an earlier champion')}, not the current leader ${esc(leader ?? '')} — re-run backtest-all to refresh">⚠ previous winner${tested ? ` · ${esc(tested)}${leader ? ` (now ${esc(leader)})` : ''}` : ''}</span>`;
   return `<span class="tag tag-unknown" title="Backtested champion — no completed evolution leader yet to compare">tested${tested ? ` ${esc(tested)}` : ''}</span>`;
@@ -1284,7 +1291,7 @@ function render(): void {
 function renderHints(): void {
   $('hints').innerHTML =
     view || toolView
-      ? `<b>esc</b> back · <b>⌘esc</b> back (even from terminal) · <b>⏎/a</b> focus terminal${view ? ' · <b>1 2 3</b> evolution/adhoc/shell tab · <b>s</b> start/stop' : ''} · click a chart to enlarge · click terminal to type · wheel scrolls the session`
+      ? `<b>esc</b> back · <b>⌘esc</b> back (even from terminal) · <b>⏎/a</b> focus terminal${view ? ' · <b>1 2 3</b> evolution/adhoc/shell tab · <b>p</b> winner/pinned · <b>s</b> start/stop' : ''} · click a chart to enlarge · click terminal to type · wheel scrolls the session`
       : `<b>↑↓ j k</b> select · <b>⏎</b> open + attach · <b>space</b> peek stats · <b>v</b> ${viewMode === 'list' ? 'grid' : 'list'} · <b>s</b> start/stop · <b>*</b> star`;
 }
 
@@ -1345,6 +1352,7 @@ function detailSessId(name: string, kind: SessionKind): string {
 function openDetail(name: string, focusTerm = false): void {
   view = name;
   selectedName = name;
+  detailFocus = 'winner';
   teardownAllTerminals();
   // Land on whichever session is actually running (evolution first) instead of
   // always on an empty Evolution tab.
@@ -1569,6 +1577,22 @@ function renderDetail(): void {
   const s = r.stats;
   const h = healthOf(r);
   const leader = s.leader;
+  // Focus: the summary / NAV / returns-by-year panels describe ONE algo. Default is the
+  // evolution winner; when production pins a DIFFERENT algo (stats.pinned), a tab strip
+  // above the panels lets the operator switch to that row. The per-generation charts,
+  // the generation table, and the backtest panel are workspace-wide and do not switch.
+  const pinned = s.pinned;
+  const focusPinned = !!pinned && detailFocus === 'pinned';
+  const focus = focusPinned ? pinned : leader;
+  const focusLabel = focusPinned ? 'Pinned' : 'Leader';
+  const focusTag = winnerTag(focusPinned ? 'pinned' : 'winner');
+  const focusTabs =
+    leader && pinned
+      ? `<div class="tabs focus-tabs" id="d-focus">
+           <button class="tab${!focusPinned ? ' active' : ''}" data-focus="winner" title="Evolution leader — ${esc(leader.id)}">★ Winner · ${esc(leader.id)}</button>
+           <button class="tab${focusPinned ? ' active' : ''}" data-focus="pinned" title="Production pin from inference-all — ${esc(pinned.id)}">📌 Pinned · ${esc(pinned.id)}</button>
+         </div>`
+      : '';
   const years = yearSeries(r);
   // Generation numbers behind each chart's X positions. Each chart drops the generations
   // IT cannot plot, so the two lists differ whenever a generation has year data but no
@@ -1617,10 +1641,11 @@ function renderDetail(): void {
 
   // Production badges: inference-all says whether this workspace is live, whether it is
   // BLENDED with another workspace into one averaged webhook (each leg pinned separately by
-  // `--pin=<workspace>:<algo>`), and which algo it pins. The Leader/Backtest panels always
-  // show the R&D champion, so flag whether that champion is actually what production trades.
-  // Pins are a production-trading decision and never change what R&D resolves.
-  const pinTag = productionTags(r.name, r.production, leaderId)
+  // `--pin=<workspace>:<algo>`), and which algo it pins. The verdict is about the algo the
+  // summary panel currently shows: "not deployed" beside the leader, "deployed" once the
+  // Pinned focus tab shows the pinned row itself. Pins are a production-trading decision
+  // and never change what R&D resolves.
+  const pinTag = productionTags(r.name, r.production, focus?.id ?? null)
     .map((t) => `<span class="tag tag-${t.cls}" title="${esc(t.title)}">${esc(t.text)}</span>`)
     .join('');
 
@@ -1637,11 +1662,12 @@ function renderDetail(): void {
 
   $('d-left').innerHTML = `
     <div class="panel">
-      <h3>Leader ${leader ? `— ${esc(leader.id)} · ${fmtScore(leader.performance)}${winnerTag('winner')}${pinTag}` : ''}</h3>
+      ${focusTabs}
+      <h3>${focusLabel} ${focus ? `— ${esc(focus.id)} · ${fmtScore(focus.performance)}${focusTag}${pinTag}` : ''}</h3>
       ${
-        leader
-          ? `<div class="desc" style="color: var(--dim); margin-bottom: 10px; user-select: text;">${esc(leader.description)}</div>
-             <div class="metric-grid">${ratioMetrics(leader, r.profile)
+        focus
+          ? `<div class="desc" style="color: var(--dim); margin-bottom: 10px; user-select: text;">${esc(focus.description)}</div>
+             <div class="metric-grid">${ratioMetrics(focus, r.profile)
                .map(
                  (m) =>
                    `<span class="metric"><span class="k">${esc(m.k)}</span><span class="v ${m.cls}">${esc(m.v)}</span></span>`,
@@ -1652,10 +1678,10 @@ function renderDetail(): void {
     </div>
     ${btPanel}
     ${
-      leader
-        ? `<div class="panel"><h3>Leader NAV over time — walk-forward OOS${winnerTag('winner')}</h3>${registerNavZoom('nav-leader', equityFor(r.name, leader.id))}${zoomable('nav-leader', (w, ht) => navPanelHtml(r.name, leader.id, w, ht), cw, 130)}</div>
+      focus
+        ? `<div class="panel"><h3>${focusLabel} NAV over time — walk-forward OOS${focusTag}</h3>${registerNavZoom('nav-leader', equityFor(r.name, focus.id))}${zoomable('nav-leader', (w, ht) => navPanelHtml(r.name, focus.id, w, ht), cw, 130)}</div>
            ${navByPeriodPanel(r.name, cw, btTag)}
-           <div class="panel"><h3>Leader returns by year${winnerTag('winner')}</h3>${yearBarsHtml(yearReturns(leader))}</div>`
+           <div class="panel"><h3>${focusLabel} returns by year${focusTag}</h3>${yearBarsHtml(yearReturns(focus))}</div>`
         : ''
     }
     <div class="panel">
@@ -1682,10 +1708,11 @@ function renderDetail(): void {
             .reverse()
             .map((g) => {
               const isLeader = g.best && leader && g.best.id === leader.id;
-              return `<tr class="${isLeader ? 'leader' : ''}">
+              const isPinned = g.best && pinned && g.best.id === pinned.id;
+              return `<tr class="${isLeader ? 'leader' : isPinned ? 'pinned' : ''}">
                 <td>gen${String(g.gen).padStart(3, '0')}</td>
                 <td>${g.pending}/${g.complete}/${g.failed}/${g.running}</td>
-                <td>${g.best ? esc(g.best.id) : '—'}</td>
+                <td>${g.best ? esc(g.best.id) : '—'}${isPinned ? ' 📌' : ''}</td>
                 <td class="num">${g.best ? fmtScore(g.best.performance) : '—'}</td>
                 <td>${g.best ? esc(g.best.description.slice(0, 90)) : 'no completed candidates'}</td>
               </tr>`;
@@ -1695,7 +1722,18 @@ function renderDetail(): void {
       </div>
     </div>`;
 
+  document
+    .querySelectorAll<HTMLElement>('#d-focus [data-focus]')
+    .forEach((b) => b.addEventListener('click', () => selectFocus(b.dataset.focus as typeof detailFocus)));
+
   syncSessionTabs(r);
+}
+
+/** Switch the detail summary/NAV/year panels between the winner and the pinned algo. */
+function selectFocus(f: typeof detailFocus): void {
+  if (detailFocus === f) return;
+  detailFocus = f;
+  render();
 }
 
 /** Per-kind wiring for the detail session tabs — session id, tab label, and the
@@ -2272,6 +2310,11 @@ window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') view ? closeDetail() : closeTool();
     else if (e.key === 's' && view) void toggleEvolution(view);
     else if (view && ['1', '2', '3'].includes(e.key)) selectSessionTab(SESSION_KINDS[Number(e.key) - 1]);
+    else if (view && e.key === 'p') {
+      // Winner ⇄ Pinned focus — only when production pins a different algo.
+      const r = rows.find((x) => x.name === view);
+      if (r?.stats.pinned) selectFocus(detailFocus === 'pinned' ? 'winner' : 'pinned');
+    }
     else if (e.key === 'Enter' || e.key === 'a') {
       if (focusPrimaryTerm()) return; // a live terminal — just focus it
       // Not attached yet (attach in flight / not started): attach the visible

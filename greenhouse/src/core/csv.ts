@@ -112,7 +112,9 @@ export function parseCandidates(text: string): { candidates: Candidate[]; metric
   return { candidates, metricColumns };
 }
 
-export function computeStats(text: string): WorkspaceStats {
+/** `pinId` is the algo production pins this workspace to (null when unpinned); the
+ *  matching row surfaces as `pinned` only when it is not already the leader. */
+export function computeStats(text: string, pinId: string | null = null): WorkspaceStats {
   const { candidates, metricColumns } = parseCandidates(text);
   const yearCols = metricColumns.filter((k) => /^return_\d{4}$/.test(k));
   const counts = { pending: 0, running: 0, complete: 0, failed: 0, skipped: 0 };
@@ -188,11 +190,19 @@ export function computeStats(text: string): WorkspaceStats {
     .filter((g) => g.gen >= latestGen - 1)
     .reduce((n, g) => n + g.failed, 0);
 
+  // Pin ids are compared case-insensitively, like productionTags does.
+  const pinLc = pinId?.toLowerCase() ?? null;
+  const pinned =
+    pinLc && pinLc !== (leader as Candidate | null)?.id.toLowerCase()
+      ? (candidates.find((c) => c.id.toLowerCase() === pinLc) ?? null)
+      : null;
+
   return {
     error: null,
     counts,
     leader,
     leaderGen,
+    pinned,
     latestGen,
     gensSinceTop: leader && leaderGen !== null ? latestGen - leaderGen : null,
     recentSuccessRate,
@@ -257,6 +267,7 @@ export function emptyStats(error: string | null): WorkspaceStats {
     counts: { pending: 0, running: 0, complete: 0, failed: 0, skipped: 0 },
     leader: null,
     leaderGen: null,
+    pinned: null,
     latestGen: 0,
     gensSinceTop: null,
     recentSuccessRate: null,

@@ -19,3 +19,11 @@
 - [x] change Greenhouse to understand the new method of pinning, in cases where an algo is being used by inference-all mixed with another one. there's a different pinning there, which it doesn't show.
 - [x] change greenhouse to use the same X axis for best score by generation and year returns by generation (using the min(min) and max(max)) of the two
 - [x] in the algorithm summary, if there's an ulcer index field in the csv, display that in the summary info along with stuff like matspain (you'll need to check the field name in an existing csv, I forget the name)
+- [x] in greenhouse, when the non-winning algo is pinned, show the charts and stats for both pinned and winner — a tab selection at the top, defaulting to winner but also allowing the pinned one
+  > ✅ **DONE** (2026-08-29): a Winner / Pinned tab strip above the detail summary
+  > panel, present only when inference-all pins a different algo than the leader.
+  > Pinned swaps the summary, walk-forward NAV chart, and returns-by-year bars to
+  > the pinned row (`p` toggles); the pinned row is resolved in `core/csv.ts`
+  > `computeStats(text, pinId)` → `stats.pinned` (pure, unit-tested; 95/95 green,
+  > typecheck clean). Verified via the EG_SHOT harness against a synthetic pinned
+  > root: `focus-pinned head="Pinned — gen02-001 · 1.6000 production pin deployed"`.

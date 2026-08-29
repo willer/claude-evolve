@@ -141,6 +141,7 @@
     .tag-winner { background: var(--green-bg); color: var(--green); }
     .tag-prev { background: var(--yellow-bg); color: var(--yellow); }
     .tag-unknown { background: var(--panel2); color: var(--dim); }
+    .tag-pinned { background: var(--panel2); color: var(--cyan); }
     /* blend pill — this workspace is only ONE leg of a mixed production signal. */
     .tag-mix { background: var(--magenta-bg); color: var(--magenta); }
 
@@ -346,6 +347,9 @@
     .panel th { color: var(--dim); font-weight: 600; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--panel); }
     .panel td.num, .panel th.num { text-align: right; }
     .panel tr.leader td { color: var(--green); font-weight: 600; }
+    .panel tr.pinned td { color: var(--cyan); font-weight: 600; }
+    /* winner / pinned focus tabs sit above the summary panel's heading */
+    .focus-tabs { margin-bottom: 8px; }
     .gen-table-wrap { max-height: 320px; overflow: auto; user-select: text; }
 
     .risk-bad { color: var(--red); font-weight: 700; }

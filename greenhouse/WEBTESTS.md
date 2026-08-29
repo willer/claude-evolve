@@ -18,7 +18,12 @@ grid for `shots/grid.png`, then clicks the first card for `shots/detail.png`
 (auto-attaches the visible session tab's terminal when it's running; logs
 `leader-metrics=[…]` — the leader summary's metric labels in render order, so a
 profile column like `ulcer` can be confirmed to land as "Ulcer" beside Pain
-rather than trailing raw among the unknown columns), switches
+rather than trailing raw among the unknown columns), reads the Winner / Pinned
+focus tabs (logs `focus-tabs=[…] head=…`, then clicks Pinned for
+`shots/detail-focus-pinned.png` and logs `focus-pinned head=…`, then clicks
+Winner back and logs `focus-winner head=…` — the summary heading must name the
+pinned id in between; on an unpinned workspace the tab list is `[]` and the
+heading never changes), switches
 to the Shell tab for `shots/detail-tab-shell.png` and back (logs
 `session-tab shell=… back=…`: the active pane id plus the live `.term-wrap`
 count — leaving a tab must drop its terminal to 0, returning must restore 1),
@@ -119,6 +124,18 @@ to verify the NAV chart deterministically.
       <id>" when it is not. No pill at all when the workspace is unpinned or
       absent from inference-all. Verify with
       `EG_ROOTS=<root with an inference-all>`
+- [ ] Detail Winner / Pinned focus tabs: when inference-all pins a DIFFERENT
+      algo than the leader, a tab strip sits above the summary panel — "★ Winner
+      · <id>" (default) and "📌 Pinned · <id>". Pinned swaps the summary heading
+      + description + metric grid, the walk-forward NAV chart, and the
+      returns-by-year bars to the pinned row (cyan "production pin" tag, and the
+      pill now reads green "deployed" because the shown algo IS what trades);
+      Winner restores the leader. `p` toggles. The per-generation charts, the
+      generation table (pinned gen's row is cyan with a 📌), and the Backtest
+      panel are workspace-wide and do not switch. No strip when unpinned, when
+      the pin IS the leader, or when the pinned id is missing from the CSV.
+      Verify with `EG_ROOTS=<root whose inference-all pins a non-leader>`
+      (harness logs `focus-tabs=…` / `focus-pinned head=…` / `focus-winner head=…`)
 - [ ] Fluid charts: detail + backtest NAV/sparkline/year charts fill the column
       width (no fixed ~560/720px box) and reflow on window resize
 - [ ] Click-to-enlarge (any chart-zoom chart, detail-zoom.png): the overlay

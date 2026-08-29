@@ -42,6 +42,11 @@ export interface WorkspaceStats {
   counts: { pending: number; running: number; complete: number; failed: number; skipped: number };
   leader: Candidate | null;
   leaderGen: number | null;
+  /** The row production pins this workspace to (inference-all `--pin=`), when that is a
+   *  DIFFERENT algo than the leader. Null when unpinned, when the pin IS the leader (one
+   *  view suffices), or when the pinned id is not in the CSV. Drives the detail view's
+   *  Winner / Pinned focus tabs. */
+  pinned: Candidate | null;
   latestGen: number;
   gensSinceTop: number | null;
   /** c/(c+f) over the 5 generations before the latest (latest may be mid-run). */

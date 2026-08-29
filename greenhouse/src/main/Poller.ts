@@ -29,6 +29,7 @@ import type { SessionHost } from './SessionHost';
 
 interface CacheEntry {
   mtimeMs: number;
+  pin: string | null; // stats.pinned depends on the inference-all pin, not just the CSV
   stats: WorkspaceStats;
 }
 
@@ -170,17 +171,24 @@ export class Poller {
 
       const rows: WorkspaceRow[] = [];
       for (const ws of workspaces) {
+        // Production signal: the parent-root `inference-all` says whether this workspace is
+        // live, whether it is BLENDED with another workspace into one webhook, and which algo
+        // production pins it to. The detail view flags when the leader is NOT what production
+        // trades, and offers the pinned row as a second focus.
+        const production = readProductionSignal(path.dirname(ws.path), ws.name);
+        const pin = production?.pin ?? null;
+
         const csvPath = path.join(ws.path, 'evolution.csv');
         let mtimeMs: number | null = null;
         let stats: WorkspaceStats;
         try {
           mtimeMs = fs.statSync(csvPath).mtimeMs;
           const cached = this.statsCache.get(csvPath);
-          if (cached && cached.mtimeMs === mtimeMs) {
+          if (cached && cached.mtimeMs === mtimeMs && cached.pin === pin) {
             stats = cached.stats;
           } else {
-            stats = computeStats(fs.readFileSync(csvPath, 'utf8'));
-            this.statsCache.set(csvPath, { mtimeMs, stats });
+            stats = computeStats(fs.readFileSync(csvPath, 'utf8'), pin);
+            this.statsCache.set(csvPath, { mtimeMs, pin, stats });
           }
         } catch (err) {
           stats = emptyStats(String((err as Error).message ?? err).slice(0, 80));
@@ -203,12 +211,6 @@ export class Poller {
         }
         const hasEquityDir = fs.existsSync(path.join(ws.path, 'equity'));
         const profile = resolveProfile(configText, { hasEquityDir, metricColumns: stats.metricColumns });
-
-        // Production signal: the parent-root `inference-all` says whether this workspace is
-        // live, whether it is BLENDED with another workspace into one webhook, and which algo
-        // production pins it to. Read it so the detail view can flag when the leader shown
-        // here is NOT what production trades.
-        const production = readProductionSignal(path.dirname(ws.path), ws.name);
 
         rows.push({
           name: ws.name,

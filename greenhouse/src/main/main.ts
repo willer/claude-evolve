@@ -216,6 +216,21 @@ function devShots(dir: string): void {
       `JSON.stringify([...document.querySelectorAll('#d-left .panel .metric .k')].map((e) => e.textContent))`,
     );
     console.log(`EG_SHOT leader-metrics=${leaderKs}`);
+    // Winner / Pinned focus tabs: present only when inference-all pins a DIFFERENT algo
+    // than the leader. Clicking Pinned must swap the summary heading + NAV + year panels
+    // to that row (the heading names it); Winner restores the leader.
+    const focusHead = () => js(`document.querySelector('#d-left .panel h3')?.textContent?.trim() ?? null`);
+    const focusTabs = await js(
+      `JSON.stringify([...document.querySelectorAll('#d-focus [data-focus]')].map((e) => e.textContent.trim()))`,
+    );
+    console.log(`EG_SHOT focus-tabs=${focusTabs} head=${JSON.stringify(await focusHead())}`);
+    await js(`document.querySelector('#d-focus [data-focus="pinned"]')?.click()`);
+    await pause(800);
+    console.log(`EG_SHOT focus-pinned head=${JSON.stringify(await focusHead())}`);
+    await shot('detail-focus-pinned.png');
+    await js(`document.querySelector('#d-focus [data-focus="winner"]')?.click()`);
+    await pause(800);
+    console.log(`EG_SHOT focus-winner head=${JSON.stringify(await focusHead())}`);
     // Session tabs: switching to Shell must detach the evolution terminal (only
     // the visible tab holds a tmux client) and switching back must re-attach it.
     // Read-only — a stopped tab just shows its ▶ launch button, never clicked.
