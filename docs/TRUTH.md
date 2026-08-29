@@ -149,3 +149,33 @@ Pinned · gen02-001"]`, then `focus-pinned head="Pinned — gen02-001 · 1.6000�
 production pin✓ deployed"`, then `focus-winner head="Leader — gen03-001 · 2.3000★
 current winner⚠ not deployed — prod pins gen02-001"`; screenshot confirmed the
 NAV chart and year bars changed with it. 95/95 unit tests green, typecheck clean.
+
+## Greenhouse: launch-time self-update for the dev-tree .app
+
+The DevRebuilder only catches source edits made while the app is RUNNING (it
+watches src/ and repackages so the next Dock launch is fresh). Source changed
+while the app was closed — an edit, a git pull — still launched the stale
+bundle with no warning. Now `npm run build` (esbuild.mjs) writes
+`dist/buildstamp.json` ({builtAt}), which ships inside the .app via the
+`dist/**` packaging glob; at launch, main.ts compares the newest src/ mtime
+(`DevRebuilder.newestSourceMtime`, same SOURCE_RE as the watcher, +2s slack)
+against the running bundle's stamp. When stale it asks — "Update & Relaunch" /
+"Not Now" — then repackages through the SAME single-flight guard as the watcher
+(`DevRebuilder.packageOnce`), and on success quits and reopens the fresh .app
+via a detached `sh -c 'sleep 1.5; exec open …'` (macOS `open` merely focuses a
+running instance, so the reopen must happen after this process exits). A bundle
+with no stamp predates the mechanism and counts as stale, so the first launch
+after this change updates itself once.
+
+Scope guards are unchanged from the watcher: packaged app inside its own dev
+tree only (resolveDevSourceDir), disabled under EG_SHOT / EG_ROOTS /
+EG_NO_AUTOREBUILD=1; shipped installs outside the source tree never see it.
+A failed repackage shows an error dialog pointing at dev-rebuild.log and keeps
+the current build running.
+
+Verified 2026-08-29: buildstamp confirmed inside the packaged asar
+(`npx asar extract-file … dist/buildstamp.json` → builtAt matching the
+package), staleness compare exercised on live data on both sides (fresh build
+→ not stale; src newer than stamp → stale). The dialog/relaunch path is
+hands-on (WEBTESTS.md) — it needs a real Dock launch. 95/95 unit tests green,
+typecheck clean.

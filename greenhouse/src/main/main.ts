@@ -1,12 +1,13 @@
 // Main process composition root: SessionHost + Poller + IPC. All logic lives
 // in core/ and the main/ modules — this file only composes.
 
-import { BrowserWindow, Notification, app, nativeTheme, screen } from 'electron';
-import { existsSync } from 'node:fs';
+import { BrowserWindow, Notification, app, dialog, nativeTheme, screen } from 'electron';
+import { spawn } from 'node:child_process';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
 
 import { resolveDevSourceDir } from '../core/devRebuild';
-import { DevRebuilder } from './DevRebuilder';
+import { DevRebuilder, newestSourceMtime } from './DevRebuilder';
 import { Poller } from './Poller';
 import { PrefsStore } from './prefsStore';
 import { SessionHost } from './SessionHost';
@@ -139,6 +140,12 @@ app.whenReady().then(() => {
     if (srcDir) {
       rebuilder = new DevRebuilder(srcDir, app.getPath('userData'));
       rebuilder.start();
+      // Launch-time self-update: the watcher only catches edits made while the
+      // app is RUNNING — source changed while it was closed (an edit, a git
+      // pull) still launches the stale bundle. Compare the newest src/ mtime
+      // against the buildstamp baked into this bundle at build time; when
+      // stale, ask, repackage, and relaunch into the fresh .app.
+      selfUpdate(srcDir, rebuilder);
     }
   }
 
@@ -152,6 +159,79 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => app.quit());
+
+// ── launch-time self-update (dev-tree installs only) ─────────────────────────
+
+/** The packaged .app under `<src>/release/`, or null before the first package. */
+function packagedAppPath(srcDir: string): string | null {
+  const release = path.join(srcDir, 'release');
+  let dirs: string[];
+  try {
+    dirs = readdirSync(release);
+  } catch {
+    return null;
+  }
+  for (const d of ['.', ...dirs]) {
+    let entries: string[];
+    try {
+      entries = readdirSync(path.join(release, d));
+    } catch {
+      continue;
+    }
+    const hit = entries.find((e) => e.endsWith('.app'));
+    if (hit) return path.join(release, d, hit);
+  }
+  return null;
+}
+
+/** When src/ is newer than this bundle's buildstamp, offer to repackage and
+ *  relaunch. The stamp is written by esbuild.mjs into dist/ and shipped inside
+ *  the .app; a bundle with no stamp predates the mechanism and counts as stale.
+ *  Runs only for a packaged app inside its own dev tree (caller guards). */
+function selfUpdate(srcDir: string, rebuilder: DevRebuilder): void {
+  let builtAt = 0;
+  try {
+    builtAt = Number(JSON.parse(readFileSync(path.join(app.getAppPath(), 'dist', 'buildstamp.json'), 'utf8')).builtAt) || 0;
+  } catch {
+    /* no stamp → stale */
+  }
+  // 2s slack: package.json copying and esbuild output can land timestamps a
+  // hair apart; only a genuinely newer edit should count.
+  if (newestSourceMtime(path.join(srcDir, 'src')) <= builtAt + 2000) return;
+
+  void dialog
+    .showMessageBox(win!, {
+      type: 'question',
+      buttons: ['Update & Relaunch', 'Not Now'],
+      defaultId: 0,
+      cancelId: 1,
+      message: 'A newer Greenhouse build is available',
+      detail: `The source tree has changed since this app was packaged${builtAt ? ` (${new Date(builtAt).toLocaleString()})` : ''}. Repackage and relaunch now? Takes about a minute; the app stays usable meanwhile.`,
+    })
+    .then(({ response }) => {
+      if (response !== 0) return;
+      rebuilder.packageOnce((ok) => {
+        if (!ok) {
+          void dialog.showMessageBox(win!, {
+            type: 'error',
+            message: 'Update failed',
+            detail: `The repackage did not complete — see dev-rebuild.log under ${app.getPath('userData')}. This build keeps running.`,
+          });
+          return;
+        }
+        const appPath = packagedAppPath(srcDir);
+        if (!appPath) return; // nothing to relaunch into — keep running
+        // macOS `open` focuses a running instance instead of launching, so the
+        // reopen must happen AFTER this process exits: a detached shell sleeps
+        // past our quit, then opens the fresh bundle.
+        spawn('sh', ['-c', 'sleep 1.5; exec open "$0"', appPath], {
+          detached: true,
+          stdio: 'ignore',
+        }).unref();
+        app.quit();
+      });
+    });
+}
 
 // Screenshot verification harness (WEBTESTS.md): EG_SHOT=<dir> captures the
 // list (default view), the Space peek popover, the tool page, the grid, the

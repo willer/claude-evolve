@@ -1,5 +1,5 @@
 import { build } from 'esbuild';
-import { cpSync, mkdirSync } from 'node:fs';
+import { cpSync, mkdirSync, writeFileSync } from 'node:fs';
 
 const common = { bundle: true, sourcemap: true, logLevel: 'error' };
 
@@ -32,3 +32,8 @@ await build({
 mkdirSync('dist/renderer', { recursive: true });
 cpSync('src/renderer/index.html', 'dist/renderer/index.html');
 cpSync('node_modules/@xterm/xterm/css/xterm.css', 'dist/renderer/xterm.css');
+
+// Build timestamp, shipped inside the .app (matches the "dist/**" packaging
+// glob). The launch-time self-update compares it against the newest src/ mtime
+// to decide whether the packaged bundle is stale — see main.ts.
+writeFileSync('dist/buildstamp.json', JSON.stringify({ builtAt: Date.now() }));

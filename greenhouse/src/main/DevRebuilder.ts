@@ -19,6 +19,35 @@ import * as path from 'node:path';
 // doesn't trigger spurious builds.
 const SOURCE_RE = /\.(ts|tsx|html|css)$/;
 
+/** Newest mtime (ms) across the source files under `srcDir` that would trigger
+ *  a repackage — the launch-time staleness check compares this against the
+ *  running bundle's buildstamp. 0 when the dir is unreadable. */
+export function newestSourceMtime(srcDir: string): number {
+  let newest = 0;
+  const walk = (dir: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (e.name.startsWith('.')) continue;
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (SOURCE_RE.test(e.name)) {
+        try {
+          newest = Math.max(newest, fs.statSync(p).mtimeMs);
+        } catch {
+          /* raced a delete */
+        }
+      }
+    }
+  };
+  walk(srcDir);
+  return newest;
+}
+
 export class DevRebuilder {
   private watcher: fs.FSWatcher | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -76,7 +105,16 @@ export class DevRebuilder {
     this.debounceTimer = setTimeout(() => this.rebuild(), this.quietMs);
   }
 
-  private rebuild(): void {
+  /** One immediate repackage (the launch-time self-update), sharing the
+   *  single-flight guard with the watcher so the two can never build at once.
+   *  `onDone` fires with the build result; a build already in flight reports
+   *  failure immediately rather than queueing. */
+  packageOnce(onDone: (ok: boolean) => void): void {
+    if (this.stopped || this.building) return onDone(false);
+    this.rebuild(onDone);
+  }
+
+  private rebuild(onDone?: (ok: boolean) => void): void {
     this.debounceTimer = null;
     if (this.stopped || this.building) return;
     this.building = true;
@@ -107,6 +145,7 @@ export class DevRebuilder {
       const secs = Math.round((Date.now() - started) / 1000);
       if (ok) this.log(`✅ repackaged in ${secs}s — relaunch from the Dock for the latest`);
       else this.log(`✗ package failed after ${secs}s: ${detail}\n${tail.join('')}`);
+      onDone?.(ok);
       // Edits that arrived mid-build queue exactly one more pass.
       if (this.dirty && !this.stopped) this.onChange(null);
     };

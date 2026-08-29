@@ -196,6 +196,13 @@ to verify the NAV chart deterministically.
       scrolls tmux history (every attached session incl. tool pages like
       backtest-all — via xterm's custom wheel hook → tmux copy-mode); ⌘esc
       backs out even while focused
+- [ ] Launch-time self-update (hands-on, dev-tree .app only): edit any src/
+      file (or git pull) while the app is CLOSED, then launch from the Dock —
+      a "newer Greenhouse build is available" dialog offers Update & Relaunch.
+      Confirming repackages (~1 min, app stays usable) and the app quits and
+      reopens on the fresh build; Not Now keeps the stale build running.
+      No dialog when the bundle is current, for shipped installs outside the
+      source tree, or under EG_SHOT/EG_ROOTS/EG_NO_AUTOREBUILD=1
 - [ ] Terminal file drop (hands-on): dragging a file (e.g. a Desktop
       screenshot) onto a session terminal types its absolute path into that
       session (space-containing paths single-quoted), then focuses it; a drop
