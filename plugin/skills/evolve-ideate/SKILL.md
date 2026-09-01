@@ -1,12 +1,12 @@
 ---
 name: evolve-ideate
-description: Run one generation of ideation for a claude-evolve workspace. Reads the top performers, BRIEF, and accumulated notes, then launches parallel Fable subagents at high effort — three isolated framed branches for novel exploration plus one each for hill climbing, structural mutation, and crossover — to propose new algorithm variants, selects the best, and appends them as pending rows in evolution.csv. Use when the user says "ideate", "generate new ideas", "make the next generation", or when the omnibus evolve loop drains its pending queue. Run only ONE ideation at a time per workspace.
+description: Run one generation of ideation for a claude-evolve workspace. Reads the top performers, BRIEF, and accumulated notes, then launches parallel Fable subagents at xhigh effort — three isolated framed branches for novel exploration plus one each for hill climbing, structural mutation, and crossover — to propose new algorithm variants, selects the best, and appends them as pending rows in evolution.csv. Use when the user says "ideate", "generate new ideas", "make the next generation", or when the omnibus evolve loop drains its pending queue. Run only ONE ideation at a time per workspace.
 argument-hint: "[--working-dir DIR] [count]"
 ---
 
 # evolve-ideate
 
-Generate the next batch of candidate ideas for an evolution workspace. This is the **Fable-tier** creative step (the run's smartest model, at high effort). It fans out parallel subagents — three isolated, differently-framed branches for novel exploration (best-of-pool selection afterward) plus one per remaining strategy — each proposing variants grounded in the current best performers and the BRIEF, then writes the winners to `evolution.csv` as `pending` rows for the coding/scoring loop to pick up.
+Generate the next batch of candidate ideas for an evolution workspace. This is the **Fable-tier** creative step (the run's smartest model, at xhigh effort). It fans out parallel subagents — three isolated, differently-framed branches for novel exploration (best-of-pool selection afterward) plus one per remaining strategy — each proposing variants grounded in the current best performers and the BRIEF, then writes the winners to `evolution.csv` as `pending` rows for the coding/scoring loop to pick up.
 
 > **One at a time.** Two concurrent ideation runs would race on candidate IDs and generation numbering. This skill takes a lock and refuses to start if another ideation is in progress for the same workspace.
 
@@ -57,22 +57,21 @@ If `novel_intents` is non-empty, split the `novel_exploration` ID slice by its c
 
 ### Pick each branch's idea source
 
-For variety, some branches source their ideas from an external AI system instead of Fable — different model families produce genuinely different idea distributions. `novel_exploration` runs as **three isolated branches** (see Step 3), so it gets three rolls; the other strategies get one each. Roll the dice **once per branch** — 1/7 chance `codex` (GPT-5.6 Sol at high effort), 1/7 chance `gemini`, 1/7 chance `glm` (GLM-5.3 Flash via opencode), 1/7 chance `kimi` (Kimi K3 via opencode), 1/7 chance `qwen` (Qwen3.8-Max via opencode), otherwise `fable`:
+For variety, some branches source their ideas from an external AI system instead of Fable — different model families produce genuinely different idea distributions. `novel_exploration` runs as **three isolated branches** (see Step 3), so it gets three rolls; the other strategies get one each. Roll the dice **once per branch** — 1/6 chance `codex` (GPT-5.6 Sol at high effort), 1/6 chance `glm` (GLM-5.3 Flash via opencode), 1/6 chance `kimi` (Kimi K3 via opencode), 1/6 chance `qwen` (Qwen3.8-Max via opencode), otherwise `fable`:
 
 ```bash
 for s in novel_A novel_B novel_C hill_climbing structural_mutation crossover_hybrid; do
-  r=$(( RANDOM % 7 ))
+  r=$(( RANDOM % 6 ))
   if   [ "$r" -eq 0 ]; then src=codex
-  elif [ "$r" -eq 1 ]; then src=gemini
-  elif [ "$r" -eq 2 ]; then src=glm
-  elif [ "$r" -eq 3 ]; then src=kimi
-  elif [ "$r" -eq 4 ]; then src=qwen
+  elif [ "$r" -eq 1 ]; then src=glm
+  elif [ "$r" -eq 2 ]; then src=kimi
+  elif [ "$r" -eq 3 ]; then src=qwen
   else src=fable; fi
   echo "$s=$src"
 done
 ```
 
-Note each branch's `src`. It controls two things below: a `codex`/`gemini`/`glm`/`kimi`/`qwen` branch's subagent fetches its ideas from that external CLI (Step 3), and every idea kept from that branch is tagged with that source in `idea-LLM` (Step 4). Strategies with count 0 are skipped regardless of their roll.
+Note each branch's `src`. It controls two things below: a `codex`/`glm`/`kimi`/`qwen` branch's subagent fetches its ideas from that external CLI (Step 3), and every idea kept from that branch is tagged with that source in `idea-LLM` (Step 4). Strategies with count 0 are skipped regardless of their roll.
 
 ### Roll cognitive frames for the divergent strategies
 
@@ -95,7 +94,7 @@ printf '%s\n' inversion biology remove_assumption crudest maximalist speedrunner
 
 ## Step 3 — Fan out ideator subagents
 
-Launch all branches **in parallel** — one `Agent` call per branch, all in a single message, each with `subagent_type: "claude-evolve:ideator"` (the plugin's ideator agent — Fable at high effort; do not pass a `model` override). Give each subagent: its assigned IDs, the relevant parents, the BRIEF excerpt, the accumulated notes, and the list of existing descriptions (so it avoids duplicates). Each must return **only** a JSON array of `{"id","basedOnId","description"}` — one object per assigned ID, using the exact IDs you gave it.
+Launch all branches **in parallel** — one `Agent` call per branch, all in a single message, each with `subagent_type: "claude-evolve:ideator"` (the plugin's ideator agent — Fable at xhigh effort; do not pass a `model` override). Give each subagent: its assigned IDs, the relevant parents, the BRIEF excerpt, the accumulated notes, and the list of existing descriptions (so it avoids duplicates). Each must return **only** a JSON array of `{"id","basedOnId","description"}` — one object per assigned ID, using the exact IDs you gave it.
 
 `novel_exploration` launches as **three branches** (novel_A/B/C from Step 2). All three get the *same* full slate of novel IDs and the same context, but each gets its own frame and its own `src` — and none of them sees the others' output. That isolation is the point: branches that see each other anchor each other and collapse into one wider thought. The orchestrator (you) pools their ~3× ideas and selects the best in Step 4. Each of the other three strategies launches as one branch.
 
@@ -105,10 +104,10 @@ Frame injection: for each framed branch (the three novel branches and structural
 Generate through that vantage point. The first three obvious ideas anyone would propose for this BRIEF are banned — push past them into approaches nobody would list first.
 ```
 
-For a branch whose `src` (from Step 2) is `codex`, `gemini`, `glm`, `kimi`, or `qwen`, add this line to that subagent's prompt so it sources its ideas externally instead of generating them itself (the frame and ban-the-obvious lines must be carried into the external tool's prompt too):
+For a branch whose `src` (from Step 2) is `codex`, `glm`, `kimi`, or `qwen`, add this line to that subagent's prompt so it sources its ideas externally instead of generating them itself (the frame and ban-the-obvious lines must be carried into the external tool's prompt too):
 
 ```
-Source these ideas from the external tool `<codex|gemini|glm|kimi|qwen>`: build one prompt carrying the strategy, parents, BRIEF, existing descriptions, and the exact IDs, run it via Bash (codex: `codex exec -m gpt-5.6-sol -c model_reasoning_effort="high" "<prompt>"`; gemini: `agy --dangerously-skip-permissions -p "<prompt>"` (the Antigravity CLI); glm: `opencode run -m openrouter/z-ai/glm-5.3-flash "<prompt>"`; kimi: `opencode run -m openrouter/moonshotai/kimi-k3 "<prompt>"`; qwen: `opencode run -m openrouter/qwen/qwen3.8-max "<prompt>"`; for every opencode call, `source ~/.zprofile` first in the same Bash invocation — the session env may carry a corp OPENROUTER_API_KEY whose data policy blocks these providers, and the personal key in ~/.zprofile must win), then return its ideas in the required schema (sanity-checked for strategy fit and novelty). Fall back to generating them yourself only if the tool errors.
+Source these ideas from the external tool `<codex|glm|kimi|qwen>`: build one prompt carrying the strategy, parents, BRIEF, existing descriptions, and the exact IDs, run it via Bash (codex: `codex exec -m gpt-5.6-sol -c model_reasoning_effort="high" "<prompt>"`; glm: `opencode run -m openrouter/z-ai/glm-5.3-flash "<prompt>"`; kimi: `opencode run -m openrouter/moonshotai/kimi-k3 "<prompt>"`; qwen: `opencode run -m openrouter/qwen/qwen3.8-max "<prompt>"`; for every opencode call, `source ~/.zprofile` first in the same Bash invocation — the session env may carry a corp OPENROUTER_API_KEY whose data policy blocks these providers, and the personal key in ~/.zprofile must win), then return its ideas in the required schema (sanity-checked for strategy fit and novelty). Fall back to generating them yourself only if the tool errors.
 These calls are SLOW — the tool must read the whole BRIEF and idea history and think hard about all of it, which routinely takes MANY MINUTES and a large number of thinking tokens. Launch it with Bash `run_in_background: true` and poll its output file; NEVER wrap it in `timeout` and never block on it in the foreground (a foreground Bash call is killed at 300s and returns empty, which looks exactly like a model failure but is not). Allow at least 15 minutes before falling back, and report a timeout as a timeout, not as "the tool returned nothing".
 ```
 
@@ -150,13 +149,13 @@ Gather the JSON arrays from all subagents.
 
 Then drop any idea (all strategies) whose description is a near-duplicate of an existing description or of another new idea (simple judgment — same technique with trivial wording changes). Keep the IDs you reserved; don't invent new ones.
 
-Tag each surviving idea's `idea-LLM` with its branch's `src` from Step 2 (`fable`, `codex`, `gemini`, `glm`, `kimi`, or `qwen`) — non-novel IDs are disjoint per strategy so map by ID slice; novel winners are tagged by the branch that produced them.
+Tag each surviving idea's `idea-LLM` with its branch's `src` from Step 2 (`fable`, `codex`, `glm`, `kimi`, or `qwen`) — non-novel IDs are disjoint per strategy so map by ID slice; novel winners are tagged by the branch that produced them.
 
 Append the survivors in one call (pass the combined JSON array):
 
 ```bash
 python3 "$CLAUDE_PLUGIN_ROOT/scripts/evolve_csv.py" --working-dir "<WORKING_DIR>" \
-  append-ideas '[{"id":"gen03-001","basedOnId":"","description":"...","idea-LLM":"fable"},{"id":"gen03-002","basedOnId":"gen02-004","description":"...","idea-LLM":"gemini"},...]'
+  append-ideas '[{"id":"gen03-001","basedOnId":"","description":"...","idea-LLM":"fable"},{"id":"gen03-002","basedOnId":"gen02-004","description":"...","idea-LLM":"kimi"},...]'
 ```
 
 It prints `{"added": N}`.

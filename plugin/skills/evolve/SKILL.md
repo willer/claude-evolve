@@ -1,6 +1,6 @@
 ---
 name: evolve
-description: Run the full claude-evolve loop for a workspace — the omnibus. Drives evolution.csv through its cycle (code pending candidates, score them, ideate the next generation when the queue drains, repeat) as a self-respawning pool of background worker subagents, so the main conversation stays a clean dashboard. Use when the user says "run evolution", "evolve", "start the evolution run", "process the pending candidates", or wants the whole pipeline driven end to end. Equivalent to `claude-evolve run`: codex (GPT-5.6 Luna) codes each candidate first with the Opus worker (medium effort) judging the result and falling back to coding it itself, the evaluator scores, Fable (high effort) ideates.
+description: Run the full claude-evolve loop for a workspace — the omnibus. Drives evolution.csv through its cycle (code pending candidates, score them, ideate the next generation when the queue drains, repeat) as a self-respawning pool of background worker subagents, so the main conversation stays a clean dashboard. Use when the user says "run evolution", "evolve", "start the evolution run", "process the pending candidates", or wants the whole pipeline driven end to end. Equivalent to `claude-evolve run`: codex (GPT-5.6 Luna) codes each candidate first with the Fable worker (low effort) judging the result and falling back to coding it itself, the evaluator scores, Fable (xhigh effort) ideates.
 argument-hint: "[--working-dir DIR] [--max-workers N]"
 ---
 
@@ -8,9 +8,9 @@ argument-hint: "[--working-dir DIR] [--max-workers N]"
 
 `/evolve` is the orchestrator. It runs the evolution loop the way `claude-evolve run` does, but with subagents instead of external CLIs:
 
-1. **Code** each `pending` candidate (codex/GPT-5.6-luna edits `evolution_<id>.py` to match its idea; the Opus worker, medium effort, judges the result and codes it itself if codex falls short).
+1. **Code** each `pending` candidate (codex/GPT-5.6-luna edits `evolution_<id>.py` to match its idea; the Fable worker, low effort, judges the result and codes it itself if codex falls short).
 2. **Score** it (run the workspace evaluator under the sandbox; record the number).
-3. When no `pending` candidates remain, **ideate** the next generation (Fable at high effort, via the evolve-ideate skill).
+3. When no `pending` candidates remain, **ideate** the next generation (Fable at xhigh effort, via the evolve-ideate skill).
 4. Repeat until ideation can't make progress or the user stops it.
 
 The design is stolen from the technical-lead `/ship` skill: **this conversation is a re-spawn pool.** The parent (this session) does almost nothing — it resolves setup once, launches a few background worker agents, and relaunches each one the instant it returns. All the noisy work (file reads, edits, evaluator output) happens *inside* the worker subagents, so the main thread stays a short, readable status feed. That isolation is the whole point of doing code+score in subagents.
@@ -36,7 +36,7 @@ python3 "$PLUGIN_ROOT/scripts/evolve_csv.py" --working-dir "<WORKING_DIR>" stats
 
 Decide `N = min(max_workers, pending_count)` but at least 1. Launch `N` worker `Agent`s **in a single message**, each:
 
-- `subagent_type: "claude-evolve:coder"` ← the plugin's coder agent (Opus at medium effort, restricted tools); its definition holds the whole worker protocol — codex-first coding, judgment, fallback, scoring. Do not pass a `model` override.
+- `subagent_type: "claude-evolve:coder"` ← the plugin's coder agent (Fable at low effort, restricted tools); its definition holds the whole worker protocol — codex-first coding, judgment, fallback, scoring. Do not pass a `model` override.
 - `run_in_background: true` ← required, so the parent stays free and workers run concurrently
 - `name: "evolve-worker-<i>"` ← so a completion notification maps back
 - `description: "evolve worker <i>"`
