@@ -14,6 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Script-run ideation branches (plugin 0.3.0)** — `scripts/ideate_branch.py`
+  assembles every ideation branch's prompt from the context JSON and, for the
+  external sources the dice roll picks (codex GPT-6 Astra, GLM, Kimi, Qwen),
+  runs the CLI itself and parses the JSON array. Fable branches get ONE
+  `ideator` subagent that reads the prompt file. Previously every external
+  branch also spawned a full xhigh Fable subagent whose only job was to build
+  the prompt and shell out — six of those per generation, each carrying the
+  BRIEF, notes, and thousands of descriptions, was the dominant Claude spend
+  of a run and tripped the spend cap under multi-board load. Model IDs for the
+  roll now live in the script, not in skill prose. No cross-model fallback: a
+  failed branch reports `error`/`timeout` and the orchestrator decides.
+
 - **Divergent ideation (plugin 0.2.0)** — absorbed the parallel-divergence
   mechanics from the ADHD ideation skill into `evolve-ideate`:
   `novel_exploration` now fans out as three isolated branches (each with its

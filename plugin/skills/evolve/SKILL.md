@@ -80,7 +80,7 @@ Only when the queue is fully drained and the pool is idle.
    - `auto_ideate` is `false` (the workspace opts out of auto-ideation), **or**
    - `complete < min_completed_for_ideation` (not enough completed candidates to learn from), **or**
    - the previous ideation pass added **0** new ideas (evolution has converged — don't loop forever on empty ideation).
-3. Otherwise run **one** ideation pass using the **evolve-ideate** skill for this workspace (it fans out the Fable strategy subagents and appends new `pending` rows). When it returns, note how many ideas it added.
+3. Otherwise run **one** ideation pass using the **evolve-ideate** skill for this workspace (it fans out the ideation branches — Fable subagents and script-run external models — and appends new `pending` rows). When it returns, note how many ideas it added.
    - 0 added → record a consecutive no-op; if this is the 2nd in a row, stop as converged.
    - ≥1 added → go back to **Phase 1** and relaunch the worker pool for the new generation.
 

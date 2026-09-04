@@ -25,7 +25,7 @@ plugin runs the loop.
 | Skill | Tier | Does |
 |-------|------|------|
 | `evolve` | orchestrator | Runs the whole loop as a self-respawning pool of background worker subagents. The main conversation stays a clean dashboard. Equivalent to `claude-evolve run`. |
-| `evolve-ideate` | Fable (high) | One generation of ideation. Fans out parallel strategy subagents (novel / hill-climb / structural / crossover) via the plugin's `ideator` agent, appends new `pending` rows. Run one at a time per workspace. |
+| `evolve-ideate` | Fable (xhigh) + external models | One generation of ideation. Six parallel branches (3 framed novel / hill-climb / structural / crossover); each rolls its source — Fable via one `ideator` subagent, or codex GPT-6 Astra / GLM / Kimi / Qwen run directly by `scripts/ideate_branch.py` with no subagent. Appends new `pending` rows. Run one at a time per workspace. |
 | `evolve-code` | Fable (low) | Write the code for one candidate: resolve parent, copy to `evolution_<id>.py`, implement its description. |
 | `evolve-score` | Haiku | Score one candidate: syntax-check, optional `validator.py`, sandboxed `evaluator.py`, write the number to the CSV. Deterministic — the subagent only exists to keep evaluator noise out of the main thread. |
 
@@ -42,8 +42,10 @@ no flag they auto-detect `evolution/config.yaml` or `./config.yaml`. The
   ID generation, sandboxed evaluation) lives under `lib/` and needs nothing
   installed — no npm, no `pip` — falling back to a minimal config parser when
   PyYAML is absent. This plugin is the home of that engine, not a copy of it.
-- **Fixed model roles, defined in `agents/`.** Fable at xhigh effort ideates
-  (`agents/ideator.md`); codex (GPT-5.6 Luna) codes first with the Fable worker
+- **Fixed model roles, defined in `agents/` and `scripts/`.** Fable at xhigh effort ideates
+  (`agents/ideator.md`), sharing the slots with external models the ideation dice
+  roll picks (`scripts/ideate_branch.py` owns those model IDs and runs them
+  without a subagent wrapper); codex (GPT-5.6 Luna) codes first with the Fable worker
   (`agents/coder.md`, restricted tools) judging and falling back to coding
   itself; the evaluator scores. Each agent definition pins its model/effort and
   carries the role's protocol as a system prompt — which also keeps the
@@ -53,8 +55,10 @@ no flag they auto-detect `evolution/config.yaml` or `./config.yaml`. The
   simplicity.) Novelty is enforced by handing the ideators the existing
   descriptions and telling them to stay distinct.
 - **`scripts/`** are thin JSON-emitting CLIs the skills call:
-  `evolve_csv.py` (all CSV reads/writes + ideation context), `prepare.py` (parent
-  resolution + file copy), `score.py` (sandboxed evaluation). All AI judgment
+  `evolve_csv.py` (all CSV reads/writes + ideation context), `ideate_branch.py`
+  (assembles one ideation branch's prompt from the context; runs the external
+  CLI for non-Fable sources), `prepare.py` (parent resolution + file copy),
+  `score.py` (sandboxed evaluation). All AI judgment
   lives in the skills/subagents; everything deterministic lives in the scripts.
 
 ## Honesty
