@@ -47,7 +47,7 @@ tool (`codex`, `glm`, `kimi`, or `qwen`), build a single prompt that hands that 
 strategy, the parents, the BRIEF excerpt, the existing descriptions, the
 exact IDs — and your frame plus its ban-the-obvious rule, if one was
 assigned — and ask it to return the same JSON array. Run it via Bash —
-`codex exec -m gpt-5.6-sol -c model_reasoning_effort="high" "<prompt>"`,
+`codex exec -m gpt-6-astra -c model_reasoning_effort="xhigh" "<prompt>"`,
 `opencode run -m openrouter/z-ai/glm-5.3-flash "<prompt>"` (the `glm` source),
 `opencode run -m openrouter/moonshotai/kimi-k3 "<prompt>"` (the `kimi` source), or
 `opencode run -m openrouter/qwen/qwen3.8-max "<prompt>"` (the `qwen` source).
@@ -65,7 +65,7 @@ just return valid ideas either way.
 **These calls are SLOW — never wait on one synchronously.** The tool is being
 asked to read a whole BRIEF, a top-performer table, and a long list of existing
 descriptions, then think hard about all of it; reasoning models (kimi-k3 and
-`gpt-5.6-sol` at high effort especially) routinely burn many minutes and a large
+`gpt-6-astra` at xhigh effort especially) routinely burn many minutes and a large
 number of thinking tokens before emitting a single character. A foreground Bash
 call caps out at 300s, so wrapping the CLI in `timeout 280` — or any bare
 foreground invocation — kills a healthy run mid-thought and returns empty
