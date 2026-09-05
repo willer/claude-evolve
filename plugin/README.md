@@ -25,7 +25,7 @@ plugin runs the loop.
 | Skill | Tier | Does |
 |-------|------|------|
 | `evolve` | orchestrator | Runs the whole loop as a self-respawning pool of background worker subagents. The main conversation stays a clean dashboard. Equivalent to `claude-evolve run`. |
-| `evolve-ideate` | Fable (xhigh) + external models | One generation of ideation. Six parallel branches (3 framed novel / hill-climb / structural / crossover); each rolls its source — Fable via one `ideator` subagent, or codex GPT-6 Astra / GLM / Kimi / Qwen run directly by `scripts/ideate_branch.py` with no subagent. Appends new `pending` rows. Run one at a time per workspace. |
+| `evolve-ideate` | Fable (xhigh) + external models | One generation of ideation. Six parallel branches (3 framed novel / hill-climb / structural / crossover); each rolls its source — 3/6 Fable via one `ideator` subagent, 2/6 codex GPT-6 Astra, 1/6 Grok 4.6, the external two run directly by `scripts/ideate_branch.py` with no subagent. Appends new `pending` rows. Run one at a time per workspace. |
 | `evolve-code` | Fable (low) | Write the code for one candidate: resolve parent, copy to `evolution_<id>.py`, implement its description. |
 | `evolve-score` | Haiku | Score one candidate: syntax-check, optional `validator.py`, sandboxed `evaluator.py`, write the number to the CSV. Deterministic — the subagent only exists to keep evaluator noise out of the main thread. |
 

@@ -11,9 +11,12 @@ assembly deterministically instead:
   --source fable            write the prompt file and exit; the orchestrator
                             hands the file path to ONE claude-evolve:ideator
                             subagent, which reads it and answers.
-  --source codex|glm|kimi|qwen
+  --source codex|grok|glm|kimi|qwen
                             write the prompt file, run the external CLI on it,
                             parse its JSON array, write <out>. No subagent.
+
+The skill's dice roll uses ENABLED_SOURCES (fable / codex GPT-6 Astra / grok);
+the other opencode models stay wired so a roll change is a one-line edit.
 
 Usage:
   ideate_branch.py --working-dir DIR --context-file ctx.json --out branch.json
@@ -42,11 +45,18 @@ from evolve_common import add_workspace_args, load_workspace
 CODEX_MODEL = "gpt-6-astra"
 CODEX_EFFORT = "xhigh"
 OPENCODE_MODELS = {
+    "grok": "openrouter/x-ai/grok-4.6",
     "glm": "openrouter/z-ai/glm-5.3-flash",
     "kimi": "openrouter/moonshotai/kimi-k3",
     "qwen": "openrouter/qwen/qwen3.8-max",
 }
-SOURCES = ("fable", "codex") + tuple(OPENCODE_MODELS)
+# opencode --variant = provider reasoning effort; only set where the model has one.
+OPENCODE_VARIANTS = {"grok": "max"}
+SOURCES = ("fable", "codex") + tuple(OPENCODE_MODELS)  # everything the script can run
+# AIDEV-NOTE: Sept 5 2026 policy — "only the very best for ideation": the roll is
+# 3/6 Fable 5.1 xhigh (reads as the better trader), 2/6 GPT-6 Astra xhigh, 1/6
+# Grok 4.6 — it attacks from a different direction, so it earns the diversity slot. GLM/Kimi/Qwen stay wired (not rolled) because this changes.
+ENABLED_SOURCES = ("fable", "codex", "grok")
 STRATEGIES = ("novel_exploration", "hill_climbing", "structural_mutation", "crossover_hybrid")
 DEFAULT_TIMEOUT = 1800  # 30 min — reasoning models at xhigh routinely take 10+ min
 
@@ -212,10 +222,14 @@ def run_external(source, prompt_file, workdir, timeout):
         # corporate OPENROUTER_API_KEY whose data policy blocks these providers;
         # the personal key in ~/.zprofile must win. Prompt is attached as a
         # file so a 300KB prompt never hits ARG_MAX.
+        # `-f` is a LIST option in opencode's yargs parser: anything after it is
+        # eaten as another filename, so the message must come FIRST.
         model = OPENCODE_MODELS[source]
+        variant = OPENCODE_VARIANTS.get(source)
+        variant_arg = f"--variant {variant} " if variant else ""
         shell = (f"source ~/.zprofile >/dev/null 2>&1; cd {json.dumps(str(workdir))}; "
-                 f"opencode run --pure -m {model} -f {json.dumps(str(prompt_file))} "
-                 f"'Answer the prompt in the attached file. Return ONLY the JSON array it asks for.'")
+                 f"opencode run 'Answer the prompt in the attached file. Return ONLY the JSON array it asks for.' "
+                 f"--pure -m {model} {variant_arg}-f {json.dumps(str(prompt_file))}")
         proc = subprocess.run(["bash", "-lc", shell], stdin=subprocess.DEVNULL,
                               capture_output=True, text=True, timeout=timeout)
     return proc.returncode, (proc.stdout or ""), (proc.stderr or "")
