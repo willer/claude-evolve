@@ -27,3 +27,7 @@
   > `computeStats(text, pinId)` → `stats.pinned` (pure, unit-tested; 95/95 green,
   > typecheck clean). Verified via the EG_SHOT harness against a synthetic pinned
   > root: `focus-pinned head="Pinned — gen02-001 · 1.6000 production pin deployed"`.
+- [x] change the coder helper/judge to run on opus medium rather than fable low. even if fable is more efficient, it has its own separate session limit and that's getting hit sooner than the global one.
+  - Pinned `plugin/agents/coder.md` to model opus / effort medium (was fable / low) and updated the matching prose in the evolve and evolve-code skills plus plugin README; plugin version bumped to 0.3.1.
+  - The `run-LLM` CSV tag the worker writes when it codes a candidate itself is now `opus` instead of `fable`; old rows keep saying `fable` because that is what actually coded them, and the column is free text so nothing needed migrating.
+  - Deliberately left ideation alone — the ideator agent and the fable/codex/grok dice roll are unchanged; if the loop misbehaves, check first that the coder subagent really launches on Opus (the evolve skill must still pass NO `model` override, letting the agent definition win).

@@ -12,7 +12,7 @@ Evolution is a greenhouse: each generation grows new algorithm variants from the
 best of the last one. The loop is always the same:
 
 1. **Ideate** new variants from the top performers + your `BRIEF.md` (Fable, xhigh effort).
-2. **Code** each variant by editing a copy of its parent algorithm (codex-first, Fable judge/fallback).
+2. **Code** each variant by editing a copy of its parent algorithm (codex-first, Opus judge/fallback).
 3. **Score** each variant by running your `evaluator.py` under a sandbox (Haiku /
    deterministic).
 4. Record the result in `evolution.csv` and repeat.
@@ -26,7 +26,7 @@ plugin runs the loop.
 |-------|------|------|
 | `evolve` | orchestrator | Runs the whole loop as a self-respawning pool of background worker subagents. The main conversation stays a clean dashboard. Equivalent to `claude-evolve run`. |
 | `evolve-ideate` | Fable (xhigh) + external models | One generation of ideation. Six parallel branches (3 framed novel / hill-climb / structural / crossover); each rolls its source — 3/6 Fable via one `ideator` subagent, 2/6 codex GPT-6 Astra, 1/6 Grok 4.6, the external two run directly by `scripts/ideate_branch.py` with no subagent. Appends new `pending` rows. Run one at a time per workspace. |
-| `evolve-code` | Fable (low) | Write the code for one candidate: resolve parent, copy to `evolution_<id>.py`, implement its description. |
+| `evolve-code` | Opus (medium) | Write the code for one candidate: resolve parent, copy to `evolution_<id>.py`, implement its description. |
 | `evolve-score` | Haiku | Score one candidate: syntax-check, optional `validator.py`, sandboxed `evaluator.py`, write the number to the CSV. Deterministic — the subagent only exists to keep evaluator noise out of the main thread. |
 
 ## Workspace
@@ -45,9 +45,9 @@ no flag they auto-detect `evolution/config.yaml` or `./config.yaml`. The
 - **Fixed model roles, defined in `agents/` and `scripts/`.** Fable at xhigh effort ideates
   (`agents/ideator.md`), sharing the slots with external models the ideation dice
   roll picks (`scripts/ideate_branch.py` owns those model IDs and runs them
-  without a subagent wrapper); codex (GPT-5.6 Luna) codes first with the Fable worker
-  (`agents/coder.md`, restricted tools) judging and falling back to coding
-  itself; the evaluator scores. Each agent definition pins its model/effort and
+  without a subagent wrapper); codex (GPT-5.6 Luna) codes first with the Opus worker
+  (`agents/coder.md`, medium effort, restricted tools) judging and falling back to
+  coding itself; the evaluator scores. Each agent definition pins its model/effort and
   carries the role's protocol as a system prompt — which also keeps the
   security rules above the untrusted CSV descriptions the workers read.
   (Earlier claude-evolve experiments with a multi-model bandit, escalation

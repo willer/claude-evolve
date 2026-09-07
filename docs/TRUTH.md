@@ -179,3 +179,33 @@ package), staleness compare exercised on live data on both sides (fresh build
 → not stale; src newer than stamp → stale). The dialog/relaunch path is
 hands-on (WEBTESTS.md) — it needs a real Dock launch. 95/95 unit tests green,
 typecheck clean.
+
+## Plugin coder/judge runs on Opus medium, not Fable low (2026-09-07)
+
+The `claude-evolve:coder` agent (`plugin/agents/coder.md`) is pinned to
+`model: opus` / `effort: medium`. It was Fable at low effort, chosen for
+efficiency. The reason for the switch is capacity, not quality: Fable carries
+its own per-model session limit, separate from the global one, and the evolve
+run's coder pool — which respawns continuously and is by far the highest-volume
+Anthropic role in the loop — was exhausting the Fable limit well before the
+global limit. Opus draws on the global budget instead, so the loop keeps
+running longer.
+
+Scope: the CODER/judge role only. Ideation is unchanged — `agents/ideator.md`
+stays Fable 5.1 xhigh, and the ideation dice roll in
+`scripts/ideate_branch.py` (`ENABLED_SOURCES` = fable/codex/grok, 3/6-2/6-1/6)
+is untouched. Coding is still codex-first: codex (GPT-5.6 Luna) takes the first
+pass and the Opus worker judges it, coding the candidate itself only when codex
+falls short.
+
+The model tag written to the CSV's `run-LLM` column when the worker codes a
+candidate itself changed `fable` → `opus` (in both the agent and the standalone
+`evolve-code` skill). `run-LLM` is free text — no enum, no migration needed —
+so historical rows keep saying `fable` and that is correct: they were coded by
+Fable. Greenhouse reads the column as an opaque string.
+
+This is prompt/frontmatter configuration with no executable surface, so there
+is no unit test for it; the check is that `plugin/agents/coder.md` frontmatter
+parses with model/effort and that no coder-side `fable` reference survives
+(`grep -rni fable plugin/` should return ideation-side hits only). Plugin
+version bumped to 0.3.1.
