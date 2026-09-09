@@ -248,6 +248,25 @@ function devShots(dir: string): void {
   const js = (code: string) => win!.webContents.executeJavaScript(code);
   const key = (k: string) => js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(k)} }))`);
   const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  // Hover readout probe: move the pointer to `frac` across the enlarged SVG in `sel`
+  // and report what the chart said there — the tooltip's title/value text plus the
+  // crosshair layer's node count (1 line + one dot per series). A static image would
+  // report tip=null, so a non-null tip IS the proof the zoom is interactive.
+  const hoverProbe = (sel: string, frac: number) =>
+    js(`(() => {
+      const host = document.querySelector(${JSON.stringify(sel)});
+      const svg = host && host.querySelector('svg');
+      if (!svg) return JSON.stringify({ err: 'no svg' });
+      const b = svg.getBoundingClientRect();
+      svg.dispatchEvent(new MouseEvent('mousemove', {
+        bubbles: true, clientX: b.left + b.width * ${frac}, clientY: b.top + b.height / 2,
+      }));
+      const tip = host.querySelector('.chart-tip.on');
+      return JSON.stringify({
+        tip: tip ? tip.textContent.replace(/\\s+/g, ' ').trim() : null,
+        marks: host.querySelectorAll('.hv-layer > *').length,
+      });
+    })()`);
   setTimeout(async () => {
     // Window-bounds restore check: logs the frame the window launched with so
     // a seeded prefs.json windowBounds can be confirmed against it.
@@ -333,7 +352,18 @@ function devShots(dir: string): void {
     // equity artifact needed), so this shot is workspace-agnostic.
     await js(`document.querySelector('#detail [data-chart="spark-gen"]')?.click()`);
     await pause(500);
-    await shot('detail-zoom.png');
+    // Hover readout: the enlarged chart is live, not a repainted image — a mousemove
+    // over it must produce a crosshair + an exact "gen N / best score" tooltip.
+    console.log(`EG_SHOT zoom-hover=${await hoverProbe('#chart-zoom-overlay .zoom-box', 0.5)}`);
+    await shot('detail-zoom-hover.png');
+    await key('Escape');
+    await pause(300);
+    // Same probe on the multi-line year chart: its column carries EVERY year's return
+    // at that generation, so the tooltip lists one row per return_YYYY series.
+    await js(`document.querySelector('#detail [data-chart="year-gen"]')?.click()`);
+    await pause(500);
+    console.log(`EG_SHOT year-hover=${await hoverProbe('#chart-zoom-overlay .zoom-box', 0.7)}`);
+    await shot('detail-zoom-year-hover.png');
     await key('Escape');
     await pause(300);
     // NAV chart opens the interactive viewer (axes path: Y %-return gutter, the
@@ -351,6 +381,8 @@ function devShots(dir: string): void {
     );
     await pause(300);
     await shot('detail-zoom-nav-in.png');
+    console.log(`EG_SHOT nav-hover=${await hoverProbe('#nav-zoom-plot', 0.6)}`);
+    await shot('detail-zoom-nav-hover.png');
     await key('Escape');
     await pause(300);
     // Focus-stability regression check: focus the attached terminal, span a

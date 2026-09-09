@@ -36,7 +36,10 @@ signed-position pane when the equity artifact carries one), clicks `+` three
 times for `shots/detail-zoom-nav-in.png` (the time window narrows about its
 centre and the Y axis + date range + return/maxDD/Sharpe badge all recompute to
 the visible slice — proves it's a live chart, not a static enlarge), pressing
-Escape after each. Then quits. NAV charts (leader + per-period) open this
+Escape after each. After each enlarge it also dispatches a `mousemove` across
+the SVG and logs the hover readout it produced (`zoom-hover=`, `year-hover=`,
+`nav-hover=`) into `shots/detail-zoom-hover.png`,
+`shots/detail-zoom-year-hover.png` and `shots/detail-zoom-nav-hover.png`. Then quits. NAV charts (leader + per-period) open this
 interactive viewer; every other chart uses the static enlarge.
 Read-only: it never clicks action buttons (start/stop/run/answer).
 
@@ -143,6 +146,18 @@ to verify the NAV chart deterministically.
       shows min/max score, year-by-gen chart shows min/max/0, NAV-by-period
       tiles gain the %-return gutter (they have none at tile size); Escape or a
       backdrop click closes it
+- [ ] Hover readout (every enlarged chart — detail-zoom-hover.png,
+      detail-zoom-year-hover.png, detail-zoom-nav-hover.png): moving the pointer
+      over an ENLARGED chart snaps a cyan crosshair to the nearest x position,
+      dots each series on its own line, and shows a tooltip with the exact
+      values — "gen N / best score" on the sparkline, "gen N" plus one row per
+      return_YYYY on the year chart, "YYYY-MM-DD / return / drawdown / position"
+      on a NAV chart. The tooltip flips sides near an edge rather than spilling
+      out of the zoom box, and leaving the chart clears both. Tile-sized charts
+      have NO hover readout — it is a zoom-only affordance. Harness logs
+      `zoom-hover=` / `year-hover=` / `nav-hover=` with the tooltip text and the
+      crosshair node count (1 line + one dot per series); a `tip:null` there
+      means the enlarge went back to being a static image.
 - [ ] Evolution + adhoc columns (list) / button groups (grid): each workspace
       has independent Evolve and Adhoc start/stop controls; NO Attach button
       (click the row/card to open the detail and attach there)

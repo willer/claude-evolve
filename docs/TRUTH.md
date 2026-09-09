@@ -209,3 +209,46 @@ is no unit test for it; the check is that `plugin/agents/coder.md` frontmatter
 parses with model/effort and that no coder-side `fable` reference survives
 (`grep -rni fable plugin/` should return ideation-side hits only). Plugin
 version bumped to 0.3.1.
+
+## Enlarged charts carry a live hover readout (2026-09-09)
+
+Clicking a chart used to give you a bigger repaint of the same static SVG: the
+axis gutter named the min and the max and nothing else, so "what was the score
+at generation 340" meant eyeballing a pixel against a tick. Every ENLARGED
+chart now hit-tests the pointer and draws a crosshair, a dot per series, and a
+tooltip with the exact values. Tile-sized charts are unchanged — hover is a
+zoom-only affordance, so the fleet list stays cheap.
+
+No chart library was added. The charts are hand-rolled SVG whose value→pixel
+mapping only exists inside the chart function, so each function now BUILDS its
+hover data while it lays its points out and parks it in a module-level
+`pendingHoverCols`; the overlay calls `takeHoverCols()` immediately after the
+render call that produced the markup it is inserting. Only the `axes` (enlarged)
+path publishes, so a tile render can never clobber a pending set. Pulling in
+Chart.js/uPlot would have meant re-deriving the three-pane NAV layout, the
+shared generation domain, and the walk-forward badge in someone else's model —
+far more work than a mousemove handler, for a chart that already draws right.
+
+Hit-testing is x-only, against COLUMNS rather than points: the year-returns
+chart has one line per `return_YYYY`, and a reader hovering a generation wants
+that generation's whole cross-section, not whichever single line the cursor
+happens to be nearest. It also means a pointer anywhere in the plot's height
+finds a readout instead of having to trace a thin line.
+
+The geometry is pure and unit-tested in `core/hover.ts` —
+`nearestColumnIndex(xs, mx)` (binary search; a daily NAV curve is thousands of
+columns and this runs on every mousemove) and `tipPlacement(...)` (above-right
+by default, flipped at either edge, clamped as a last resort). The DOM side
+lives in `renderer.ts` `attachChartHover(host, cols)`: crosshair and dots go in
+a `<g class="hv-layer">` appended to the SVG and the tooltip in a sibling div,
+so both die with the next `innerHTML` swap — there is no teardown to forget,
+which matters because the interactive NAV viewer replaces its plot on every pan
+and zoom.
+
+Verified live via the EG_SHOT harness against `~/GitHub/trading-strategies`
+(1d-fndf-inv): `zoom-hover={"tip":"gen 357best score0.8328","marks":2}`,
+`year-hover={"tip":"gen 3692025+41.7%2026+34.0%","marks":3}`,
+`nav-hover={"tip":"2020-07-09return+23.68%drawdown-5.53%position+100.0%","marks":4}`
+— marks being 1 crosshair line plus one dot per series. A `tip:null` in those
+lines is the regression signal that the enlarge went back to a static image.
+102/102 tests green, typecheck clean.

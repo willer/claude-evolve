@@ -14,6 +14,7 @@ import {
 } from './csv';
 import { resolveDevSourceDir } from './devRebuild';
 import { chartFracs, genFrac, genTicks, sharedGenDomain } from './genAxis';
+import { nearestColumnIndex, tipPlacement } from './hover';
 import { parseInferenceAll, productionTags } from './inferenceAll';
 import { TRADING_METRICS, leaderMetrics, resolveProfile } from './profile';
 import {
@@ -849,5 +850,43 @@ describe('computeStats yearRow', () => {
   it('leaves yearRow null when no row in the generation has year data', () => {
     const csv = [HEADER, row('gen07-001', '1.0', 'complete', ['2', '0.1', '0.2', '']), ''].join('\n');
     expect(computeStats(csv).generations.find((x) => x.gen === 7)!.yearRow).toBeNull();
+  });
+});
+
+describe('hover readout geometry', () => {
+  it('finds the nearest column and breaks ties toward the left', () => {
+    const xs = [0, 10, 20, 30];
+    expect(nearestColumnIndex(xs, 0)).toBe(0);
+    expect(nearestColumnIndex(xs, 11)).toBe(1);
+    expect(nearestColumnIndex(xs, 16)).toBe(2);
+    expect(nearestColumnIndex(xs, 15)).toBe(1); // exact midpoint → left column
+    expect(nearestColumnIndex(xs, 30)).toBe(3);
+  });
+
+  it('clamps a pointer outside the plotted span to an end column', () => {
+    const xs = [40, 50, 60];
+    expect(nearestColumnIndex(xs, -100)).toBe(0);
+    expect(nearestColumnIndex(xs, 1000)).toBe(2);
+  });
+
+  it('has no column to report on an empty chart', () => {
+    expect(nearestColumnIndex([], 5)).toBe(-1);
+  });
+
+  it('places the tooltip above-right of the cursor when it fits', () => {
+    expect(tipPlacement(100, 100, 120, 40, 600, 300)).toEqual({ left: 112, top: 48 });
+  });
+
+  it('flips the tooltip left of the cursor near the right edge', () => {
+    // A readout hugging the right edge would otherwise spill outside the zoom box.
+    expect(tipPlacement(580, 100, 120, 40, 600, 300).left).toBe(448);
+  });
+
+  it('flips the tooltip below the cursor near the top edge', () => {
+    expect(tipPlacement(100, 10, 120, 40, 600, 300).top).toBe(22);
+  });
+
+  it('clamps a tooltip larger than the plot to the origin', () => {
+    expect(tipPlacement(50, 50, 900, 500, 600, 300)).toEqual({ left: 0, top: 0 });
   });
 });

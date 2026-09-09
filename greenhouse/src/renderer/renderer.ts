@@ -10,6 +10,8 @@ import type { BacktestAlgo, BacktestRow } from '../core/backtests';
 import { FAILING_FAILS, PLATEAU_GENS, classifyHealth } from '../core/csv';
 import { chartFracs, genTicks, sharedGenDomain } from '../core/genAxis';
 import type { GenAxis } from '../core/genAxis';
+import { nearestColumnIndex, tipPlacement } from '../core/hover';
+import type { HoverColumn } from '../core/hover';
 import { productionTags } from '../core/inferenceAll';
 import { fmtGeneric, leaderMetrics } from '../core/profile';
 import {
@@ -222,12 +224,32 @@ function yAxisGutter(
 // per-generation charts draw on so a given generation sits at the same x in each.
 // Absent ⇒ the chart falls back to index positioning (the tiny list/grid sparklines,
 // which have no axis and no sibling to line up with).
-type ChartX = { fracs: number[]; ax: GenAxis };
+type ChartX = { fracs: number[]; ax: GenAxis; gens: number[] };
 
 /** Shared X positioning for the two per-generation charts: real generation numbers over
- *  min(min)/max(max) of both charts' coverage. */
+ *  min(min)/max(max) of both charts' coverage. `gens` rides along so the hover readout
+ *  can name the generation under the cursor rather than its array index. */
 function chartX(gens: number[], ax: GenAxis): ChartX {
-  return { fracs: chartFracs(gens, ax), ax };
+  return { fracs: chartFracs(gens, ax), ax, gens };
+}
+
+// ── hover readouts for the enlarged charts ───────────────────────────────────
+// A chart builds its hover columns while it lays out its points — that's the only
+// place the value→pixel mapping exists — and parks them here for the overlay that is
+// about to mount the SVG. Only the ENLARGED render (axes on) publishes: the tile-sized
+// sparklines have no hover affordance, so they never clobber a pending set. The
+// overlay calls takeHoverCols() immediately after the render call that produced the
+// markup it is inserting, which keeps the pairing one-shot and obvious.
+let pendingHoverCols: HoverColumn[] | null = null;
+
+function publishHoverCols(cols: HoverColumn[]): void {
+  pendingHoverCols = cols.length ? cols : null;
+}
+
+function takeHoverCols(): HoverColumn[] | null {
+  const c = pendingHoverCols;
+  pendingHoverCols = null;
+  return c;
 }
 
 // Bottom (generation) axis for the spark/multiline charts when enlarged: an axis
@@ -275,6 +297,14 @@ function sparklineSvg(
   const x = (i: number) => (xa ? xf(xa.fracs[i] ?? 0) : x0 + (i / (values.length - 1)) * plotW);
   const y = (v: number) => h - 3 - bottomPad - ((v - min) / span) * (h - 6 - bottomPad);
   const pts = values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`);
+  if (axes)
+    publishHoverCols(
+      values.map((v, i) => ({
+        x: x(i),
+        title: xa ? `gen ${xa.gens[i] ?? '?'}` : `point ${i + 1}`,
+        rows: [{ label: 'best score', value: fmtScore(v), color, y: y(v) }],
+      })),
+    );
   const last = pts[pts.length - 1].split(',');
   const axisG = axes
     ? yAxisGutter(w, leftPad, x0, y, max === min ? [max] : [max, min]) +
@@ -298,7 +328,14 @@ interface Series {
 }
 
 /** Multi-line chart over generation positions; series may have gaps (nulls). */
-function multiLineSvg(series: Series[], w: number, h: number, axes = false, xa?: ChartX): string {
+function multiLineSvg(
+  series: Series[],
+  w: number,
+  h: number,
+  axes = false,
+  xa?: ChartX,
+  valueFmt: (v: number) => string = axisNum,
+): string {
   const all = series.flatMap((s) => s.values.filter((v): v is number => v !== null));
   const n = Math.max(...series.map((s) => s.values.length));
   if (all.length < 2 || n < 2) return '';
@@ -313,6 +350,19 @@ function multiLineSvg(series: Series[], w: number, h: number, axes = false, xa?:
   const x = (i: number) => (xa ? xf(xa.fracs[i] ?? 0) : x0 + (i / (n - 1)) * plotW);
   const y = (v: number) => h - 3 - bottomPad - ((v - min) / span) * (h - 6 - bottomPad);
   const zero = y(0);
+  if (axes) {
+    // One column per generation carrying EVERY year's value there — a reader hovering
+    // a generation wants the whole cross-section, not the nearest single line.
+    const cols: HoverColumn[] = [];
+    for (let i = 0; i < n; i++) {
+      const rows = series
+        .map((sr) => ({ sr, v: sr.values[i] }))
+        .filter((e): e is { sr: Series; v: number } => e.v !== null && e.v !== undefined)
+        .map((e) => ({ label: e.sr.name, value: valueFmt(e.v), color: e.sr.color, y: y(e.v) }));
+      if (rows.length) cols.push({ x: x(i), title: xa ? `gen ${xa.gens[i] ?? '?'}` : `point ${i + 1}`, rows });
+    }
+    publishHoverCols(cols);
+  }
   let out = `<svg class="spark" width="${w}" height="${h}">`;
   if (axes) out += yAxisGutter(w, leftPad, x0, y, [max, min].filter((v) => v !== 0));
   if (axes && xa) out += xAxisGen(w, x0, h - 3 - bottomPad, h - 4, xf, xa.ax);
@@ -493,11 +543,14 @@ function navChartSvg(eq: Equity, w: number, h: number, opts: { axes?: boolean } 
   // Position pane: signed exposure filled green (long) above / red (short) below
   // a zero baseline, with the exposure line on top — same read as backtest.py.
   let posG = '';
+  // Kept outside the block so the hover readout can dot the exposure line too.
+  let yPosFn: ((p: number) => number) | null = null;
   if (position) {
     const posTop = navH + 3;
     const posZero = posTop + posH / 2;
     const posMax = Math.max(1, ...position.map((p) => Math.abs(p)));
     const yPos = (p: number) => posZero - (Math.max(-posMax, Math.min(posMax, p)) / posMax) * (posH / 2 - 2);
+    yPosFn = yPos;
     const area = (clamp: (p: number) => number) =>
       `${x0},${posZero.toFixed(1)} ` +
       position.map((p, i) => `${x(i).toFixed(1)},${yPos(clamp(p)).toFixed(1)}`).join(' ') +
@@ -514,6 +567,23 @@ function navChartSvg(eq: Equity, w: number, h: number, opts: { axes?: boolean } 
         `<text x="${leftPad - 4}" y="${(y + 3).toFixed(1)}" style="fill: var(--dim); ${HALO}" font-size="9" text-anchor="end">${t}</text>`;
       posG += yLabP(yPos(posMax), `+${posMax.toFixed(0)}%`) + yLabP(posZero, '0%');
     }
+  }
+
+  if (axes) {
+    // One column per trading day: return-vs-start, underwater depth, and exposure when
+    // the curve carries one — the same three panes the chart draws, as exact numbers.
+    const pct1 = (v: number) => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(2)}%`;
+    publishHoverCols(
+      nav.map((v, i) => {
+        const rows = [
+          { label: 'return', value: pct1(v / base - 1), color: 'var(--cyan)', y: yNav(v) },
+          { label: 'drawdown', value: pct1(dd[i]), color: 'var(--red)', y: yDd(dd[i]) },
+        ];
+        if (position && yPosFn)
+          rows.push({ label: 'position', value: `${position[i] >= 0 ? '+' : ''}${position[i].toFixed(1)}%`, color: 'var(--text)', y: yPosFn(position[i]) });
+        return { x: x(i), title: dates[i], rows };
+      }),
+    );
   }
 
   const total = nav[nav.length - 1] / nav[0] - 1;
@@ -1442,10 +1512,83 @@ function openZoom(render: ChartRender): void {
   const { w, h } = zoomDims();
   const html = render(w, h, true);
   if (!/<svg/.test(html)) return; // nothing to enlarge yet (loading / no data)
+  const cols = takeHoverCols();
   zoomRender = render;
   const ov = $('chart-zoom-overlay');
   ov.innerHTML = `<div class="zoom-box">${html}</div>`;
   ov.classList.add('open');
+  attachChartHover(ov.firstElementChild as HTMLElement, cols);
+}
+
+// Wire the pointer readout onto the SVG just mounted in `host`. `cols` is the set the
+// chart published while laying its points out (takeHoverCols, read right after the
+// render call). Crosshair + dots live in a <g> appended to the SVG and the tooltip in a
+// sibling div, so neither survives the next innerHTML swap — no teardown to forget.
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function attachChartHover(host: HTMLElement, cols: HoverColumn[] | null): void {
+  const svg = host.querySelector('svg');
+  if (!svg || !cols || cols.length === 0) return;
+  const xs = cols.map((c) => c.x);
+  const hh = Number(svg.getAttribute('height')) || svg.getBoundingClientRect().height;
+
+  const layer = document.createElementNS(SVG_NS, 'g');
+  layer.setAttribute('class', 'hv-layer');
+  svg.appendChild(layer);
+  const tip = document.createElement('div');
+  tip.className = 'chart-tip';
+  host.appendChild(tip);
+
+  let shown = -1;
+  const hide = () => {
+    shown = -1;
+    layer.replaceChildren();
+    tip.classList.remove('on');
+  };
+  const move = (e: MouseEvent) => {
+    const box = svg.getBoundingClientRect();
+    const mx = e.clientX - box.left;
+    const idx = nearestColumnIndex(xs, mx);
+    if (idx < 0) return hide();
+    const col = cols[idx];
+    if (idx !== shown) {
+      shown = idx;
+      const line = document.createElementNS(SVG_NS, 'line');
+      line.setAttribute('x1', col.x.toFixed(1));
+      line.setAttribute('x2', col.x.toFixed(1));
+      line.setAttribute('y1', '0');
+      line.setAttribute('y2', String(hh));
+      line.setAttribute('class', 'hv-line');
+      const dots = col.rows.map((r) => {
+        const c = document.createElementNS(SVG_NS, 'circle');
+        c.setAttribute('cx', col.x.toFixed(1));
+        c.setAttribute('cy', r.y.toFixed(1));
+        c.setAttribute('r', '3');
+        if (r.color) c.setAttribute('style', `fill: ${r.color}`);
+        c.setAttribute('class', 'hv-dot');
+        return c;
+      });
+      layer.replaceChildren(line, ...dots);
+      tip.innerHTML =
+        `<div class="tip-t">${esc(col.title)}</div>` +
+        col.rows
+          .map(
+            (r) =>
+              `<div class="tip-r"><span class="sw" style="background:${r.color ?? 'var(--dim)'}"></span>` +
+              `<span class="tip-l">${esc(r.label)}</span><span class="tip-v">${esc(r.value)}</span></div>`,
+          )
+          .join('');
+      tip.classList.add('on');
+    }
+    // Anchor on the crosshair (not the raw cursor) so the tooltip tracks the data.
+    const pos = tipPlacement(col.x, e.clientY - box.top, tip.offsetWidth, tip.offsetHeight, box.width, box.height);
+    // tip is absolutely positioned against `host`; offset by where the SVG sits in it.
+    const hostBox = host.getBoundingClientRect();
+    tip.style.left = `${pos.left + (box.left - hostBox.left)}px`;
+    tip.style.top = `${pos.top + (box.top - hostBox.top)}px`;
+  };
+  svg.addEventListener('mousemove', move as EventListener);
+  svg.addEventListener('mouseleave', hide);
 }
 
 function closeZoom(): void {
@@ -1485,7 +1628,7 @@ function openNavZoom(eq: Equity): void {
         <button data-nz="out" title="Zoom out">−</button>
         <button data-nz="in" title="Zoom in">+</button>
         <button data-nz="reset" title="Show full range">reset</button>
-        <span class="nav-zoom-hint">drag to pan · wheel to zoom · shift-wheel to pan</span>
+        <span class="nav-zoom-hint">hover for values · drag to pan · wheel to zoom · shift-wheel to pan</span>
       </div>
       <div class="nav-zoom-plot" id="nav-zoom-plot"></div>
     </div>`;
@@ -1500,7 +1643,9 @@ function updateNavZoomPlot(): void {
   const { w, h } = zoomDims();
   // Reserve the control-bar height so the chart fits the overlay without scroll.
   const svg = navChartSvg(sliceEquity(navZoom.eq, navZoom.i0, navZoom.i1), w, h - 34, { axes: true });
+  const cols = takeHoverCols();
   plot.innerHTML = svg;
+  attachChartHover(plot, cols);
 }
 
 /** Rescale the window by `factor` (<1 zoom in, >1 out) about `focusFrac` (0..1
@@ -1692,7 +1837,7 @@ function renderDetail(): void {
       hasYearChart
         ? `<div class="panel">
              <h3>Year returns by generation (best of gen)</h3>
-             ${zoomable('year-gen', (w, ht, zoom) => multiLineSvg(years, w, ht, zoom, genAx ? chartX(yearGens, genAx) : undefined), cw, 80)}
+             ${zoomable('year-gen', (w, ht, zoom) => multiLineSvg(years, w, ht, zoom, genAx ? chartX(yearGens, genAx) : undefined, (v) => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(1)}%`), cw, 80)}
              <div class="legend">${years
                .map((y) => `<span><span class="sw" style="background:${y.color}"></span>${esc(y.name)}</span>`)
                .join('')}</div>
