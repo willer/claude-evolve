@@ -153,12 +153,31 @@ sparklines, NAV and per-year return charts, and a live terminal attached to
 each run. It starts and stops evolutions as detached tmux sessions running
 `claude` with `/evolve`, so runs survive the app quitting.
 
+### Launching it
+
+Greenhouse is not part of the plugin; it runs from a clone of this repo.
+macOS only (it packages a `.app`).
+
+Needs on PATH: `node` 22 or newer (20.19 works), `tmux`, `claude`, and `git`.
+
 ```bash
-./run-greenhouse          # build, package, and open the app
-cd greenhouse && npm test # vitest on the pure core/ modules
+git clone https://github.com/willer/claude-evolve.git
+cd claude-evolve
+(cd greenhouse && npm install && npm run rebuild-native)   # once: node-pty against Electron's ABI
+./run-greenhouse                                            # every launch: build, package, open
 ```
 
-See [`greenhouse/README.md`](greenhouse/README.md) for the keys and views.
+`./run-greenhouse` installs deps, bundles, builds `Evolve Greenhouse.app` under
+`greenhouse/release/`, quits any running copy, and opens the fresh one. Run it
+again after pulling changes; the running app embeds its own bundle, so a bare
+`npm run build` never reaches it. `npm start` inside `greenhouse/` runs the
+unpackaged build under Electron for quick iteration.
+
+First launch scans `~/GitHub/trading-strategies` for workspaces. Point it at
+your own directory of workspaces with the gear button; a workspace is any
+subdirectory containing `evolution.csv`. Keys and views are in
+[`greenhouse/README.md`](greenhouse/README.md); `cd greenhouse && npm test`
+runs the unit tests.
 
 ## Repo map
 
