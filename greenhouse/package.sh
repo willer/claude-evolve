@@ -10,6 +10,9 @@ cd "$(dirname "$0")"
 
 echo "▶ 1/3  installing dependencies…"
 npm install
+# node-pty must be compiled against Electron's ABI, not the host node's;
+# a fresh clone (or an Electron bump) needs this, and it is cheap when already done.
+npm run rebuild-native
 
 echo "▶ 2/3  building renderer + main bundle…"
 npm run build

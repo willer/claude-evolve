@@ -44,7 +44,14 @@ worker pool has not been verified.
    ```
    /evolve
    ```
-3. Watch `evolution.csv`, or open the Greenhouse dashboard (below).
+3. Watch it in the Greenhouse dashboard (macOS; needs `node`, `tmux`, `claude`):
+   ```bash
+   git clone https://github.com/willer/claude-evolve.git && cd claude-evolve
+   ./run-greenhouse
+   ```
+   Point it at the directory holding your workspaces with the gear button. It
+   can also start and stop `/evolve` runs itself, so you never need step 2 by
+   hand.
 
 The loop runs until ideation stops producing new ideas or `auto_ideate` is off.
 Every candidate lands in the CSV as `complete`, `failed`, `failed-validation`,
@@ -155,29 +162,23 @@ each run. It starts and stops evolutions as detached tmux sessions running
 
 ### Launching it
 
-Greenhouse is not part of the plugin; it runs from a clone of this repo.
-macOS only (it packages a `.app`).
-
-Needs on PATH: `node` 22 or newer (20.19 works), `tmux`, `claude`, and `git`.
+Greenhouse is not part of the plugin; it runs from a clone of this repo on
+macOS, with `node` (22+), `tmux`, and `claude` on PATH.
 
 ```bash
 git clone https://github.com/willer/claude-evolve.git
 cd claude-evolve
-(cd greenhouse && npm install && npm run rebuild-native)   # once: node-pty against Electron's ABI
-./run-greenhouse                                            # every launch: build, package, open
+./run-greenhouse
 ```
 
-`./run-greenhouse` installs deps, bundles, builds `Evolve Greenhouse.app` under
-`greenhouse/release/`, quits any running copy, and opens the fresh one. Run it
-again after pulling changes; the running app embeds its own bundle, so a bare
-`npm run build` never reaches it. `npm start` inside `greenhouse/` runs the
-unpackaged build under Electron for quick iteration.
+That one script does everything: installs dependencies, builds, packages
+`Evolve Greenhouse.app`, quits any running copy, and opens the fresh one. Run
+it again after pulling changes.
 
 First launch scans `~/GitHub/trading-strategies` for workspaces. Point it at
-your own directory of workspaces with the gear button; a workspace is any
-subdirectory containing `evolution.csv`. Keys and views are in
-[`greenhouse/README.md`](greenhouse/README.md); `cd greenhouse && npm test`
-runs the unit tests.
+your own directory with the gear button; a workspace is any subdirectory
+containing `evolution.csv`. Keys and views are in
+[`greenhouse/README.md`](greenhouse/README.md).
 
 ## Repo map
 
