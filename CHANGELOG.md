@@ -12,6 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **CSV lock no longer unlinked on release (plugin 0.3.2)** — deleting
+  `.evolution.csv.lock` handed the next writer a fresh inode, so two workers
+  could each hold an "exclusive" flock and concurrent read-modify-write cycles
+  silently reverted scored rows to `running` (seen 2026-08-14). Both engine
+  copies fixed; dead `lib/csv-lock.sh` removed.
+
+### Changed
+
+- README rewritten around the plugin marketplace install (Claude Code and
+  Codex); the npm CLI is documented as legacy. Stale root scripts, sample
+  workspaces, and superseded design docs deleted.
+- Greenhouse leader summary shows `kurtosis` when the CSV has it.
+
 ### Added
 
 - **Script-run ideation branches (plugin 0.3.0)** — `scripts/ideate_branch.py`

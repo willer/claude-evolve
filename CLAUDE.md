@@ -1,23 +1,28 @@
 # Claude Evolve
 
-This is an npm package, which is built to re-implement the ideas behind AlphaEvolve by Google.
-The basic idea is to run an evolutionary search to find the best algorithm to suit a particular
-performance criteria. caude-evolve itself doesn't care what type of algorithm, it just runs
-the process:
+An evolutionary search for the best algorithm against a performance criterion,
+re-implementing the ideas behind Google's AlphaEvolve. claude-evolve doesn't care
+what kind of algorithm; it runs the process:
 
-a) tell AI's to ideate new ideas based on the best ones in evolution.csv (using BRIEF.md as the explanation)
-b) for each idea in "pending" state in the evolution.csv file, get an AI to write the code for it
-c) for each new algorithm code, run evaluator.py on the new code to determine its performance (i.e. fitness) value
-d) save "completed" state in the csv for that algorithm, and record the performance in the csv
+a) tell AIs to ideate new ideas from the best rows in evolution.csv (BRIEF.md explains the problem)
+b) for each "pending" idea in evolution.csv, get an AI to write its code
+c) run evaluator.py on the new code to get its performance (fitness)
+d) record "complete" and the performance in the CSV
 e) go to (a)
 
-Each evolution is like a greenhouse, growing plants one generation at a time. The user must 
-fill out BRIEF.md, algorithm.py (the first "plant"), and evaluator.py, and then claude-evolve
-will take it from there.
+Each evolution is a greenhouse, growing plants one generation at a time. The user
+fills out BRIEF.md, algorithm.py (the first plant), and evaluator.py; claude-evolve
+takes it from there.
 
-Because this is an npm package, it's deployed via npm publish. claude-evolve auto-updates itself
-when the mai script is run.  If there's debugging of a production evolution run, it's likely
-to be on a server, even if equivalent paths exist on the development machine.
+It ships as a Claude Code / Codex plugin marketplace (`.claude-plugin/marketplace.json`
+-> `plugin/`). The plugin is the maintained implementation: skills in `plugin/skills`,
+model-pinned agents in `plugin/agents`, JSON-emitting scripts in `plugin/scripts`, and
+a stdlib-only engine in `plugin/lib`. `bin/` + `lib/` are the legacy npm CLI
+(`npm publish`, self-updating on run); production runs of the CLI are likely on a
+server. `greenhouse/` is the Electron dashboard and has its own CLAUDE.md.
+
+`plugin/lib/evolution_csv.py` and `lib/evolution_csv.py` are two copies of the CSV
+engine (plugin and legacy CLI). A fix to one must be mirrored to the other.
 
 
 ## Evaluator Output Specification

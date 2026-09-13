@@ -33,6 +33,11 @@ export const TRADING_METRICS: MetricSpec[] = [
   // are skipped, so a workspace without either shows neither.
   { col: 'ulcer', label: 'Ulcer' },
   { col: 'ulcer_index', label: 'Ulcer' },
+  // Excess kurtosis of the daily NAV return distribution (Fisher: normal = 0,
+  // fat tails > 0). A raw number like Ulcer, not a fraction, and it can
+  // legitimately be negative, so no pct/neg flag. Absent columns are skipped —
+  // a workspace not yet re-scored since 2026-08-08 simply won't show it.
+  { col: 'kurtosis', label: 'Kurtosis' },
   { col: 'cagr_pain_ratio', label: 'CAGR/Pain' },
   { col: 'alpha_pain_ratio', label: 'Alpha/Pain' },
 ];

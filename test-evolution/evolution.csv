@@ -1,4 +1,0 @@
-id,parent_id,description,performance,status,idea-LLM,run-LLM
-gen00-000,0,baseline algorithm,1.0,complete,,
-gen01-001,gen00-000,test idea 1,1.1,complete,,
-gen01-002,gen00-000,test idea 2,0.9,complete,,

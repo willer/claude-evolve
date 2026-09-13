@@ -60,10 +60,12 @@ class EvolutionCSV:
             try:
                 fcntl.flock(self.lock_file.fileno(), fcntl.LOCK_UN)
                 self.lock_file.close()
-                # Use same lock path as bash implementation
-                csv_dir = os.path.dirname(self.csv_path)
-                lock_path = os.path.join(csv_dir, ".evolution.csv.lock")
-                os.unlink(lock_path)
+                # AIDEV-NOTE: the lock file is deliberately NOT unlinked. Deleting it
+                # lets the next writer create a NEW inode, so two processes can hold
+                # flock() on different inodes simultaneously -- the lock stops being
+                # mutually exclusive and concurrent read-modify-write cycles silently
+                # LOSE completed scores (observed 2026-08-14 in ev-1d-fas: ~9 rows
+                # scored by workers reverted to status=running, performance blank).
             except (IOError, OSError):
                 pass
             finally:

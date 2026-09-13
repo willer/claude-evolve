@@ -252,3 +252,26 @@ Verified live via the EG_SHOT harness against `~/GitHub/trading-strategies`
 — marks being 1 crosshair line plus one dot per series. A `tip:null` in those
 lines is the regression signal that the enlarge went back to a static image.
 102/102 tests green, typecheck clean.
+
+## evolution.csv lock file: never unlink it
+
+Both CSV engines (`plugin/lib/evolution_csv.py`, `lib/evolution_csv.py`) take
+`flock()` on `<workspace>/.evolution.csv.lock` around every read-modify-write.
+The release path used to `os.unlink` that file. That breaks the lock: the next
+writer creates a NEW inode, so two processes can each hold an exclusive flock on
+different inodes and both proceed. Observed 2026-08-14 in the ev-1d-fas
+workspace: about nine rows scored by workers reverted to `status=running` with a
+blank performance, because a concurrent writer rewrote the file from a stale
+read. The fix is to leave the lock file in place forever (it is zero bytes and
+gitignored territory); flock releases on close. `lib/csv-lock.sh`, the old bash
+helper that also deleted "stale" locks after ten seconds, was dead code (nothing
+sourced it) and is gone.
+
+## README is plugin-first (2026-09-13)
+
+The npm CLI is documented only as legacy. Install paths that are real today:
+`claude plugin marketplace add willer/claude-evolve` + `claude plugin install
+claude-evolve@claude-evolve`, and the same pair under `codex plugin marketplace
+add` / `codex plugin add`. Codex is an install target but not a verified host
+for the `/evolve` worker pool, which depends on Claude Code background
+subagents; the README says so rather than claiming parity.
