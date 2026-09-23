@@ -191,16 +191,17 @@ export const SHELL_CMD = 'zsh';
 
 // Evolution launch: claude driven by a /goal that runs /evolve until at least 2
 // generations pass with no improvement (so the session self-terminates on a
-// plateau instead of looping forever), pinned to Opus at medium effort — this
+// plateau instead of looping forever), pinned to Opus at low effort — this
 // is the manager/coordinator role (high call volume, mostly mechanical state
-// routing), not the correctness-critical coder or ideator roles, so it doesn't
-// need xhigh (2026-07-01 cost/quality review). Always forced into auto
+// routing), not the correctness-critical coder or ideator roles, which carry
+// their own pins in the plugin's agent files (operator decision 2026-09-23,
+// was medium). Always forced into auto
 // permission mode (operator decision 2026-06-12): rare prompts that still stop
 // the session surface as ASKING (native notification; attach and answer in the
 // terminal — the CLI does its own question asking).
 export const EVOLVE_PROMPT =
   "/goal run /evolve and keep evolving until there's at least 2 generations that show no improvement and you have no more ideas";
-export const EVOLVE_ARGS = ['--model', 'opus', '--effort', 'medium', '--permission-mode', 'auto'];
+export const EVOLVE_ARGS = ['--model', 'opus', '--effort', 'low', '--permission-mode', 'auto'];
 
 // Adhoc launch: a plain `claude` in the workspace dir — no model pin, no prompt,
 // default permission mode. It's a scratch session to poke at the workspace by

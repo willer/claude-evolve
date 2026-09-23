@@ -84,8 +84,8 @@ EG_SHOT=shots npm start   # screenshot harness (WEBTESTS.md) — side-effect-fre
   `node_modules/electron/dist/` and write `path.txt` containing exactly
   `Electron.app/Contents/MacOS/Electron` — NO trailing newline (printf, not echo).
 - Evolution launch = detached tmux session in the workspace dir, then
-  send-keys `claude --model opus --effort medium --dangerously-skip-permissions
-  "run the /evolve skill"` — typed, not passed to new-session, so the shell
+  send-keys `claude` with `EVOLVE_ARGS` + `EVOLVE_PROMPT` from `src/core/state.ts`
+  (Opus low effort, auto permission mode, a /goal wrapping /evolve) — typed, not passed to new-session, so the shell
   survives claude exiting and the pane stays inspectable post-mortem.
 - Evaluator metrics are generic: any non-core numeric CSV column becomes a
   metric. Extreme values (Sharpe 365 in 1d-htqqq-inv) are real data — display
