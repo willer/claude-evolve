@@ -11,7 +11,7 @@ Anthropic subagents.
 Evolution is a greenhouse: each generation grows new algorithm variants from the
 best of the last one. The loop is always the same:
 
-1. **Ideate** new variants from the top performers + your `BRIEF.md` (Fable, xhigh effort).
+1. **Ideate** new variants from the top performers + your `BRIEF.md` (Opus, high effort).
 2. **Code** each variant by editing a copy of its parent algorithm (codex-first, Opus judge/fallback).
 3. **Score** each variant by running your `evaluator.py` under a sandbox (Haiku /
    deterministic).
@@ -25,7 +25,7 @@ plugin runs the loop.
 | Skill | Tier | Does |
 |-------|------|------|
 | `evolve` | orchestrator | Runs the whole loop as a self-respawning pool of background worker subagents. The main conversation stays a clean dashboard. Equivalent to `claude-evolve run`. |
-| `evolve-ideate` | Fable (xhigh) + external models | One generation of ideation. Six parallel branches (3 framed novel / hill-climb / structural / crossover); each rolls its source — 3/6 Fable via one `ideator` subagent, 2/6 codex GPT-6 Astra, 1/6 Grok 4.6, the external two run directly by `scripts/ideate_branch.py` with no subagent. Appends new `pending` rows. Run one at a time per workspace. |
+| `evolve-ideate` | Opus (high) + external models | One generation of ideation. Six parallel branches (3 framed novel / hill-climb / structural / crossover); each rolls its source — 3/6 Opus via one `ideator` subagent, 2/6 codex GPT-6 Astra, 1/6 Grok 4.6, the external two run directly by `scripts/ideate_branch.py` with no subagent. Appends new `pending` rows. Run one at a time per workspace. |
 | `evolve-code` | Opus (medium) | Write the code for one candidate: resolve parent, copy to `evolution_<id>.py`, implement its description. |
 | `evolve-score` | Haiku | Score one candidate: syntax-check, optional `validator.py`, sandboxed `evaluator.py`, write the number to the CSV. Deterministic — the subagent only exists to keep evaluator noise out of the main thread. |
 
@@ -42,7 +42,7 @@ no flag they auto-detect `evolution/config.yaml` or `./config.yaml`. The
   ID generation, sandboxed evaluation) lives under `lib/` and needs nothing
   installed — no npm, no `pip` — falling back to a minimal config parser when
   PyYAML is absent. This plugin is the home of that engine, not a copy of it.
-- **Fixed model roles, defined in `agents/` and `scripts/`.** Fable at xhigh effort ideates
+- **Fixed model roles, defined in `agents/` and `scripts/`.** Opus at high effort ideates
   (`agents/ideator.md`), sharing the slots with external models the ideation dice
   roll picks (`scripts/ideate_branch.py` owns those model IDs and runs them
   without a subagent wrapper); codex (GPT-5.6 Luna) codes first with the Opus worker
@@ -57,7 +57,7 @@ no flag they auto-detect `evolution/config.yaml` or `./config.yaml`. The
 - **`scripts/`** are thin JSON-emitting CLIs the skills call:
   `evolve_csv.py` (all CSV reads/writes + ideation context), `ideate_branch.py`
   (assembles one ideation branch's prompt from the context; runs the external
-  CLI for non-Fable sources), `prepare.py` (parent resolution + file copy),
+  CLI for non-Opus sources), `prepare.py` (parent resolution + file copy),
   `score.py` (sandboxed evaluation). All AI judgment
   lives in the skills/subagents; everything deterministic lives in the scripts.
 

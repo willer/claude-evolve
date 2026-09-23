@@ -275,3 +275,17 @@ claude-evolve@claude-evolve`, and the same pair under `codex plugin marketplace
 add` / `codex plugin add`. Codex is an install target but not a verified host
 for the `/evolve` worker pool, which depends on Claude Code background
 subagents; the README says so rather than claiming parity.
+
+## Plugin ideation runs on Opus 5.5 high, not Fable 5.1 xhigh (2026-09-23)
+
+Supersedes the ideation line in the 2026-09-07 coder entry above.
+`plugin/agents/ideator.md` is `model: opus` / `effort: high`, and the dice-roll
+source that launches it is renamed `fable` → `opus` in
+`scripts/ideate_branch.py` (`SOURCES`, `ENABLED_SOURCES`) and the evolve-ideate
+skill. The split is unchanged: 3/6 opus, 2/6 codex GPT-6 Astra xhigh, 1/6 Grok
+4.6 max. Opus 5.5 was released 2026-09-22; the switch is based on its benchmarks
+and its newer knowledge cutoff, not on evolution data. The trading-strategies
+workspaces could not settle it: their rows almost never carry an `idea-LLM`
+tag. Plugin-appended ideas are tagged `opus` from now on; old `fable` rows keep
+their tag. GPT-5.6 Sol was not adopted for the codex slot: it is cheaper than
+Astra, not better. Plugin 0.3.3.

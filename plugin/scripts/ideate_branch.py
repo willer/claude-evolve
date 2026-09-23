@@ -2,20 +2,20 @@
 """
 Build one ideation branch's prompt and, for external sources, run it.
 
-The evolve-ideate skill used to spawn a Fable subagent per branch even when the
+The evolve-ideate skill used to spawn a Claude subagent per branch even when the
 branch's ideas came from codex / opencode — the subagent only assembled a prompt
-and shelled out. That wrapper cost a full xhigh Fable context (BRIEF, notes,
+and shelled out. That wrapper cost a full Claude ideator context (BRIEF, notes,
 thousands of descriptions) per branch for zero judgment. This script does the
 assembly deterministically instead:
 
-  --source fable            write the prompt file and exit; the orchestrator
+  --source opus             write the prompt file and exit; the orchestrator
                             hands the file path to ONE claude-evolve:ideator
                             subagent, which reads it and answers.
   --source codex|grok|glm|kimi|qwen
                             write the prompt file, run the external CLI on it,
                             parse its JSON array, write <out>. No subagent.
 
-The skill's dice roll uses ENABLED_SOURCES (fable / codex GPT-6 Astra / grok);
+The skill's dice roll uses ENABLED_SOURCES (opus / codex GPT-6 Astra / grok);
 the other opencode models stay wired so a roll change is a one-line edit.
 
 Usage:
@@ -25,7 +25,7 @@ Usage:
       [--timeout SECONDS]
 
 <out> is JSON: {"source","strategy","status":"ok|error|timeout","ideas":[...],
-"error":...,"prompt_file":...}. Exit 0 only on status ok (or for fable, once
+"error":...,"prompt_file":...}. Exit 0 only on status ok (or for opus, once
 the prompt file is written). No fallback to another model — a failed branch is
 reported as failed and the orchestrator decides.
 """
@@ -52,11 +52,11 @@ OPENCODE_MODELS = {
 }
 # opencode --variant = provider reasoning effort; only set where the model has one.
 OPENCODE_VARIANTS = {"grok": "max"}
-SOURCES = ("fable", "codex") + tuple(OPENCODE_MODELS)  # everything the script can run
-# AIDEV-NOTE: Sept 5 2026 policy — "only the very best for ideation": the roll is
-# 3/6 Fable 5.1 xhigh (reads as the better trader), 2/6 GPT-6 Astra xhigh, 1/6
+SOURCES = ("opus", "codex") + tuple(OPENCODE_MODELS)  # everything the script can run
+# AIDEV-NOTE: Sept 23 2026 policy — "only the very best for ideation": the roll is
+# 3/6 Opus 5.5 high (replaced Fable 5.1 xhigh on benchmarks), 2/6 GPT-6 Astra xhigh, 1/6
 # Grok 4.6 — it attacks from a different direction, so it earns the diversity slot. GLM/Kimi/Qwen stay wired (not rolled) because this changes.
-ENABLED_SOURCES = ("fable", "codex", "grok")
+ENABLED_SOURCES = ("opus", "codex", "grok")
 STRATEGIES = ("novel_exploration", "hill_climbing", "structural_mutation", "crossover_hybrid")
 DEFAULT_TIMEOUT = 1800  # 30 min — reasoning models at xhigh routinely take 10+ min
 
@@ -262,7 +262,7 @@ def main():
               "frame": args.frame, "prompt_file": str(prompt_file),
               "prompt_chars": prompt_file.stat().st_size}
 
-    if args.source == "fable":
+    if args.source == "opus":
         result["status"] = "prompt_only"
         out.write_text(json.dumps(result, indent=1))
         print(json.dumps(result))

@@ -1,8 +1,8 @@
 ---
 name: ideator
-description: Ideation strategist for claude-evolve. Reads one branch's prompt file (built by scripts/ideate_branch.py) and returns a JSON array of ideas for that branch's strategy — novel exploration, hill climbing, structural mutation, or crossover. Launched by the evolve-ideate skill only for branches whose rolled source is Fable; external-model branches run by script with no subagent.
-model: fable
-effort: xhigh
+description: Ideation strategist for claude-evolve. Reads one branch's prompt file (built by scripts/ideate_branch.py) and returns a JSON array of ideas for that branch's strategy — novel exploration, hill climbing, structural mutation, or crossover. Launched by the evolve-ideate skill only for branches whose rolled source is Opus; external-model branches run by script with no subagent.
+model: opus
+effort: high
 ---
 
 You are one ideation strategist in a claude-evolve generation. The launching
