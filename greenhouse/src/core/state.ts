@@ -184,10 +184,21 @@ export function sessionDotClass(s: SessionState): string {
   return s.running ? (s.activity ?? 'working') : 'stopped';
 }
 
+// AIDEV-NOTE: niceness. Every workspace session (evolution, adhoc, shell) runs
+// under `nice -n 10`, so claude, its subagents, codex and every evaluator they
+// spawn inherit it and yield the CPU to time-critical work on a shared machine
+// (2026-09-24: evolution load ~700 timed out all production inference runs).
+// The ONE exception is the inference-all tool session, which must stay at
+// normal priority. Niceness is inherited and can't be lowered without root, so
+// inference launched by hand from a niced shell stays niced — run it from the
+// Greenhouse tool tab (or a normal terminal). The plugin's evaluators add their
+// own `nice` config on top (10 + 10, capped by the OS at 20).
+export const NICE = 'nice -n 10';
+
 // Shell launch: a straight interactive zsh in the workspace dir — no claude, no
 // prompt. Launched as the tmux session's own command (not send-keys'd) so the
 // session ends the moment the user types `exit`, same as any terminal.
-export const SHELL_CMD = 'zsh';
+export const SHELL_CMD = `${NICE} zsh`;
 
 // Evolution launch: claude driven by a /goal that runs /evolve until at least 2
 // generations pass with no improvement (so the session self-terminates on a
@@ -208,10 +219,32 @@ export const EVOLVE_ARGS = ['--model', 'opus', '--effort', 'low', '--permission-
 // hand while evolution runs; you type whatever you want once attached.
 export const ADHOC_ARGS: string[] = [];
 
+/** Typed into the evolution session's shell; the trailing `exit` ends the
+ *  session when claude ends (quit or crash), so the next poll shows it stopped. */
+export function evolutionCmd(): string {
+  return `${NICE} claude ${EVOLVE_ARGS.join(' ')} ${shellQuote(EVOLVE_PROMPT)}; exit`;
+}
+
+/** Typed into the adhoc session's shell — same trailing-`exit` pattern. */
+export function adhocCmd(): string {
+  return `${NICE} claude${ADHOC_ARGS.length ? ' ' + ADHOC_ARGS.join(' ') : ''}; exit`;
+}
+
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
 // Repo-level tool scripts (trading-strategies): launched in their own tmux
 // sessions, attachable like evolutions. Shown only when the executable exists
 // in a configured root.
 export const TOOLS = ['inference-all', 'backtest-all'] as const;
+
+/** Typed into a tool session's shell. inference-all feeds production signals and
+ *  is the one launch that must NOT be niced; backtest-all is bulk work like
+ *  evolution and is. */
+export function toolCmd(key: string): string {
+  return key === 'inference-all' ? `./${key}` : `${NICE} ./${key}`;
+}
 
 export function toolSessionName(key: string): string {
   return `greenhouse-${key}`;

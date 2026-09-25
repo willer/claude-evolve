@@ -6,13 +6,13 @@ import { promisify } from 'node:util';
 import * as pty from 'node-pty';
 
 import {
-  ADHOC_ARGS,
-  EVOLVE_ARGS,
-  EVOLVE_PROMPT,
   SHELL_CMD,
+  adhocCmd,
   adhocSessionName,
+  evolutionCmd,
   sessionName,
   shellSessionName,
+  toolCmd,
   toolSessionName,
 } from '../core/state';
 
@@ -71,8 +71,7 @@ export class SessionHost {
     await assertServerOpts();
     const sess = sessionName(key);
     await tmux('new-session', '-d', '-s', sess, '-x', '220', '-y', '50', '-c', workspacePath);
-    const cmd = `claude ${EVOLVE_ARGS.join(' ')} ${shellQuote(EVOLVE_PROMPT)}; exit`;
-    await tmux('send-keys', '-t', sess, cmd, 'Enter');
+    await tmux('send-keys', '-t', sess, evolutionCmd(), 'Enter');
     return sess;
   }
 
@@ -83,8 +82,7 @@ export class SessionHost {
     await assertServerOpts();
     const sess = adhocSessionName(key);
     await tmux('new-session', '-d', '-s', sess, '-x', '220', '-y', '50', '-c', workspacePath);
-    const cmd = `claude${ADHOC_ARGS.length ? ' ' + ADHOC_ARGS.join(' ') : ''}; exit`;
-    await tmux('send-keys', '-t', sess, cmd, 'Enter');
+    await tmux('send-keys', '-t', sess, adhocCmd(), 'Enter');
     return sess;
   }
 
@@ -106,7 +104,7 @@ export class SessionHost {
     await assertServerOpts();
     const sess = toolSessionName(id);
     await tmux('new-session', '-d', '-s', sess, '-x', '220', '-y', '50', '-c', root);
-    await tmux('send-keys', '-t', sess, `./${key}`, 'Enter');
+    await tmux('send-keys', '-t', sess, toolCmd(key), 'Enter');
     return sess;
   }
 
@@ -159,8 +157,4 @@ export class SessionHost {
   kill(id: string): void {
     execFile('tmux', ['kill-session', '-t', id], () => {});
   }
-}
-
-function shellQuote(s: string): string {
-  return `'${s.replace(/'/g, `'\\''`)}'`;
 }

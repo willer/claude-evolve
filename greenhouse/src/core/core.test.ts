@@ -20,13 +20,17 @@ import { TRADING_METRICS, leaderMetrics, resolveProfile } from './profile';
 import { assignKeys, rootLabel } from './roots';
 import {
   SESSION_KINDS,
+  SHELL_CMD,
+  adhocCmd,
   adhocSessionName,
+  evolutionCmd,
   classifyPane,
   hashText,
   pickSessionTab,
   sessionDotClass,
   sessionName,
   shellSessionName,
+  toolCmd,
   toolSessionName,
 } from './state';
 import type { SessionKind } from './state';
@@ -390,6 +394,19 @@ describe('classifyPane', () => {
     expect(classifyPane(stuckTxt, s1.hash).activity).toBe('stuck');
     const moving = "  ⎿  hit your org's monthly spend limit\n✻ Worked for 2s · 1 shell still running\n❯ ";
     expect(classifyPane(moving, s1.hash).activity).toBe('working');
+  });
+});
+
+describe('session launch commands', () => {
+  it('runs evolution, adhoc and shell sessions niced', () => {
+    expect(evolutionCmd()).toMatch(/^nice -n 10 claude --model opus .*'\/goal run \/evolve .*'; exit$/);
+    expect(adhocCmd()).toBe('nice -n 10 claude; exit');
+    expect(SHELL_CMD).toBe('nice -n 10 zsh');
+    expect(toolCmd('backtest-all')).toBe('nice -n 10 ./backtest-all');
+  });
+
+  it('never nices inference-all (production signals are time-critical)', () => {
+    expect(toolCmd('inference-all')).toBe('./inference-all');
   });
 });
 

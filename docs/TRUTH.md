@@ -328,3 +328,19 @@ reached twice (listed root that is also a subdir of another root) is
 de-duplicated by realpath. Known cost: reordering roots can re-key a
 duplicate, which orphans (does not kill) its running tmux session. The TUI
 cannot see `name@root` sessions.
+
+## Greenhouse launches workspace sessions niced; inference-all is not (2026-09-25)
+
+Follow-on to the evaluator `nice` config (a2d9ea0). Greenhouse now prefixes
+every workspace session launch with `nice -n 10` (`NICE` in
+`greenhouse/src/core/state.ts`): the evolution claude, the adhoc claude, the
+plain shell, and the `backtest-all` tool. Niceness is inherited, so claude's
+subagents, codex, and evaluators all run niced; the evaluators' own `nice`
+config stacks on top (the OS caps the total at 20). The one exception is the
+`inference-all` tool session, which runs at normal priority because production
+signals are time-critical. The prefix goes on the command itself, not on the
+tmux server, because tmux sessions inherit priority from the server. Caveat:
+a process can't lower its niceness without root, so inference-all started by
+hand from a niced Greenhouse shell stays niced. Run it from the tool tab or a
+normal terminal. Sessions that were already running before this change keep
+their old priority until they are restarted.
