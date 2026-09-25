@@ -64,6 +64,12 @@ to verify the NAV chart deterministically.
       shows two header buttons (`backtest-all`, `backtest-all@<root>`), each
       running in its own root. Backtest/B&H panels read the row's OWN root
       (`<root>/data/…`), never another root's DB.
+- Root switcher: with 2+ roots a header dropdown (All roots / one per root) →
+  picking a root narrows the list/grid, totals and tool buttons to that root;
+  the choice survives relaunch (prefs `rootFilter`); a removed root falls back
+  to All; with one root the dropdown is hidden. The EG_SHOT harness picks the
+  last root for `shots/list-root.png`, logs `root-switch picked=` / `restored=`,
+  and restores the saved choice. [draft]
 - [ ] List: column headers sort on click with ▲/▼ indicator; health chip
       (ok/plateau/stale/failing/error) and state badge render per row;
       sparkline stroke matches health color (green/yellow/red)

@@ -104,7 +104,7 @@ app.whenReady().then(() => {
   const poller = new Poller(
     host,
     effPrefs,
-    (rows, tools) => win?.webContents.send('fleet:update', { rows, tools }),
+    (payload) => win?.webContents.send('fleet:update', payload),
     (name, activity) => {
       const stuck = activity === 'stuck';
       new Notification({
@@ -281,6 +281,31 @@ function devShots(dir: string): void {
     }
     nativeTheme.themeSource = saved;
     await pause(500);
+    // Root switcher (only with 2+ roots): pick the LAST root, shoot, log what
+    // the fleet narrowed to, then restore the saved choice (net-zero prefs).
+    const rootProbe = () =>
+      js(`JSON.stringify({
+        value: document.getElementById('root-switch').value,
+        rows: document.querySelectorAll('#list tr.row').length,
+        tools: [...document.querySelectorAll('#tool-btns button')].map((b) => b.textContent.trim()),
+      })`);
+    const switchTo = (v: string) =>
+      js(`(() => { const el = document.getElementById('root-switch');
+        el.value = ${JSON.stringify(v)}; el.dispatchEvent(new Event('change')); })()`);
+    const opts = JSON.parse(
+      await js(`JSON.stringify([...document.querySelectorAll('#root-switch option')].map((o) => o.value))`),
+    ) as string[];
+    if (opts.length > 2) {
+      const before = JSON.parse(await rootProbe()) as { value: string };
+      console.log(`EG_SHOT root-switch before=${JSON.stringify(before)}`);
+      await switchTo(opts[opts.length - 1]);
+      await pause(500);
+      console.log(`EG_SHOT root-switch picked=${await rootProbe()}`);
+      await shot('list-root.png');
+      await switchTo(before.value);
+      await pause(500);
+      console.log(`EG_SHOT root-switch restored=${await rootProbe()}`);
+    } else console.log('EG_SHOT root-switch hidden (single root)');
     // Scroll-reset regression: opening a detail view from a scrolled-down
     // list must land at the top, not inherit the list's scroll offset.
     await js(`window.scrollTo(0, 99999)`);

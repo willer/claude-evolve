@@ -17,7 +17,7 @@ import { chartFracs, genFrac, genTicks, sharedGenDomain } from './genAxis';
 import { nearestColumnIndex, tipPlacement } from './hover';
 import { parseInferenceAll, productionTags } from './inferenceAll';
 import { TRADING_METRICS, leaderMetrics, resolveProfile } from './profile';
-import { assignKeys, rootLabel } from './roots';
+import { activeRootFilter, assignKeys, inRoot, rootLabel } from './roots';
 import {
   SESSION_KINDS,
   SHELL_CMD,
@@ -939,5 +939,31 @@ describe('multi-root keys', () => {
 
   it('sanitizes tmux-hostile characters out of the label', () => {
     expect(rootLabel('/a/my.repo:v2', ['/a/my.repo:v2', '/b/other'])).toBe('my_repo_v2');
+  });
+});
+
+describe('root switcher', () => {
+  const roots = ['/g/trading', '/g/predict'];
+
+  it('a subdir workspace belongs to the root it was found under', () => {
+    const ws = { path: '/g/predict/sales', root: '/g/predict' };
+    expect(inRoot(ws, '/g/predict')).toBe(true);
+    expect(inRoot(ws, '/g/trading')).toBe(false);
+  });
+
+  it('a root that is itself a workspace belongs to that root', () => {
+    // row.root is the parent dir here, so the path must match too
+    expect(inRoot({ path: '/g/predict', root: '/g' }, '/g/predict')).toBe(true);
+  });
+
+  it('the empty filter (All) matches everything', () => {
+    expect(inRoot({ path: '/x/y', root: '/x' }, '')).toBe(true);
+  });
+
+  it('a saved filter only applies while it is still a configured root, and 2+ roots exist', () => {
+    expect(activeRootFilter('/g/predict', roots)).toBe('/g/predict');
+    expect(activeRootFilter('/g/gone', roots)).toBe('');
+    expect(activeRootFilter('/g/trading', ['/g/trading'])).toBe('');
+    expect(activeRootFilter('', roots)).toBe('');
   });
 });

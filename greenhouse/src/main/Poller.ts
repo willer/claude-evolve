@@ -19,6 +19,7 @@ import {
 } from '../core/state';
 import type {
   Activity,
+  FleetPayload,
   Prefs,
   ProductionSignal,
   SessionState,
@@ -76,12 +77,17 @@ export class Poller {
   constructor(
     private host: SessionHost,
     private prefs: () => Prefs,
-    private onUpdate: (rows: WorkspaceRow[], tools: ToolState[]) => void,
+    private onUpdate: (payload: FleetPayload) => void,
     private onAttention: (name: string, activity: Activity) => void,
   ) {}
 
   current(): WorkspaceRow[] {
     return this.rows;
+  }
+
+  /** Everything one fleet push carries (also the fleet:snapshot reply). */
+  payload(): FleetPayload {
+    return { rows: this.rows, tools: this.tools, roots: this.prefs().roots };
   }
 
   currentTools(): ToolState[] {
@@ -253,7 +259,7 @@ export class Poller {
       }));
 
       this.rows = rows;
-      this.onUpdate(rows, this.tools);
+      this.onUpdate(this.payload());
     } finally {
       this.polling = false;
     }

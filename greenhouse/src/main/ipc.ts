@@ -30,7 +30,7 @@ export function wireIpc(
   poller: Poller,
   prefs: PrefsStore,
 ): void {
-  ipcMain.handle('fleet:snapshot', () => ({ rows: poller.current(), tools: poller.currentTools() }));
+  ipcMain.handle('fleet:snapshot', () => poller.payload());
   ipcMain.handle('fleet:refresh', () => poller.poll());
 
   // Repo-level tool scripts (inference-all / backtest-all) in their own tmux.

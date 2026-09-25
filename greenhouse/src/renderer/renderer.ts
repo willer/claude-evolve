@@ -13,6 +13,7 @@ import type { GenAxis } from '../core/genAxis';
 import { nearestColumnIndex, tipPlacement } from '../core/hover';
 import type { HoverColumn } from '../core/hover';
 import { productionTags } from '../core/inferenceAll';
+import { activeRootFilter, inRoot, rootLabel } from '../core/roots';
 import { fmtGeneric, leaderMetrics } from '../core/profile';
 import {
   SESSION_KINDS,
@@ -90,7 +91,16 @@ const api = window.greenhouse;
 
 let rows: WorkspaceRow[] = [];
 let tools: ToolState[] = [];
-let prefs: Prefs = { roots: [], starred: [], sortCol: 'score', sortDesc: true, winnerCols: ['', '', '', '', ''], theme: 'system' };
+let prefs: Prefs = {
+  roots: [],
+  starred: [],
+  sortCol: 'score',
+  sortDesc: true,
+  winnerCols: ['', '', '', '', ''],
+  theme: 'system',
+  rootFilter: '',
+};
+let roots: string[] = []; // roots actually scanned (from the fleet payload) — the switcher's options
 let viewMode: 'list' | 'grid' = 'list'; // session-only — every launch starts in the list
 // Workspace identity is row.key (core/roots.ts), never row.name: two roots can
 // each hold a same-named workspace.
@@ -944,7 +954,7 @@ function sorted(): WorkspaceRow[] {
   const key = sortKey(prefs.sortCol);
   const dir = prefs.sortDesc ? -1 : 1;
   // Starred first, missing values last regardless of direction.
-  return [...rows].filter(matchesSearch).sort((a, b) => {
+  return fleetRows().filter(matchesSearch).sort((a, b) => {
     if (a.starred !== b.starred) return a.starred ? -1 : 1;
     const va = key(a);
     const vb = key(b);
@@ -1014,7 +1024,41 @@ function shellButtons(r: WorkspaceRow): string {
     : `<button data-act="shell-start" data-name="${n}" title="Launch a plain zsh in this workspace (no claude)">▶ Shell</button>`;
 }
 
+// ── root switcher ────────────────────────────────────────────────────────────
+// Header dropdown narrowing the fleet (list/grid, totals, tool buttons) to one
+// root; hidden with a single root. Notifications still cover every root.
+
+function currentRootFilter(): string {
+  return activeRootFilter(prefs.rootFilter, roots);
+}
+
+/** Workspaces in the selected root (all of them under 'All'). */
+function fleetRows(): WorkspaceRow[] {
+  const f = currentRootFilter();
+  return rows.filter((r) => inRoot(r, f));
+}
+
+let rootSwitchSig = ''; // rebuild options only when they change, so a poll can't close an open dropdown
+function renderRootSwitch(): void {
+  const el = $('root-switch') as HTMLSelectElement;
+  el.style.display = roots.length > 1 ? '' : 'none';
+  const sig = JSON.stringify(roots);
+  if (sig !== rootSwitchSig) {
+    rootSwitchSig = sig;
+    el.innerHTML =
+      `<option value="">All roots</option>` +
+      roots.map((r) => `<option value="${esc(r)}" title="${esc(r)}">${esc(rootLabel(r, roots))}</option>`).join('');
+  }
+  el.value = currentRootFilter();
+}
+
+$('root-switch').addEventListener('change', async (e) => {
+  prefs = await api.prefs.set({ rootFilter: (e.target as HTMLSelectElement).value });
+  render();
+});
+
 function renderTotals(): void {
+  const rows = fleetRows();
   const running = rows.filter((r) => r.session.running).length;
   const asking = rows.filter((r) => r.session.activity === 'asking').length;
   const stuck = rows.filter((r) => r.session.activity === 'stuck').length;
@@ -1360,6 +1404,7 @@ function render(): void {
   $('grid').style.display = isFleet && viewMode === 'grid' ? 'grid' : 'none';
   $('detail').style.display = isDetail ? 'block' : 'none';
   $('tool').style.display = isTool ? 'block' : 'none';
+  renderRootSwitch();
   renderTotals();
   renderToolButtons();
   renderHints();
@@ -2151,6 +2196,7 @@ function renderTool(): void {
 
 function renderToolButtons(): void {
   $('tool-btns').innerHTML = tools
+    .filter((t) => inRoot(t, currentRootFilter()))
     .map(
       (t) =>
         `<button data-tool="${esc(t.id)}" class="${t.running ? 'on' : ''}"
@@ -2190,6 +2236,7 @@ window.addEventListener('message', (e) => {
     const payload = e.data.payload as FleetPayload;
     rows = payload.rows;
     tools = payload.tools;
+    roots = payload.roots;
     render();
     loadNewRootBacktests();
   } else if (e.data?.type === 'eg-event' && e.data.channel === 'system:update') {
@@ -2644,6 +2691,7 @@ void (async () => {
   const payload = await api.fleet.snapshot();
   rows = payload.rows;
   tools = payload.tools;
+  roots = payload.roots;
   render();
   syncHeaderHeight();
   loadNewRootBacktests(); // joins each root's BT scores into the list/peek/detail when they land

@@ -57,7 +57,9 @@ to before the profile split — verify against the screenshot harness.
     `key`: the dir name, or `name@<root label>` when an EARLIER root already
     has that name. Sessions, stars, selection and IPC key off `key`; `name`
     stays the display / backtest-algorithm / inference-all identity. Backtest
-    DB and data/raw prices are read from the row's own `root`.
+    DB and data/raw prices are read from the row's own `root`. The header
+    root switcher (`inRoot` / `activeRootFilter`, prefs `rootFilter`, '' = All)
+    narrows list/grid, totals and tool buttons; notifications still cover all.
   - `state.ts` — tmux pane-motion classification (working/waiting/asking) and
     the `evolve-<dir>` session naming. Both are a SHARED VOCABULARY with the
     trading-strategies TUI — change them in lockstep or the two tools stop

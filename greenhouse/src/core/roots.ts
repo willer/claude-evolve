@@ -46,3 +46,19 @@ export function assignKeys<T extends { name: string; root: string }>(items: T[])
     return { ...it, key };
   });
 }
+
+// ── root switcher ───────────────────────────────────────────────────────────
+// The header dropdown narrows the fleet to one configured root ('' = All).
+
+/** Does a workspace (or tool) belong to configured root `filter`? A subdir
+ *  workspace's `root` is the configured root; a root that is itself a workspace
+ *  has its parent as `root`, so its own path must match. '' matches all. */
+export function inRoot(item: { path?: string; root: string }, filter: string): boolean {
+  return !filter || item.root === filter || item.path === filter;
+}
+
+/** The saved filter, if it still applies: it must name a configured root, and
+ *  there must be 2+ roots (with one the switcher is hidden). Else '' (All). */
+export function activeRootFilter(saved: string, roots: string[]): string {
+  return roots.length > 1 && roots.includes(saved) ? saved : '';
+}

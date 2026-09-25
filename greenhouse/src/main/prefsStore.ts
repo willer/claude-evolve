@@ -13,6 +13,7 @@ const DEFAULTS: Prefs = {
   sortDesc: true,
   winnerCols: ['', '', '', '', ''],
   theme: 'system',
+  rootFilter: '',
   // Listed so a saved value survives the known-keys load filter; the window
   // falls back to its default size until the first close writes real bounds.
   windowBounds: undefined,

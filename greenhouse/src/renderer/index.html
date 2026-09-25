@@ -111,6 +111,7 @@
     #tool-btns button.on { border-color: var(--green); color: var(--green); }
     input { cursor: text; width: 420px; }
     #search { width: 200px; cursor: text; }
+    #root-switch { max-width: 220px; }
 
     /* health chip — the one-glance verdict (shared by list, grid, detail) */
     .hc {
@@ -468,6 +469,7 @@
     </div>
     <div class="hrow">
       <span class="spacer"></span>
+      <select id="root-switch" title="Show one root's workspaces and tools (All = every root)"></select>
       <span id="tool-btns" style="display: contents"></span>
       <input id="search" type="search" placeholder="/ filter…" autocomplete="off" title="Filter workspaces (/)" />
       <div id="view-toggle" class="segmented" title="List / grid (v)">

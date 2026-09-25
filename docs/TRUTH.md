@@ -344,3 +344,16 @@ a process can't lower its niceness without root, so inference-all started by
 hand from a niced Greenhouse shell stays niced. Run it from the tool tab or a
 normal terminal. Sessions that were already running before this change keep
 their old priority until they are restarted.
+
+## Greenhouse root switcher (2026-09-25)
+
+With 2+ roots, a header dropdown (All roots, then one entry per root) narrows
+the list/grid, totals and tool buttons to one root. This lets one server run
+trading and predictive-model evolutions side by side without mixing them in
+one list. The choice persists as prefs `rootFilter` ('' = All).
+`core/roots.ts activeRootFilter` ignores a saved filter that is no longer a
+configured root, so removing a root never blanks the fleet. Native
+notifications still fire for every root, so a hidden root's stuck session still
+alerts. The options come from the fleet payload's `roots` (the roots actually
+scanned, EG_ROOTS-aware), not saved prefs. Chosen over one window per root:
+same outcome for about a third of the work, with no per-window state.
