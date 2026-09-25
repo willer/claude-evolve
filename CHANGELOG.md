@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Grok ideation runs through Claude Code, not opencode (plugin 0.3.4)** —
+  `ideate_branch.py` runs the OpenRouter sources (grok, and the unrolled
+  glm/kimi/qwen) as a headless `claude -p --bare` (read-only tools) with the same
+  routing env Spaces uses for its claude/grok route. opencode is no longer a
+  plugin dependency.
 - **Failed ideation branches re-roll to another model (plugin 0.3.4)** — a
   branch whose external source errors or times out is relaunched on a source
   re-rolled from the ones that have not failed this generation, instead of

@@ -357,3 +357,19 @@ notifications still fire for every root, so a hidden root's stuck session still
 alerts. The options come from the fleet payload's `roots` (the roots actually
 scanned, EG_ROOTS-aware), not saved prefs. Chosen over one window per root:
 same outcome for about a third of the work, with no per-window state.
+
+## OpenRouter ideation sources run through `claude -p`, not opencode (2026-09-25)
+
+`plugin/scripts/ideate_branch.py` runs grok (and the unrolled glm/kimi/qwen)
+as `claude -p --bare --model <slug> --tools Read,Grep,Glob --effort <e>` (read-only tools: with none, Grok stops after "I'll inspect the leader..." and returns no JSON) with the prompt
+on stdin and the routing env Spaces uses for its claude/grok route
+(`anthropicEndpointEnv` in Spaces `core/launch.ts`):
+`ANTHROPIC_BASE_URL=https://openrouter.ai/api`, `ANTHROPIC_AUTH_TOKEN=<key>`,
+`ANTHROPIC_API_KEY=""` (if set, it takes precedence over AUTH_TOKEN), and
+`ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL`, and
+`CLAUDE_CODE_SUBAGENT_MODEL` all set to the slug. That is 8 vars. The key is read
+from `~/.zprofile` (the personal key), never the session env. Grok gets
+`--effort max`. Claude Code warns that the slug is not in its model catalog;
+that warning is harmless for one-shot prompts. The reason for the switch is
+that opencode was an extra dependency that broke on its own (1.18.30, entry
+above), while the claude CLI is always present.

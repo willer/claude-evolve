@@ -3,7 +3,7 @@
 Build one ideation branch's prompt and, for external sources, run it.
 
 The evolve-ideate skill used to spawn a Claude subagent per branch even when the
-branch's ideas came from codex / opencode — the subagent only assembled a prompt
+branch's ideas came from codex / OpenRouter — the subagent only assembled a prompt
 and shelled out. That wrapper cost a full Claude ideator context (BRIEF, notes,
 thousands of descriptions) per branch for zero judgment. This script does the
 assembly deterministically instead:
@@ -11,12 +11,14 @@ assembly deterministically instead:
   --source opus             write the prompt file and exit; the orchestrator
                             hands the file path to ONE claude-evolve:ideator
                             subagent, which reads it and answers.
-  --source codex|grok|glm|kimi|qwen
-                            write the prompt file, run the external CLI on it,
+  --source codex            write the prompt file, run `codex exec` on it,
                             parse its JSON array, write <out>. No subagent.
+  --source grok|glm|kimi|qwen
+                            same, but through a headless `claude -p` pointed at
+                            OpenRouter (the Spaces claude/grok route). No subagent.
 
 The skill's dice roll uses ENABLED_SOURCES (opus / codex GPT-6 Astra / grok);
-the other opencode models stay wired so a roll change is a one-line edit.
+the other OpenRouter models stay wired so a roll change is a one-line edit.
 
 Usage:
   ideate_branch.py --working-dir DIR --context-file ctx.json --out branch.json
@@ -32,6 +34,7 @@ branch is reported as failed and the orchestrator re-rolls it to another source.
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -44,15 +47,16 @@ from evolve_common import add_workspace_args, load_workspace
 # skill prose. Change a model in one place.
 CODEX_MODEL = "gpt-6-astra"
 CODEX_EFFORT = "xhigh"
-OPENCODE_MODELS = {
-    "grok": "openrouter/x-ai/grok-4.6",
-    "glm": "openrouter/z-ai/glm-5.3-flash",
-    "kimi": "openrouter/moonshotai/kimi-k3",
-    "qwen": "openrouter/qwen/qwen3.8-max",
+OPENROUTER_MODELS = {
+    "grok": "x-ai/grok-4.6",
+    "glm": "z-ai/glm-5.3-flash",
+    "kimi": "moonshotai/kimi-k3",
+    "qwen": "qwen/qwen3.8-max",
 }
-# opencode --variant = provider reasoning effort; only set where the model has one.
-OPENCODE_VARIANTS = {"grok": "max"}
-SOURCES = ("opus", "codex") + tuple(OPENCODE_MODELS)  # everything the script can run
+# claude --effort per OpenRouter source; OpenRouter maps it to the provider's reasoning effort.
+OPENROUTER_EFFORT = {"grok": "max"}
+OPENROUTER_BASE = "https://openrouter.ai/api"  # claude appends /v1/messages itself
+SOURCES = ("opus", "codex") + tuple(OPENROUTER_MODELS)  # everything the script can run
 # AIDEV-NOTE: Sept 23 2026 policy — "only the very best for ideation": the roll is
 # 3/6 Opus 5.5 high (replaced Fable 5.1 xhigh on benchmarks), 2/6 GPT-6 Astra xhigh, 1/6
 # Grok 4.6 — it attacks from a different direction, so it earns the diversity slot. GLM/Kimi/Qwen stay wired (not rolled) because this changes.
@@ -216,22 +220,36 @@ def run_external(source, prompt_file, workdir, timeout):
             proc = subprocess.run(cmd, stdin=fh, capture_output=True, text=True,
                                   cwd=str(workdir), timeout=timeout)
     else:
-        if shutil.which("opencode") is None:
-            raise RuntimeError("opencode CLI not found on PATH")
-        # AIDEV-NOTE: `source ~/.zprofile` first — the session env may carry a
-        # corporate OPENROUTER_API_KEY whose data policy blocks these providers;
-        # the personal key in ~/.zprofile must win. Prompt is attached as a
-        # file so a 300KB prompt never hits ARG_MAX.
-        # `-f` is a LIST option in opencode's yargs parser: anything after it is
-        # eaten as another filename, so the message must come FIRST.
-        model = OPENCODE_MODELS[source]
-        variant = OPENCODE_VARIANTS.get(source)
-        variant_arg = f"--variant {variant} " if variant else ""
-        shell = (f"source ~/.zprofile >/dev/null 2>&1; cd {json.dumps(str(workdir))}; "
-                 f"opencode run 'Answer the prompt in the attached file. Return ONLY the JSON array it asks for.' "
-                 f"--pure -m {model} {variant_arg}-f {json.dumps(str(prompt_file))}")
-        proc = subprocess.run(["bash", "-lc", shell], stdin=subprocess.DEVNULL,
-                              capture_output=True, text=True, timeout=timeout)
+        if shutil.which("claude") is None:
+            raise RuntimeError("claude CLI not found on PATH")
+        # AIDEV-NOTE: same routing env Spaces uses for its claude/grok route
+        # (anthropicEndpointEnv in Spaces core/launch.ts): every model tier maps
+        # to the one OpenRouter model. ANTHROPIC_API_KEY must be EMPTY or it
+        # beats AUTH_TOKEN. The key comes from ~/.zprofile, not the session env:
+        # the Spaces env can carry a corporate key that blocks these providers.
+        # Read-only tools, like codex's read-only sandbox: models inspect the
+        # leader's code before proposing tweaks, and with no tools at all they
+        # stop after "I'll inspect..." with no JSON. The prompt goes in on stdin
+        # (prompts run ~300KB, far past ARG_MAX).
+        key = subprocess.run(["bash", "-c", 'source ~/.zprofile >/dev/null 2>&1; printf %s "$OPENROUTER_API_KEY"'],
+                             capture_output=True, text=True).stdout.strip()
+        if not key:
+            raise RuntimeError("OPENROUTER_API_KEY not set by ~/.zprofile")
+        model = OPENROUTER_MODELS[source]
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("ANTHROPIC_SMALL_FAST_MODEL", "OPENROUTER_API_KEY")}
+        env.update(ANTHROPIC_BASE_URL=OPENROUTER_BASE, ANTHROPIC_AUTH_TOKEN=key,
+                   ANTHROPIC_API_KEY="", ANTHROPIC_MODEL=model,
+                   ANTHROPIC_DEFAULT_OPUS_MODEL=model, ANTHROPIC_DEFAULT_SONNET_MODEL=model,
+                   ANTHROPIC_DEFAULT_HAIKU_MODEL=model, CLAUDE_CODE_SUBAGENT_MODEL=model)
+        cmd = ["claude", "-p", "--bare", "--model", model, "--tools", "Read,Grep,Glob",
+               "--no-session-persistence", "--setting-sources", "",
+               "--strict-mcp-config", "--disable-slash-commands"]
+        if source in OPENROUTER_EFFORT:
+            cmd += ["--effort", OPENROUTER_EFFORT[source]]
+        with open(prompt_file) as fh:
+            proc = subprocess.run(cmd, stdin=fh, capture_output=True, text=True,
+                                  cwd=str(workdir), env=env, timeout=timeout)
     return proc.returncode, (proc.stdout or ""), (proc.stderr or "")
 
 

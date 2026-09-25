@@ -72,7 +72,7 @@ score, edits the evaluator, or touches `algorithm.py`. Workers only write
 
 | Step | Who |
 |------|-----|
-| Ideation | Dice roll per branch: 3/6 Claude Opus 5.5 (high), 2/6 Codex GPT-6 Astra (xhigh), 1/6 Grok 4.6 (max, via opencode + OpenRouter) |
+| Ideation | Dice roll per branch: 3/6 Claude Opus 5.5 (high), 2/6 Codex GPT-6 Astra (xhigh), 1/6 Grok 4.6 (max, via `claude -p` routed to OpenRouter) |
 | Coding | Codex GPT-5.6 Luna writes first; a Claude Opus worker (medium) judges the diff and codes it itself if Codex fell short |
 | Scoring | Deterministic script under the sandbox; no model judgment |
 
@@ -86,7 +86,7 @@ an environment fault rather than silently degrading.
 - Python 3 (stdlib only; PyYAML is used if present).
 - Claude Code with access to Opus, or Codex (see host note above).
 - `codex` CLI on PATH for the coding first pass and the Codex ideation roll.
-- `opencode` on PATH plus an OpenRouter key for the Grok ideation roll (optional).
+- An `OPENROUTER_API_KEY` exported by `~/.zprofile` for the Grok ideation roll (optional). The Grok branch runs through the `claude` CLI, so there is nothing else to install.
 - macOS: `sandbox-exec` isolates evaluations (no network, workspace-only writes).
   Linux gets memory and CPU limits only.
 
