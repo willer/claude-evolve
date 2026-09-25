@@ -97,8 +97,8 @@ app.whenReady().then(() => {
   const host = new SessionHost();
   // EG_ROOTS (colon-separated) overrides the scanned roots without touching
   // saved prefs — used by WEBTESTS.md runs against synthetic workspaces.
-  // Shared by the Poller AND ipc data lookups (backtest DB), so EG_ROOTS runs
-  // never read the real repos.
+  // ipc data lookups (backtest DB, prices) only read roots the Poller found
+  // workspaces in, so EG_ROOTS runs never read the real repos.
   const testRoots = process.env.EG_ROOTS?.split(':').filter(Boolean);
   const effPrefs = () => (testRoots ? { ...prefs.get(), roots: testRoots } : prefs.get());
   const poller = new Poller(
@@ -116,7 +116,7 @@ app.whenReady().then(() => {
     },
   );
 
-  wireIpc(() => win, host, poller, prefs, effPrefs);
+  wireIpc(() => win, host, poller, prefs);
 
   win = createWindow(prefs);
   win.on('closed', () => (win = null));

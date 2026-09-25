@@ -17,6 +17,7 @@ import { chartFracs, genFrac, genTicks, sharedGenDomain } from './genAxis';
 import { nearestColumnIndex, tipPlacement } from './hover';
 import { parseInferenceAll, productionTags } from './inferenceAll';
 import { TRADING_METRICS, leaderMetrics, resolveProfile } from './profile';
+import { assignKeys, rootLabel } from './roots';
 import {
   SESSION_KINDS,
   adhocSessionName,
@@ -888,5 +889,38 @@ describe('hover readout geometry', () => {
 
   it('clamps a tooltip larger than the plot to the origin', () => {
     expect(tipPlacement(50, 50, 900, 500, 600, 300)).toEqual({ left: 0, top: 0 });
+  });
+});
+
+describe('multi-root keys', () => {
+  it('keeps plain names when every name is unique', () => {
+    const out = assignKeys([
+      { name: 'a', root: '/x/trading' },
+      { name: 'b', root: '/y/forecast' },
+    ]);
+    expect(out.map((o) => o.key)).toEqual(['a', 'b']);
+  });
+
+  it('first root keeps the plain name; later duplicates get name@root', () => {
+    const out = assignKeys([
+      { name: 'fas', root: '/x/trading' },
+      { name: 'fas', root: '/y/forecast' },
+      { name: 'solo', root: '/y/forecast' },
+    ]);
+    expect(out.map((o) => o.key)).toEqual(['fas', 'fas@forecast', 'solo']);
+    expect(sessionName(out[1].key)).toBe('evolve-fas@forecast');
+  });
+
+  it('roots with the same basename are told apart by more path', () => {
+    expect(rootLabel('/a/one/strategies', ['/a/one/strategies', '/a/two/strategies'])).toBe('one-strategies');
+    const out = assignKeys([
+      { name: 'w', root: '/a/one/strategies' },
+      { name: 'w', root: '/a/two/strategies' },
+    ]);
+    expect(out[1].key).toBe('w@two-strategies');
+  });
+
+  it('sanitizes tmux-hostile characters out of the label', () => {
+    expect(rootLabel('/a/my.repo:v2', ['/a/my.repo:v2', '/b/other'])).toBe('my_repo_v2');
   });
 });

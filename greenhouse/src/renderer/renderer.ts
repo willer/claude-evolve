@@ -48,27 +48,28 @@ declare global {
       fleet: { snapshot(): Promise<FleetPayload>; refresh(): Promise<void> };
       workspace: {
         equity(
-          name: string,
+          key: string,
           candidateId: string,
         ): Promise<{ dates: string[]; nav: number[]; position?: number[] | null } | null>;
-        benchmark(name: string): Promise<Benchmark | null>;
+        benchmark(key: string): Promise<Benchmark | null>;
       };
       evolution: {
-        start(name: string): Promise<void>;
-        stop(name: string): Promise<void>;
+        start(key: string): Promise<void>;
+        stop(key: string): Promise<void>;
       };
       adhoc: {
-        start(name: string): Promise<void>;
-        stop(name: string): Promise<void>;
+        start(key: string): Promise<void>;
+        stop(key: string): Promise<void>;
       };
       shell: {
-        start(name: string): Promise<void>;
-        stop(name: string): Promise<void>;
+        start(key: string): Promise<void>;
+        stop(key: string): Promise<void>;
       };
-      tools: { start(key: string): Promise<void>; stop(key: string): Promise<void> };
+      tools: { start(id: string): Promise<void>; stop(id: string): Promise<void> };
       backtests: {
-        summary(runDate?: string): Promise<BacktestSummary>;
+        summary(root: string, runDate?: string): Promise<BacktestSummary>;
         equity(
+          root: string,
           runDate: string,
           algorithm: string,
           period: string,
@@ -91,12 +92,14 @@ let rows: WorkspaceRow[] = [];
 let tools: ToolState[] = [];
 let prefs: Prefs = { roots: [], starred: [], sortCol: 'score', sortDesc: true, winnerCols: ['', '', '', '', ''], theme: 'system' };
 let viewMode: 'list' | 'grid' = 'list'; // session-only — every launch starts in the list
-let view: string | null = null; // workspace detail, or null
-let toolView: string | null = null; // tool session page (inference-all / backtest-all), or null
-let btLatest: BacktestSummary | undefined; // latest run, joined into the per-workspace stats
-let btLoaded = false; // have we fetched the summary at least once (distinguishes "no DB" from "not yet loaded")
-let selectedName: string | null = null; // keyboard cursor, stable across pushes
-let peekFor: string | null = null; // quick-status popover target
+// Workspace identity is row.key (core/roots.ts), never row.name: two roots can
+// each hold a same-named workspace.
+let view: string | null = null; // workspace detail (row key), or null
+let toolView: string | null = null; // tool session page (ToolState.id), or null
+// Latest backtest-all run per repo root (row.root) — each repo has its own DB.
+const btByRoot = new Map<string, NonNullable<BacktestSummary>>();
+let selectedKey: string | null = null; // keyboard cursor (row key), stable across pushes
+let peekFor: string | null = null; // quick-status popover target (row key)
 /** Which algo the detail view's summary/NAV/year panels describe: the evolution winner
  *  (default) or the row production pins. Only offered when the two differ; resets to
  *  'winner' whenever a workspace is opened. */
@@ -616,6 +619,7 @@ function navChartSvg(eq: Equity, w: number, h: number, opts: { axes?: boolean } 
 
 /** Panel body for a candidate's NAV chart: chart, loading note, or honest absence. */
 function navPanelHtml(ws: string, candidateId: string, w: number, h: number): string {
+  // ws = row key
   const eq = equityFor(ws, candidateId);
   if (eq === undefined) return `<div class="desc" style="color: var(--dim)">loading…</div>`;
   if (eq === null)
@@ -629,16 +633,18 @@ function navPanelHtml(ws: string, candidateId: string, w: number, h: number): st
  *  curves run through the latest data (fresher than the walk-forward artifact).
  *  Curves load lazily via btEquityFor, repainting as each arrives. Empty string
  *  when the workspace has no entry in the latest backtest run. */
-function navByPeriodPanel(name: string, cw: number, tag: string): string {
-  const t = latestBtTable();
-  if (!btLatest || !t || !btAlgoFor(name)) return '';
-  const runDate = btLatest.runDate;
+function navByPeriodPanel(r: WorkspaceRow, cw: number, tag: string): string {
+  const bt = btByRoot.get(r.root);
+  const t = btTableFor(r.root);
+  if (!bt || !t || !btAlgoFor(r)) return '';
+  const runDate = bt.runDate;
+  const name = r.name;
   const cols = cw >= 780 ? 3 : cw >= 460 ? 2 : 1;
   const gap = 10;
   const cellW = Math.max(180, Math.floor((cw - gap * (cols - 1)) / cols));
   const tiles = t.periods
     .map((p) => {
-      const eq = btEquityFor(runDate, name, p);
+      const eq = btEquityFor(r.root, runDate, name, p);
       const body =
         eq === undefined
           ? `<div class="desc" style="color: var(--dim); height: 96px">loading…</div>`
@@ -648,7 +654,7 @@ function navByPeriodPanel(name: string, cw: number, tag: string): string {
               zoomable(
                 `nav-period-${p}`,
                 (w, ht, zoom) => {
-                  const e2 = btEquityFor(runDate, name, p);
+                  const e2 = btEquityFor(r.root, runDate, name, p);
                   return e2 ? navChartSvg(e2, w, ht, { axes: zoom }) : '';
                 },
                 cellW,
@@ -686,15 +692,18 @@ function yearSeries(r: WorkspaceRow): Series[] {
 
 // ── backtest join: latest run → per-workspace stats ──────────────────────────
 
-let btLatestTable: { algos: BacktestAlgo[]; periods: string[] } | null = null;
-let btLatestFor: BacktestSummary | undefined; // memo key (summary object identity)
+// Scored table per summary, memoized on the summary object's identity.
+const btTableMemo = new WeakMap<object, { algos: BacktestAlgo[]; periods: string[] }>();
 
-function latestBtTable(): { algos: BacktestAlgo[]; periods: string[] } | null {
-  if (btLatestFor !== btLatest) {
-    btLatestFor = btLatest;
-    btLatestTable = btLatest ? buildBacktestTable(btLatest.rows) : null;
+function btTableFor(root: string): { algos: BacktestAlgo[]; periods: string[] } | null {
+  const bt = btByRoot.get(root);
+  if (!bt) return null;
+  let t = btTableMemo.get(bt);
+  if (!t) {
+    t = buildBacktestTable(bt.rows);
+    btTableMemo.set(bt, t);
   }
-  return btLatestTable;
+  return t;
 }
 
 /** Latest-run backtest entry for a workspace (dir name == algorithm), with rank. */
@@ -722,10 +731,10 @@ function winnerTag(state: 'winner' | 'previous' | 'unknown' | 'pinned', tested?:
   return `<span class="tag tag-unknown" title="Backtested champion — no completed evolution leader yet to compare">tested${tested ? ` ${esc(tested)}` : ''}</span>`;
 }
 
-function btAlgoFor(name: string): { algo: BacktestAlgo; rank: number } | null {
-  const t = latestBtTable();
+function btAlgoFor(r: WorkspaceRow): { algo: BacktestAlgo; rank: number } | null {
+  const t = btTableFor(r.root);
   if (!t) return null;
-  const i = t.algos.findIndex((a) => a.algorithm === name);
+  const i = t.algos.findIndex((a) => a.algorithm === r.name);
   return i === -1 ? null : { algo: t.algos[i], rank: i + 1 };
 }
 
@@ -740,27 +749,32 @@ function btAlgoFor(name: string): { algo: BacktestAlgo; rank: number } | null {
 // would blank the workspace's panels (btAlgoFor → null) until the run catches
 // up. So when the candidate run lacks requireAlgo but the current run has it,
 // keep the current (complete) run and let a later open pick up the finished one.
-async function loadLatestBacktests(requireAlgo?: string): Promise<void> {
-  const next = await api.backtests.summary();
-  if (!next) {
-    // DB momentarily unavailable (e.g. mid-write) — never clobber a good run.
-    if (!btLoaded) {
-      btLoaded = true;
-      render();
-    }
-    return;
-  }
+async function loadLatestBacktests(root: string, requireAlgo?: string): Promise<void> {
+  const next = await api.backtests.summary(root);
+  // No DB in this root, or momentarily unavailable (e.g. mid-write) — never clobber a good run.
+  if (!next) return;
+  const cur = btByRoot.get(root);
   if (
     requireAlgo &&
-    btLatest &&
+    cur &&
     !next.rows.some((r) => r.algorithm === requireAlgo) &&
-    btLatest.rows.some((r) => r.algorithm === requireAlgo)
+    cur.rows.some((r) => r.algorithm === requireAlgo)
   )
     return;
-  if (btLoaded && next.runDate === btLatest?.runDate) return; // same run, nothing new
-  btLoaded = true;
-  btLatest = next;
+  if (next.runDate === cur?.runDate) return; // same run, nothing new
+  btByRoot.set(root, next);
   render();
+}
+
+// Roots whose backtests have been requested at least once. A root first seen on
+// a fleet push (prefs just gained it) gets its initial load then.
+const btRequested = new Set<string>();
+function loadNewRootBacktests(): void {
+  for (const root of new Set(rows.map((r) => r.root))) {
+    if (btRequested.has(root)) continue;
+    btRequested.add(root);
+    void loadLatestBacktests(root);
+  }
 }
 
 // Per-period NAV series, lazily fetched and cached (a run's curves never
@@ -769,13 +783,13 @@ const btEquityCache = new Map<string, Equity | null>();
 const btEquityPending = new Set<string>();
 const btExpanded = new Set<string>(); // `${algorithm}|${period}` chart toggles
 
-function btEquityFor(runDate: string, algo: string, period: string): Equity | null | undefined {
-  const key = `${runDate}|${algo}|${period}`;
+function btEquityFor(root: string, runDate: string, algo: string, period: string): Equity | null | undefined {
+  const key = `${root}|${runDate}|${algo}|${period}`;
   if (btEquityCache.has(key)) return btEquityCache.get(key);
   if (!btEquityPending.has(key)) {
     btEquityPending.add(key);
     void api.backtests
-      .equity(runDate, algo, period)
+      .equity(root, runDate, algo, period)
       .then((d) => {
         btEquityCache.set(key, d);
         btEquityPending.delete(key);
@@ -823,6 +837,7 @@ const BT_PCT = (v: number | null | undefined): string =>
  *  the traded instrument — annualized to sit in the same units as the CAGR
  *  column, the "did it beat just holding?" check against the strategy's CAGR. */
 function btPeriodTableHtml(
+  root: string,
   a: BacktestAlgo,
   periods: string[],
   runDate: string,
@@ -866,7 +881,7 @@ function btPeriodTableHtml(
         ? `<tr class="bt-chart"><td colspan="${cols}">${zoomable(
             `bt-${a.algorithm}-${p}`,
             (w, h) => {
-              const eq = btEquityFor(runDate, a.algorithm, p);
+              const eq = btEquityFor(root, runDate, a.algorithm, p);
               if (eq === undefined)
                 return `<div class="desc" style="color: var(--dim)">loading…</div>`;
               if (eq === null)
@@ -911,7 +926,7 @@ const SORTS: Record<string, (r: WorkspaceRow) => number | string | null> = {
 // Case-insensitive substring match over name + leader id + leader description.
 function matchesSearch(r: WorkspaceRow): boolean {
   if (!searchQuery) return true;
-  const hay = `${r.name} ${r.stats.leader?.id ?? ''} ${r.stats.leader?.description ?? ''}`.toLowerCase();
+  const hay = `${r.key} ${r.stats.leader?.id ?? ''} ${r.stats.leader?.description ?? ''}`.toLowerCase();
   return hay.includes(searchQuery);
 }
 
@@ -933,12 +948,12 @@ function sorted(): WorkspaceRow[] {
     if (a.starred !== b.starred) return a.starred ? -1 : 1;
     const va = key(a);
     const vb = key(b);
-    if (va === null && vb === null) return a.name.localeCompare(b.name);
+    if (va === null && vb === null) return a.name.localeCompare(b.name) || a.key.localeCompare(b.key);
     if (va === null) return 1;
     if (vb === null) return -1;
     if (va < vb) return -dir;
     if (va > vb) return dir;
-    return a.name.localeCompare(b.name);
+    return a.name.localeCompare(b.name) || a.key.localeCompare(b.key);
   });
 }
 
@@ -965,28 +980,35 @@ function sessBadge(s: SessionState, sessId?: string): string {
   return `<span class="badge ${a}">${label}</span>`;
 }
 
+/** Workspace name; a later root's same-named workspace also shows its dim
+ *  `@root` suffix (the rest of its key) so the two rows are tellable apart. */
+function nameHtml(r: WorkspaceRow): string {
+  const suffix = r.key.slice(r.name.length);
+  return esc(r.name) + (suffix ? `<span class="root-tag">${esc(suffix)}</span>` : '');
+}
+
 function badge(r: WorkspaceRow): string {
-  return sessBadge(r.session, sessionName(r.name));
+  return sessBadge(r.session, sessionName(r.key));
 }
 
 // Evolution / adhoc action buttons, shared by list and grid. No Attach button —
 // open the workspace (click the row) to attach in the detail view.
 function evoButtons(r: WorkspaceRow): string {
-  const n = esc(r.name);
+  const n = esc(r.key);
   return r.session.running
     ? `<button data-act="evo-stop" data-name="${n}" class="danger" title="Stop evolution">⏹ Stop</button>`
     : `<button data-act="evo-start" data-name="${n}" class="primary" title="Start the /evolve loop">▶ Evolve</button>`;
 }
 
 function adhocButtons(r: WorkspaceRow): string {
-  const n = esc(r.name);
+  const n = esc(r.key);
   return r.adhoc.running
     ? `<button data-act="adhoc-stop" data-name="${n}" class="danger" title="Stop the adhoc claude session">⏹ Stop</button>`
     : `<button data-act="adhoc-start" data-name="${n}" title="Launch a plain claude in this workspace (no /evolve)">▶ Adhoc</button>`;
 }
 
 function shellButtons(r: WorkspaceRow): string {
-  const n = esc(r.name);
+  const n = esc(r.key);
   return r.shell.running
     ? `<button data-act="shell-stop" data-name="${n}" class="danger" title="Stop the shell session">⏹ Stop</button>`
     : `<button data-act="shell-start" data-name="${n}" title="Launch a plain zsh in this workspace (no claude)">▶ Shell</button>`;
@@ -1112,10 +1134,10 @@ function syncHeaderHeight(): void {
 
 function ensureSelection(order: WorkspaceRow[]): void {
   if (order.length === 0) {
-    selectedName = null;
+    selectedKey = null;
     return;
   }
-  if (!selectedName || !order.some((r) => r.name === selectedName)) selectedName = order[0].name;
+  if (!selectedKey || !order.some((r) => r.key === selectedKey)) selectedKey = order[0].key;
 }
 
 // ── fleet: list view ─────────────────────────────────────────────────────────
@@ -1180,10 +1202,10 @@ function renderList(order: WorkspaceRow[]): void {
       const age = fmtAge(r.csvMtimeMs);
       const gens = s.gensSinceTop;
       const rate = s.recentSuccessRate;
-      const n = esc(r.name);
-      return `<tr class="row ${r.name === selectedName ? 'selected' : ''}" data-name="${n}">
+      const n = esc(r.key);
+      return `<tr class="row ${r.key === selectedKey ? 'selected' : ''}" data-name="${n}">
         <td><span class="star ${r.starred ? 'on' : ''}" data-star="${n}" title="Pin to top">${r.starred ? '★' : '☆'}</span></td>
-        <td class="name" title="${esc(r.path)}">${n}</td>
+        <td class="name" title="${esc(r.path)}">${nameHtml(r)}</td>
         <td>${badge(r)}</td>
         <td>${healthChip(h)}</td>
         <td class="winner">${s.error ? `<span class="warn">${esc(s.error)}</span>` : esc(s.leader?.id ?? '—')}</td>
@@ -1229,13 +1251,13 @@ function renderGridCards(order: WorkspaceRow[]): void {
       const act = r.session.activity;
       const cls = [
         act === 'asking' ? 'asking' : act === 'stuck' ? 'stuck' : '',
-        r.name === selectedName ? 'selected' : '',
+        r.key === selectedKey ? 'selected' : '',
       ].join(' ');
       return `
-      <div class="card ${cls}" data-name="${esc(r.name)}">
+      <div class="card ${cls}" data-name="${esc(r.key)}">
         <div class="title-row">
-          <span class="star ${r.starred ? 'on' : ''}" data-star="${esc(r.name)}" title="Pin to top">${r.starred ? '★' : '☆'}</span>
-          <span class="name" title="${esc(r.path)}">${esc(r.name)}</span>
+          <span class="star ${r.starred ? 'on' : ''}" data-star="${esc(r.key)}" title="Pin to top">${r.starred ? '★' : '☆'}</span>
+          <span class="name" title="${esc(r.path)}">${nameHtml(r)}</span>
           <span style="flex:1"></span>
           ${badge(r)}
           ${healthChip(h)}
@@ -1272,7 +1294,7 @@ function renderGridCards(order: WorkspaceRow[]): void {
 
 function renderPeek(): void {
   const peek = $('peek');
-  const r = peekFor ? rows.find((x) => x.name === peekFor) : undefined;
+  const r = peekFor ? rows.find((x) => x.key === peekFor) : undefined;
   if (!r) {
     peek.style.display = 'none';
     return;
@@ -1283,7 +1305,7 @@ function renderPeek(): void {
   const age = fmtAge(r.csvMtimeMs);
   peek.style.display = 'block';
   peek.innerHTML = `
-    <h3>${esc(r.name)} ${badge(r)} ${healthChip(h)}</h3>
+    <h3>${nameHtml(r)} ${badge(r)} ${healthChip(h)}</h3>
     ${
       leader
         ? `<div class="sub">${esc(leader.id)} · <span class="score">${fmtScore(leader.performance)}</span></div>`
@@ -1296,7 +1318,7 @@ function renderPeek(): void {
              .map((m) => `<span class="metric"><span class="k">${esc(m.k)}</span><span class="v ${m.cls}">${esc(m.v)}</span></span>`)
              .join('')}</div>
            <h4>NAV over time (out-of-sample)</h4>
-           ${navPanelHtml(r.name, leader.id, 404, 100)}
+           ${navPanelHtml(r.key, leader.id, 404, 100)}
            <h4>Returns by year</h4>
            ${yearBarsHtml(yearReturns(leader))}`
         : ''
@@ -1307,7 +1329,7 @@ function renderPeek(): void {
     <div class="metric-grid">
       ${
         (() => {
-          const bt = btAlgoFor(r.name);
+          const bt = btAlgoFor(r);
           return bt
             ? `<span class="metric" title="Backtest aggregate score, latest run (#${bt.rank})"><span class="k">BT score</span><span class="v">${bt.algo.score.toFixed(2)}</span></span>
                <span class="metric"><span class="k">BT qual</span><span class="v">${bt.algo.qualPct === null ? '—' : `${bt.algo.qualPct}%`}</span></span>`
@@ -1324,7 +1346,7 @@ function renderPeek(): void {
 }
 
 function togglePeek(): void {
-  peekFor = peekFor === selectedName ? null : selectedName;
+  peekFor = peekFor === selectedKey ? null : selectedKey;
   renderPeek();
 }
 
@@ -1353,7 +1375,7 @@ function render(): void {
   if (viewMode === 'list') renderList(order);
   else renderGridCards(order);
   if (peekFor !== null) {
-    peekFor = selectedName;
+    peekFor = selectedKey;
     renderPeek();
   }
 }
@@ -1419,14 +1441,14 @@ function detailSessId(name: string, kind: SessionKind): string {
   return kind === 'evolution' ? sessionName(name) : kind === 'adhoc' ? adhocSessionName(name) : shellSessionName(name);
 }
 
-function openDetail(name: string, focusTerm = false): void {
-  view = name;
-  selectedName = name;
+function openDetail(key: string, focusTerm = false): void {
+  view = key;
+  selectedKey = key;
   detailFocus = 'winner';
   teardownAllTerminals();
   // Land on whichever session is actually running (evolution first) instead of
   // always on an empty Evolution tab.
-  const r = rows.find((x) => x.name === name);
+  const r = rows.find((x) => x.key === key);
   detailTab = r ? pickSessionTab({ evolution: r.session, adhoc: r.adhoc, shell: r.shell }) : 'evolution';
   render(); // renderDetail attaches running sessions (unfocused) as part of rendering
   // Re-read the latest backtest-all run from sqlite on each open: btLatest is
@@ -1434,7 +1456,7 @@ function openDetail(name: string, focusTerm = false): void {
   // wouldn't show until restart. Pass the workspace so an in-progress run that
   // hasn't reached it yet can't blank its panels. The runDate-keyed curve caches
   // self-invalidate when the run changes, so refreshing this pointer is enough.
-  void loadLatestBacktests(name);
+  if (r) void loadLatestBacktests(r.root, r.name);
   window.scrollTo(0, 0); // the page scroll position carries over from the fleet list otherwise
   // Focus only on explicit intent (open+attach / 'a'), so stray keys can't reach claude.
   if (focusTerm) focusPrimaryTerm();
@@ -1684,7 +1706,7 @@ function navZoomReset(): void {
 }
 
 function renderDetail(): void {
-  const r = rows.find((x) => x.name === view);
+  const r = rows.find((x) => x.key === view);
   const detail = $('detail');
   if (!r) {
     detail.innerHTML = `<div class="empty">workspace gone</div>`;
@@ -1692,7 +1714,7 @@ function renderDetail(): void {
     return;
   }
 
-  if (detailBuiltFor !== r.name) {
+  if (detailBuiltFor !== r.key) {
     detail.innerHTML = `
       <div class="bar" id="d-bar"></div>
       <div class="cols">
@@ -1709,7 +1731,7 @@ function renderDetail(): void {
           </div>
         </div>
       </div>`;
-    detailBuiltFor = r.name;
+    detailBuiltFor = r.key;
   }
 
   // Charts fill the live column width (the user may run any window size); the
@@ -1757,8 +1779,9 @@ function renderDetail(): void {
   const yearVals = years.flatMap((sr) => sr.values.filter((v): v is number => v !== null));
   const yearN = years.length ? Math.max(...years.map((sr) => sr.values.length)) : 0;
   const hasYearChart = yearVals.length >= 2 && yearN >= 2;
-  const bt = btAlgoFor(r.name);
-  const btFlag = btLatest?.appendix.find((x) => x.algorithm === r.name);
+  const bt = btAlgoFor(r);
+  const btRun = btByRoot.get(r.root);
+  const btFlag = btRun?.appendix.find((x) => x.algorithm === r.name);
   // backtest-all scores whichever champion was current the last time it ran —
   // which can lag the live leader. Name the tested champion and flag staleness
   // so an old backtest isn't mistaken for the current leader's verdict.
@@ -1771,16 +1794,16 @@ function renderDetail(): void {
       ? 'previous'
       : 'winner';
   const btTag = bt ? winnerTag(btWinnerState, testedId, leaderId) : '';
-  const btPanel = bt && btLatest
+  const btPanel = bt && btRun
     ? `<div class="panel bt-host">
-         <h3>Backtest — run ${esc(btLatest.runDate)} · testing ${esc(bt.algo.name)} · #${bt.rank} of ${latestBtTable()!.algos.length} · score ${bt.algo.score.toFixed(2)}${bt.algo.qualPct !== null ? ` · qual ${bt.algo.qualPct}%` : ''}${btTag}</h3>
+         <h3>Backtest — run ${esc(btRun.runDate)} · testing ${esc(bt.algo.name)} · #${bt.rank} of ${btTableFor(r.root)!.algos.length} · score ${bt.algo.score.toFixed(2)}${bt.algo.qualPct !== null ? ` · qual ${bt.algo.qualPct}%` : ''}${btTag}</h3>
          ${
            btWinnerState === 'previous'
              ? `<div class="desc" style="color: var(--yellow); margin-bottom: 8px; user-select: text;">⚠ backtest-all last scored ${esc(testedId!)}; the current leader ${esc(leaderId!)} hasn't been backtested yet — re-run backtest-all to score it.</div>`
              : ''
          }
          ${btFlag ? `<div class="desc" style="color: var(--red); margin-bottom: 8px; user-select: text;">⚑ ${esc(btFlag.reasons)}</div>` : ''}
-         ${btPeriodTableHtml(bt.algo, latestBtTable()!.periods, btLatest.runDate, cw, { bh: benchmarkFor(r.name) })}
+         ${btPeriodTableHtml(r.root, bt.algo, btTableFor(r.root)!.periods, btRun.runDate, cw, { bh: benchmarkFor(r.key) })}
        </div>`
     : '';
 
@@ -1799,7 +1822,7 @@ function renderDetail(): void {
   // (session activity, then health) mirrors the fleet list view.
   $('d-bar').innerHTML = `
     <button id="back">← Fleet</button>
-    <h2>${esc(r.name)}</h2>
+    <h2 title="${esc(r.path)}">${nameHtml(r)}</h2>
     ${badge(r)}
     ${healthChip(h)}
     <span style="flex:1"></span>`;
@@ -1824,8 +1847,8 @@ function renderDetail(): void {
     ${btPanel}
     ${
       focus
-        ? `<div class="panel"><h3>${focusLabel} NAV over time — walk-forward OOS${focusTag}</h3>${registerNavZoom('nav-leader', equityFor(r.name, focus.id))}${zoomable('nav-leader', (w, ht) => navPanelHtml(r.name, focus.id, w, ht), cw, 130)}</div>
-           ${navByPeriodPanel(r.name, cw, btTag)}
+        ? `<div class="panel"><h3>${focusLabel} NAV over time — walk-forward OOS${focusTag}</h3>${registerNavZoom('nav-leader', equityFor(r.key, focus.id))}${zoomable('nav-leader', (w, ht) => navPanelHtml(r.key, focus.id, w, ht), cw, 130)}</div>
+           ${navByPeriodPanel(r, cw, btTag)}
            <div class="panel"><h3>${focusLabel} returns by year${focusTag}</h3>${yearBarsHtml(yearReturns(focus))}</div>`
         : ''
     }
@@ -1896,27 +1919,27 @@ function sessionTabSpecs(r: WorkspaceRow): Record<SessionKind, SessionTabSpec> {
   return {
     evolution: {
       state: r.session,
-      sessId: sessionName(r.name),
+      sessId: sessionName(r.key),
       label: 'Evolution',
       startLabel: '▶ Start evolution',
-      start: () => void startEvolution(r.name),
-      stop: () => void stopEvolution(r.name),
+      start: () => void startEvolution(r.key),
+      stop: () => void stopEvolution(r.key),
     },
     adhoc: {
       state: r.adhoc,
-      sessId: adhocSessionName(r.name),
+      sessId: adhocSessionName(r.key),
       label: 'Adhoc',
       startLabel: '▶ Start adhoc claude',
-      start: () => void startAdhoc(r.name),
-      stop: () => void stopAdhoc(r.name),
+      start: () => void startAdhoc(r.key),
+      stop: () => void stopAdhoc(r.key),
     },
     shell: {
       state: r.shell,
-      sessId: shellSessionName(r.name),
+      sessId: shellSessionName(r.key),
       label: 'Shell',
       startLabel: '▶ Start shell (zsh)',
-      start: () => void startShell(r.name),
-      stop: () => void stopShell(r.name),
+      start: () => void startShell(r.key),
+      stop: () => void stopShell(r.key),
     },
   };
 }
@@ -2055,14 +2078,14 @@ async function attachTerminal(
 
 let toolBuiltFor: string | null = null;
 
-function openTool(key: string): void {
+function openTool(id: string): void {
   if (view) closeDetail();
-  toolView = key;
+  toolView = id;
   teardownAllTerminals();
   render();
   window.scrollTo(0, 0);
-  const t = tools.find((x) => x.key === key);
-  if (t?.running) void attachTerminal(toolSessionName(key), false, $('tool-term-slot'), 'solo');
+  const t = tools.find((x) => x.id === id);
+  if (t?.running) void attachTerminal(toolSessionName(id), false, $('tool-term-slot'), 'solo');
 }
 
 function closeTool(): void {
@@ -2072,28 +2095,28 @@ function closeTool(): void {
   render();
 }
 
-async function startTool(key: string): Promise<void> {
-  await api.tools.start(key); // resolves after the post-start poll, so the session is listed
-  if (toolView === key) void attachTerminal(toolSessionName(key), false, $('tool-term-slot'), 'solo');
+async function startTool(id: string): Promise<void> {
+  await api.tools.start(id); // resolves after the post-start poll, so the session is listed
+  if (toolView === id) void attachTerminal(toolSessionName(id), false, $('tool-term-slot'), 'solo');
 }
 
-async function stopTool(key: string): Promise<void> {
-  if (!confirm(`Stop ${key}? The tmux session will be killed.`)) return;
-  teardownTerminal(toolSessionName(key));
-  await api.tools.stop(key);
+async function stopTool(id: string): Promise<void> {
+  if (!confirm(`Stop ${id}? The tmux session will be killed.`)) return;
+  teardownTerminal(toolSessionName(id));
+  await api.tools.stop(id);
 }
 
 // Same skeleton discipline as the detail view: the panel holding #tool-term-slot
 // is built once per tool and only the bar / hint line refresh on fleet pushes.
 function renderTool(): void {
-  const t = tools.find((x) => x.key === toolView);
+  const t = tools.find((x) => x.id === toolView);
   const el = $('tool');
   if (!t) {
     el.innerHTML = `<div class="empty">tool not available in any configured root</div>`;
     toolBuiltFor = null;
     return;
   }
-  if (toolBuiltFor !== t.key) {
+  if (toolBuiltFor !== t.id) {
     el.innerHTML = `
       <div class="bar" id="t-bar"></div>
       <div class="panel">
@@ -2101,11 +2124,11 @@ function renderTool(): void {
         <div id="tool-term-slot"></div>
         <div id="tool-term-hint"></div>
       </div>`;
-    toolBuiltFor = t.key;
+    toolBuiltFor = t.id;
   }
   $('t-bar').innerHTML = `
     <button id="t-back">← Fleet</button>
-    <h2>⚒ ${esc(t.key)}</h2>
+    <h2 title="${esc(t.root)}">⚒ ${esc(t.id)}</h2>
     <span class="badge ${t.running ? 'working' : 'stopped'}">${t.running ? 'running' : 'stopped'}</span>
     <span style="flex:1"></span>
     ${
@@ -2114,25 +2137,24 @@ function renderTool(): void {
         : `<button id="t-start" class="primary">▶ Run ./${esc(t.key)}</button>`
     }`;
   $('t-back').onclick = closeTool;
-  document.getElementById('t-start')?.addEventListener('click', () => void startTool(t.key));
-  document.getElementById('t-stop')?.addEventListener('click', () => void stopTool(t.key));
+  document.getElementById('t-start')?.addEventListener('click', () => void startTool(t.id));
+  document.getElementById('t-stop')?.addEventListener('click', () => void stopTool(t.id));
   $('tool-term-hint').innerHTML = t.running
-    ? terms.has(toolSessionName(t.key))
+    ? terms.has(toolSessionName(t.id))
       ? 'Live tmux attach — click (or ⏎) to focus; keystrokes then go to the session; wheel scrolls the session; ⌘esc backs out.'
       : '<button id="t-attach" class="primary">Attach terminal</button>'
-    : `Not running. ▶ runs ./${esc(t.key)} in ${esc(t.root ?? '?')} — the pane stays inspectable after it exits.`;
+    : `Not running. ▶ runs ./${esc(t.key)} in ${esc(t.root)} — the pane stays inspectable after it exits.`;
   document
     .getElementById('t-attach')
-    ?.addEventListener('click', () => void attachTerminal(toolSessionName(t.key), true, $('tool-term-slot'), 'solo'));
+    ?.addEventListener('click', () => void attachTerminal(toolSessionName(t.id), true, $('tool-term-slot'), 'solo'));
 }
 
 function renderToolButtons(): void {
   $('tool-btns').innerHTML = tools
-    .filter((t) => t.root !== null)
     .map(
       (t) =>
-        `<button data-tool="${esc(t.key)}" class="${t.running ? 'on' : ''}"
-           title="${t.running ? `${esc(t.key)} is running — open its session` : `Open ${esc(t.key)}`}">${t.running ? '●' : '⚒'} ${esc(t.key)}</button>`,
+        `<button data-tool="${esc(t.id)}" class="${t.running ? 'on' : ''}"
+           title="${t.running ? `${esc(t.id)} is running — open its session` : `Open ./${esc(t.key)} in ${esc(t.root)}`}">${t.running ? '●' : '⚒'} ${esc(t.id)}</button>`,
     )
     .join('');
   syncHeaderHeight();
@@ -2169,6 +2191,7 @@ window.addEventListener('message', (e) => {
     rows = payload.rows;
     tools = payload.tools;
     render();
+    loadNewRootBacktests();
   } else if (e.data?.type === 'eg-event' && e.data.channel === 'system:update') {
     pushSys(e.data.payload as SysSample);
   }
@@ -2220,7 +2243,7 @@ async function stopShell(name: string): Promise<void> {
 
 /** 's' toggle: start a stopped evolution, stop a running one. */
 async function toggleEvolution(name: string): Promise<void> {
-  const r = rows.find((x) => x.name === name);
+  const r = rows.find((x) => x.key === name);
   if (!r) return;
   if (r.session.running) await stopEvolution(name);
   else await startEvolution(name);
@@ -2367,12 +2390,12 @@ function termFocused(): boolean {
 function moveSelection(delta: number): void {
   const order = sorted();
   if (order.length === 0) return;
-  const idx = Math.max(0, order.findIndex((r) => r.name === selectedName));
+  const idx = Math.max(0, order.findIndex((r) => r.key === selectedKey));
   const next = Math.min(order.length - 1, Math.max(0, idx + delta));
-  selectedName = order[next].name;
+  selectedKey = order[next].key;
   render();
   document
-    .querySelector(`#${viewMode === 'list' ? 'list' : 'grid'} [data-name="${CSS.escape(selectedName)}"]`)
+    .querySelector(`#${viewMode === 'list' ? 'list' : 'grid'} [data-name="${CSS.escape(selectedKey)}"]`)
     ?.scrollIntoView({ block: 'nearest' });
 }
 
@@ -2446,7 +2469,7 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
-  const sel = selectedName ? rows.find((r) => r.name === selectedName) : undefined;
+  const sel = selectedKey ? rows.find((r) => r.key === selectedKey) : undefined;
 
   if (view || toolView) {
     // Detail/tool page: ⏎/a focus the primary terminal (evolution first), esc
@@ -2457,7 +2480,7 @@ window.addEventListener('keydown', (e) => {
     else if (view && ['1', '2', '3'].includes(e.key)) selectSessionTab(SESSION_KINDS[Number(e.key) - 1]);
     else if (view && e.key === 'p') {
       // Winner ⇄ Pinned focus — only when production pins a different algo.
-      const r = rows.find((x) => x.name === view);
+      const r = rows.find((x) => x.key === view);
       if (r?.stats.pinned) selectFocus(detailFocus === 'pinned' ? 'winner' : 'pinned');
     }
     else if (e.key === 'Enter' || e.key === 'a') {
@@ -2465,11 +2488,11 @@ window.addEventListener('keydown', (e) => {
       // Not attached yet (attach in flight / not started): attach the visible
       // tab's session, if it's running, and focus it.
       if (view) {
-        const r = rows.find((x) => x.name === view);
+        const r = rows.find((x) => x.key === view);
         const running = r && { evolution: r.session, adhoc: r.adhoc, shell: r.shell }[detailTab].running;
         if (running) void attachTerminal(detailSessId(view, detailTab), true, $(`${detailTab}-term-slot`), 'tabbed');
       } else if (toolView) {
-        const t = tools.find((x) => x.key === toolView);
+        const t = tools.find((x) => x.id === toolView);
         if (t?.running) void attachTerminal(toolSessionName(toolView), true, $('tool-term-slot'), 'solo');
       }
     } else if (e.key === ' ') e.preventDefault();
@@ -2488,10 +2511,10 @@ window.addEventListener('keydown', (e) => {
       moveSelection(-1);
       break;
     case 'Enter':
-      if (sel) openDetail(sel.name);
+      if (sel) openDetail(sel.key);
       break;
     case 'a':
-      if (sel) openDetail(sel.name, true);
+      if (sel) openDetail(sel.key, true);
       break;
     case ' ':
       e.preventDefault();
@@ -2507,10 +2530,10 @@ window.addEventListener('keydown', (e) => {
       toggleView();
       break;
     case 's':
-      if (sel) void toggleEvolution(sel.name);
+      if (sel) void toggleEvolution(sel.key);
       break;
     case '*':
-      if (sel) void toggleStar(sel.name);
+      if (sel) void toggleStar(sel.key);
       break;
     case '/': {
       e.preventDefault();
@@ -2623,7 +2646,7 @@ void (async () => {
   tools = payload.tools;
   render();
   syncHeaderHeight();
-  void loadLatestBacktests(); // joins BT scores into the list/peek/detail when it lands
+  loadNewRootBacktests(); // joins each root's BT scores into the list/peek/detail when they land
 })();
 
 window.addEventListener('resize', syncHeaderHeight);

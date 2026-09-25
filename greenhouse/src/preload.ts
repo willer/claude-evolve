@@ -22,30 +22,30 @@ contextBridge.exposeInMainWorld('greenhouse', {
     refresh: () => ipcRenderer.invoke('fleet:refresh'),
   },
   evolution: {
-    start: (name: string) => ipcRenderer.invoke('evolution:start', name),
-    stop: (name: string) => ipcRenderer.invoke('evolution:stop', name),
+    start: (key: string) => ipcRenderer.invoke('evolution:start', key),
+    stop: (key: string) => ipcRenderer.invoke('evolution:stop', key),
   },
   adhoc: {
-    start: (name: string) => ipcRenderer.invoke('adhoc:start', name),
-    stop: (name: string) => ipcRenderer.invoke('adhoc:stop', name),
+    start: (key: string) => ipcRenderer.invoke('adhoc:start', key),
+    stop: (key: string) => ipcRenderer.invoke('adhoc:stop', key),
   },
   shell: {
-    start: (name: string) => ipcRenderer.invoke('shell:start', name),
-    stop: (name: string) => ipcRenderer.invoke('shell:stop', name),
+    start: (key: string) => ipcRenderer.invoke('shell:start', key),
+    stop: (key: string) => ipcRenderer.invoke('shell:stop', key),
   },
   tools: {
-    start: (key: string) => ipcRenderer.invoke('tools:start', key),
-    stop: (key: string) => ipcRenderer.invoke('tools:stop', key),
+    start: (id: string) => ipcRenderer.invoke('tools:start', id),
+    stop: (id: string) => ipcRenderer.invoke('tools:stop', id),
   },
   backtests: {
-    summary: (runDate?: string) => ipcRenderer.invoke('backtests:summary', runDate),
-    equity: (runDate: string, algorithm: string, period: string) =>
-      ipcRenderer.invoke('backtests:equity', runDate, algorithm, period),
+    summary: (root: string, runDate?: string) => ipcRenderer.invoke('backtests:summary', root, runDate),
+    equity: (root: string, runDate: string, algorithm: string, period: string) =>
+      ipcRenderer.invoke('backtests:equity', root, runDate, algorithm, period),
   },
   workspace: {
-    equity: (name: string, candidateId: string) =>
-      ipcRenderer.invoke('workspace:equity', name, candidateId),
-    benchmark: (name: string) => ipcRenderer.invoke('workspace:benchmark', name),
+    equity: (key: string, candidateId: string) =>
+      ipcRenderer.invoke('workspace:equity', key, candidateId),
+    benchmark: (key: string) => ipcRenderer.invoke('workspace:benchmark', key),
   },
   session: {
     attach: (name: string, cols: number, rows: number) =>

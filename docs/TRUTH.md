@@ -311,3 +311,20 @@ an object (evaluating 'a.name')`, in `~/.local/share/opencode/log/opencode.log`)
 before any request was sent. It crashes for every model and with an empty HOME.
 OpenRouter and the ~/.zprofile key were fine; opencode 1.18.29 and 1.18.32 both
 work.
+
+## Greenhouse: same-named workspaces across roots (2026-09-25)
+
+Greenhouse always scanned several roots, but everything was keyed by the bare
+directory name: a second root's `foo/` was dropped silently, would have shared
+the `evolve-foo` tmux session, and tools, backtest DB and price data came from
+the first root that had them. Now each workspace and tool has a `key`
+(`greenhouse/src/core/roots.ts`): the first root in configured order keeps the
+plain name, and later duplicates get `name@<shortest distinguishing root
+suffix>`. So a single-root setup and the trading-strategies TUI's shared
+`evolve-<dir>` naming are unchanged. Sessions, stars, selection and IPC use
+`key`. Backtests (`<root>/data/backtest-results.db`) and buy&hold prices
+(`<root>/data/raw`) are read per row from its own root. The same directory
+reached twice (listed root that is also a subdir of another root) is
+de-duplicated by realpath. Known cost: reordering roots can re-key a
+duplicate, which orphans (does not kill) its running tmux session. The TUI
+cannot see `name@root` sessions.

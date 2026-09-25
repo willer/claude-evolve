@@ -57,6 +57,13 @@ to verify the NAV chart deterministically.
 
 - [ ] List (default view): every workspace under the configured roots appears
       as a row, sorted by score descending
+- [ ] Multiple roots: with `EG_ROOTS=<a>:<b>` where both roots hold a `shared/`
+      workspace, BOTH rows show: the first root's as `shared`, the later root's
+      as `shared` + a dim `@<root>` suffix. A tmux session `evolve-shared@<root>`
+      marks only the later row running. A tool script present in both roots
+      shows two header buttons (`backtest-all`, `backtest-all@<root>`), each
+      running in its own root. Backtest/B&H panels read the row's OWN root
+      (`<root>/data/…`), never another root's DB.
 - [ ] List: column headers sort on click with ▲/▼ indicator; health chip
       (ok/plateau/stale/failing/error) and state badge render per row;
       sparkline stroke matches health color (green/yellow/red)

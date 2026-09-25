@@ -11,7 +11,6 @@ import { promisify } from 'node:util';
 import type { BacktestRow, PricePoint } from '../core/backtests';
 import { benchmarkReturns } from '../core/backtests';
 import { adhocSessionName, sessionName, shellSessionName, toolSessionName } from '../core/state';
-import type { Prefs } from '../core/types';
 import type { Poller } from './Poller';
 import type { PrefsStore } from './prefsStore';
 import type { AttachHandle, SessionHost } from './SessionHost';
@@ -30,38 +29,39 @@ export function wireIpc(
   host: SessionHost,
   poller: Poller,
   prefs: PrefsStore,
-  // Effective prefs (EG_ROOTS test seam applied) — data lookups must follow
-  // the same roots the Poller scans, or EG_ROOTS runs leak real-repo data.
-  effPrefs: () => Prefs,
 ): void {
   ipcMain.handle('fleet:snapshot', () => ({ rows: poller.current(), tools: poller.currentTools() }));
   ipcMain.handle('fleet:refresh', () => poller.poll());
 
   // Repo-level tool scripts (inference-all / backtest-all) in their own tmux.
-  ipcMain.handle('tools:start', async (_e, key: string) => {
-    const tool = poller.currentTools().find((t) => t.key === key);
-    if (!tool?.root) throw new Error(`tool not available in any root: ${key}`);
-    if (tool.running) throw new Error(`tool already running: ${key}`);
-    await host.startTool(key, tool.root);
+  ipcMain.handle('tools:start', async (_e, id: string) => {
+    const tool = poller.currentTools().find((t) => t.id === id);
+    if (!tool) throw new Error(`tool not available in any root: ${id}`);
+    if (tool.running) throw new Error(`tool already running: ${id}`);
+    await host.startTool(tool.id, tool.key, tool.root);
     await poller.poll();
   });
 
-  ipcMain.handle('tools:stop', async (_e, key: string) => {
-    host.kill(toolSessionName(key));
+  ipcMain.handle('tools:stop', async (_e, id: string) => {
+    host.kill(toolSessionName(id));
     await new Promise((r) => setTimeout(r, 300));
     await poller.poll();
   });
 
-  const backtestDb = (): string | undefined =>
-    effPrefs()
-      .roots.map((r) => path.join(r, 'data', 'backtest-results.db'))
-      .find((p) => fs.existsSync(p));
+  // Each root carries its own backtest DB; a workspace only ever reads its own
+  // root's, so a same-named algorithm in another repo can't leak in. The root
+  // must be one a discovered workspace sits in (the renderer passes row.root).
+  const backtestDb = (root: string): string | undefined => {
+    if (!poller.current().some((r) => r.root === root)) throw new Error(`unknown root: ${root}`);
+    const p = path.join(root, 'data', 'backtest-results.db');
+    return fs.existsSync(p) ? p : undefined;
+  };
 
   // Backtest dashboard data: latest complete run (>10 algos, like the
   // streamlit default) unless a specific runDate is requested. Includes the
   // run's appendix (flagged algorithms + reasons — the report's flag section).
-  ipcMain.handle('backtests:summary', async (_e, runDate?: string) => {
-    const db = backtestDb();
+  ipcMain.handle('backtests:summary', async (_e, root: string, runDate?: string) => {
+    const db = backtestDb(root);
     if (!db) return null;
     const dates = (await sqliteJson(
       db,
@@ -91,11 +91,11 @@ export function wireIpc(
   // Null = honest absence: DB predates the table, or the run carried no curve.
   // position is signed % of portfolio (long +, short −), aligned 1:1 with the
   // NAV series, or absent (null) for older runs that predate the column.
-  ipcMain.handle('backtests:equity', async (_e, runDate: string, algorithm: string, period: string) => {
+  ipcMain.handle('backtests:equity', async (_e, root: string, runDate: string, algorithm: string, period: string) => {
     if (!/^[\w :.-]+$/.test(runDate)) throw new Error(`bad run date: ${runDate}`);
     if (!/^[\w./-]+$/.test(algorithm)) throw new Error(`bad algorithm: ${algorithm}`);
     if (!/^\w+$/.test(period)) throw new Error(`bad period: ${period}`);
-    const db = backtestDb();
+    const db = backtestDb(root);
     if (!db) return null;
     let rows: unknown[];
     try {
@@ -125,44 +125,44 @@ export function wireIpc(
     };
   });
 
-  ipcMain.handle('evolution:start', async (_e, name: string) => {
-    const ws = poller.current().find((r) => r.name === name);
-    if (!ws) throw new Error(`unknown workspace: ${name}`);
-    await host.startEvolution(ws.name, ws.path);
+  ipcMain.handle('evolution:start', async (_e, key: string) => {
+    const ws = poller.current().find((r) => r.key === key);
+    if (!ws) throw new Error(`unknown workspace: ${key}`);
+    await host.startEvolution(ws.key, ws.path);
     await poller.poll();
   });
 
-  ipcMain.handle('evolution:stop', async (_e, name: string) => {
-    host.kill(sessionName(name));
+  ipcMain.handle('evolution:stop', async (_e, key: string) => {
+    host.kill(sessionName(key));
     // kill-session is async fire-and-forget; give tmux a beat before re-listing
     await new Promise((r) => setTimeout(r, 300));
     await poller.poll();
   });
 
   // Adhoc session: plain claude in the workspace dir, run alongside evolution.
-  ipcMain.handle('adhoc:start', async (_e, name: string) => {
-    const ws = poller.current().find((r) => r.name === name);
-    if (!ws) throw new Error(`unknown workspace: ${name}`);
-    await host.startAdhoc(ws.name, ws.path);
+  ipcMain.handle('adhoc:start', async (_e, key: string) => {
+    const ws = poller.current().find((r) => r.key === key);
+    if (!ws) throw new Error(`unknown workspace: ${key}`);
+    await host.startAdhoc(ws.key, ws.path);
     await poller.poll();
   });
 
-  ipcMain.handle('adhoc:stop', async (_e, name: string) => {
-    host.kill(adhocSessionName(name));
+  ipcMain.handle('adhoc:stop', async (_e, key: string) => {
+    host.kill(adhocSessionName(key));
     await new Promise((r) => setTimeout(r, 300));
     await poller.poll();
   });
 
   // Shell session: a bare zsh in the workspace dir, run alongside evolution.
-  ipcMain.handle('shell:start', async (_e, name: string) => {
-    const ws = poller.current().find((r) => r.name === name);
-    if (!ws) throw new Error(`unknown workspace: ${name}`);
-    await host.startShell(ws.name, ws.path);
+  ipcMain.handle('shell:start', async (_e, key: string) => {
+    const ws = poller.current().find((r) => r.key === key);
+    if (!ws) throw new Error(`unknown workspace: ${key}`);
+    await host.startShell(ws.key, ws.path);
     await poller.poll();
   });
 
-  ipcMain.handle('shell:stop', async (_e, name: string) => {
-    host.kill(shellSessionName(name));
+  ipcMain.handle('shell:stop', async (_e, key: string) => {
+    host.kill(shellSessionName(key));
     await new Promise((r) => setTimeout(r, 300));
     await poller.poll();
   });
@@ -206,9 +206,9 @@ export function wireIpc(
   // 2026-06-26 — present only on artifacts written since, so the walk-forward
   // chart draws the position pane for re-evaluated candidates and stays 2-pane
   // otherwise. Null when absent — older candidates predate the artifact entirely.
-  ipcMain.handle('workspace:equity', (_e, name: string, candidateId: string) => {
-    const ws = poller.current().find((r) => r.name === name);
-    if (!ws) throw new Error(`unknown workspace: ${name}`);
+  ipcMain.handle('workspace:equity', (_e, key: string, candidateId: string) => {
+    const ws = poller.current().find((r) => r.key === key);
+    if (!ws) throw new Error(`unknown workspace: ${key}`);
     if (!/^[\w.-]+$/.test(candidateId)) throw new Error(`bad candidate id: ${candidateId}`);
     const file = path.join(ws.path, 'equity', `${candidateId}.csv`);
     let text: string;
@@ -263,21 +263,18 @@ export function wireIpc(
     priceCache.set(file, { mtimeMs: st.mtimeMs, series });
     return series;
   };
-  // Latest dated <root>/data/raw/<SYM>_1d_*.csv across the configured roots.
-  const latestPriceFile = (symbol: string): string | undefined => {
+  // Latest dated <root>/data/raw/<SYM>_1d_*.csv in the workspace's own root.
+  const latestPriceFile = (root: string, symbol: string): string | undefined => {
     const re = new RegExp(`^${symbol}_1d_.*\\.csv$`);
-    for (const root of effPrefs().roots) {
-      const dir = path.join(root, 'data', 'raw');
-      let names: string[];
-      try {
-        names = fs.readdirSync(dir);
-      } catch {
-        continue;
-      }
-      const match = names.filter((n) => re.test(n)).sort();
-      if (match.length) return path.join(dir, match[match.length - 1]);
+    const dir = path.join(root, 'data', 'raw');
+    let names: string[];
+    try {
+      names = fs.readdirSync(dir);
+    } catch {
+      return undefined;
     }
-    return undefined;
+    const match = names.filter((n) => re.test(n)).sort();
+    return match.length ? path.join(dir, match[match.length - 1]) : undefined;
   };
   // Traded symbol for a workspace, from its evaluator.py's `symbol="..."`.
   const workspaceSymbol = (wsPath: string): string | undefined => {
@@ -288,14 +285,14 @@ export function wireIpc(
       return undefined;
     }
   };
-  ipcMain.handle('workspace:benchmark', (_e, name: string) => {
-    const ws = poller.current().find((r) => r.name === name);
-    if (!ws) throw new Error(`unknown workspace: ${name}`);
+  ipcMain.handle('workspace:benchmark', (_e, key: string) => {
+    const ws = poller.current().find((r) => r.key === key);
+    if (!ws) throw new Error(`unknown workspace: ${key}`);
     const symbol = workspaceSymbol(ws.path);
     if (!symbol) return null; // not a single-symbol trading workspace
-    const instFile = latestPriceFile(symbol);
-    const spyFile = latestPriceFile('SPY');
-    if (!instFile || !spyFile) return null; // no price data under any root
+    const instFile = latestPriceFile(ws.root, symbol);
+    const spyFile = latestPriceFile(ws.root, 'SPY');
+    if (!instFile || !spyFile) return null; // no price data in the workspace's root
     const inst = loadPriceSeries(instFile);
     const spy = loadPriceSeries(spyFile);
     if (inst.length < 2 || spy.length < 2) return null;

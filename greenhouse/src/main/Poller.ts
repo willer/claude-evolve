@@ -8,6 +8,7 @@ import * as path from 'node:path';
 import { computeStats, emptyStats } from '../core/csv';
 import { parseInferenceAll } from '../core/inferenceAll';
 import { resolveProfile } from '../core/profile';
+import { assignKeys } from '../core/roots';
 import {
   TOOLS,
   adhocSessionName,
@@ -97,11 +98,24 @@ export class Poller {
     this.timer = null;
   }
 
-  /** Workspace = any direct subdir of a root containing evolution.csv
-   *  (plus the root itself, if it has one). */
-  discover(): Array<{ name: string; path: string }> {
-    const found: Array<{ name: string; path: string }> = [];
-    const seen = new Set<string>();
+  /** Workspace = any direct subdir of a root containing evolution.csv (plus the
+   *  root itself, if it has one). Same-named workspaces in different roots are
+   *  all kept, told apart by key; the same directory reached twice (a root
+   *  listed twice, or a root that is itself a subdir of another root) is one. */
+  discover(): Array<{ key: string; name: string; path: string; root: string }> {
+    const found: Array<{ name: string; path: string; root: string }> = [];
+    const seen = new Set<string>(); // realpaths
+    const add = (p: string) => {
+      let real: string;
+      try {
+        real = fs.realpathSync(p);
+      } catch {
+        return;
+      }
+      if (seen.has(real)) return;
+      seen.add(real);
+      found.push({ name: path.basename(p), path: p, root: path.dirname(p) });
+    };
     for (const root of this.prefs().roots) {
       let entries: fs.Dirent[];
       try {
@@ -109,23 +123,14 @@ export class Poller {
       } catch {
         continue; // missing root — surfaced via empty grid + prefs dialog
       }
-      if (fs.existsSync(path.join(root, 'evolution.csv'))) {
-        const name = path.basename(root);
-        if (!seen.has(name)) {
-          seen.add(name);
-          found.push({ name, path: root });
-        }
-      }
-      for (const e of entries) {
+      if (fs.existsSync(path.join(root, 'evolution.csv'))) add(root);
+      for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
         if (!e.isDirectory() || e.name.startsWith('.')) continue;
         const p = path.join(root, e.name);
-        if (fs.existsSync(path.join(p, 'evolution.csv')) && !seen.has(e.name)) {
-          seen.add(e.name);
-          found.push({ name: e.name, path: p });
-        }
+        if (fs.existsSync(path.join(p, 'evolution.csv'))) add(p);
       }
     }
-    return found.sort((a, b) => a.name.localeCompare(b.name));
+    return assignKeys(found).sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
   }
 
   /** Classify one tmux session: running + pane activity, with mtime-style hash
@@ -175,7 +180,7 @@ export class Poller {
         // live, whether it is BLENDED with another workspace into one webhook, and which algo
         // production pins it to. The detail view flags when the leader is NOT what production
         // trades, and offers the pinned row as a second focus.
-        const production = readProductionSignal(path.dirname(ws.path), ws.name);
+        const production = readProductionSignal(ws.root, ws.name);
         const pin = production?.pin ?? null;
 
         const csvPath = path.join(ws.path, 'evolution.csv');
@@ -197,9 +202,9 @@ export class Poller {
         // Evolution session fires native "asking" notifications (it runs
         // unattended); the adhoc and shell sessions are hand-driven, so their
         // activity feeds the badge only — no notification noise.
-        const session = await this.classifySession(sessionName(ws.name), live, ws.name);
-        const adhoc = await this.classifySession(adhocSessionName(ws.name), live, null);
-        const shell = await this.classifySession(shellSessionName(ws.name), live, null);
+        const session = await this.classifySession(sessionName(ws.key), live, ws.key);
+        const adhoc = await this.classifySession(adhocSessionName(ws.key), live, null);
+        const shell = await this.classifySession(shellSessionName(ws.key), live, null);
 
         // Display profile: optional config.yaml `dashboard:` block, else
         // auto-detect trading (equity/ dir or stock-shaped columns) vs generic.
@@ -213,31 +218,39 @@ export class Poller {
         const profile = resolveProfile(configText, { hasEquityDir, metricColumns: stats.metricColumns });
 
         rows.push({
+          key: ws.key,
           name: ws.name,
           path: ws.path,
+          root: ws.root,
           csvMtimeMs: mtimeMs,
           stats,
           session,
           adhoc,
           shell,
-          starred: starred.has(ws.name),
+          starred: starred.has(ws.key),
           profile,
           production,
         });
       }
 
-      // Repo-level tool scripts: shown when the executable exists in a root.
-      this.tools = TOOLS.map((key) => {
-        const root = this.prefs().roots.find((r) => {
+      // Repo-level tool scripts: one entry per root whose executable exists.
+      const found: Array<{ name: string; root: string }> = [];
+      for (const key of TOOLS) {
+        for (const root of this.prefs().roots) {
           try {
-            fs.accessSync(path.join(r, key), fs.constants.X_OK);
-            return true;
+            fs.accessSync(path.join(root, key), fs.constants.X_OK);
+            found.push({ name: key, root });
           } catch {
-            return false;
+            /* not in this root */
           }
-        });
-        return { key, root: root ?? null, running: live.has(toolSessionName(key)) };
-      });
+        }
+      }
+      this.tools = assignKeys(found).map((t) => ({
+        id: t.key,
+        key: t.name,
+        root: t.root,
+        running: live.has(toolSessionName(t.key)),
+      }));
 
       this.rows = rows;
       this.onUpdate(rows, this.tools);

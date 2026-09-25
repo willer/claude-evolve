@@ -53,6 +53,11 @@ to before the profile split — verify against the screenshot harness.
     series is emitted by backtest.py's --json (always, aligned 1:1 with nav)
     and persisted by backtest-all (nullable; older runs / per-candidate
     artifacts carry none, so navChartSvg falls back to its 2-pane layout).
+  - `roots.ts` — multi-root identity. Every workspace/tool gets a fleet-unique
+    `key`: the dir name, or `name@<root label>` when an EARLIER root already
+    has that name. Sessions, stars, selection and IPC key off `key`; `name`
+    stays the display / backtest-algorithm / inference-all identity. Backtest
+    DB and data/raw prices are read from the row's own `root`.
   - `state.ts` — tmux pane-motion classification (working/waiting/asking) and
     the `evolve-<dir>` session naming. Both are a SHARED VOCABULARY with the
     trading-strategies TUI — change them in lockstep or the two tools stop

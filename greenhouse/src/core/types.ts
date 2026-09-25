@@ -78,8 +78,15 @@ export interface ResolvedProfile {
 }
 
 export interface WorkspaceRow {
-  name: string; // directory basename
+  /** Fleet-unique identity (core/roots.ts assignKeys): the dir name, or
+   *  `name@<root label>` for a later root's same-named workspace. Sessions,
+   *  stars, selection and IPC all key off this — never off `name`. */
+  key: string;
+  name: string; // directory basename (display, backtest algorithm, inference-all member)
   path: string; // absolute path
+  /** Repo root the workspace sits in (its parent dir) — where its inference-all,
+   *  data/backtest-results.db and data/raw prices live. */
+  root: string;
   csvMtimeMs: number | null;
   stats: WorkspaceStats;
   /** The evolution session (claude running /evolve). */
@@ -129,11 +136,16 @@ export interface Health {
   detail: string;
 }
 
-/** Repo-level tool script (inference-all / backtest-all) session state. */
+/** Repo-level tool script (inference-all / backtest-all) session state — one
+ *  per (script, root) where the executable exists. */
 export interface ToolState {
+  /** Fleet-unique identity: the script name, or `script@<root label>` when an
+   *  earlier root has the same script (core/roots.ts assignKeys). */
+  id: string;
+  /** Script name, run as ./<key> in root. */
   key: string;
-  /** Root directory containing the executable, or null if absent everywhere. */
-  root: string | null;
+  /** Root directory containing the executable. */
+  root: string;
   running: boolean;
 }
 

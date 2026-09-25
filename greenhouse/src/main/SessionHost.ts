@@ -67,9 +67,9 @@ export class SessionHost {
   /** Start an evolution: detached session in the workspace dir, then type the
    *  claude command with a trailing `exit` — when claude ends (quit or crash)
    *  the shell exits, the session dies, and the next poll shows it stopped. */
-  async startEvolution(dir: string, workspacePath: string): Promise<string> {
+  async startEvolution(key: string, workspacePath: string): Promise<string> {
     await assertServerOpts();
-    const sess = sessionName(dir);
+    const sess = sessionName(key);
     await tmux('new-session', '-d', '-s', sess, '-x', '220', '-y', '50', '-c', workspacePath);
     const cmd = `claude ${EVOLVE_ARGS.join(' ')} ${shellQuote(EVOLVE_PROMPT)}; exit`;
     await tmux('send-keys', '-t', sess, cmd, 'Enter');
@@ -79,9 +79,9 @@ export class SessionHost {
   /** Start an adhoc claude session: detached session in the workspace dir, then
    *  type a plain `claude` (no /evolve prompt). Same shell-stays-alive pattern
    *  as evolutions — when claude exits the shell exits and the session dies. */
-  async startAdhoc(dir: string, workspacePath: string): Promise<string> {
+  async startAdhoc(key: string, workspacePath: string): Promise<string> {
     await assertServerOpts();
-    const sess = adhocSessionName(dir);
+    const sess = adhocSessionName(key);
     await tmux('new-session', '-d', '-s', sess, '-x', '220', '-y', '50', '-c', workspacePath);
     const cmd = `claude${ADHOC_ARGS.length ? ' ' + ADHOC_ARGS.join(' ') : ''}; exit`;
     await tmux('send-keys', '-t', sess, cmd, 'Enter');
@@ -92,9 +92,9 @@ export class SessionHost {
    *  a straight `zsh` (no claude). Unlike evolution/adhoc, the shell IS the
    *  session's command — so it dies the moment the user types `exit`, exactly
    *  like a normal terminal, and the pane is gone (nothing to inspect). */
-  async startShell(dir: string, workspacePath: string): Promise<string> {
+  async startShell(key: string, workspacePath: string): Promise<string> {
     await assertServerOpts();
-    const sess = shellSessionName(dir);
+    const sess = shellSessionName(key);
     await tmux('new-session', '-d', '-s', sess, '-x', '220', '-y', '50', '-c', workspacePath, SHELL_CMD);
     return sess;
   }
@@ -102,9 +102,9 @@ export class SessionHost {
   /** Start a repo-level tool script (./inference-all, ./backtest-all) in its
    *  own detached session in the repo root — same shell-stays-alive pattern
    *  as evolutions, so the pane is inspectable after the script exits. */
-  async startTool(key: string, root: string): Promise<string> {
+  async startTool(id: string, key: string, root: string): Promise<string> {
     await assertServerOpts();
-    const sess = toolSessionName(key);
+    const sess = toolSessionName(id);
     await tmux('new-session', '-d', '-s', sess, '-x', '220', '-y', '50', '-c', root);
     await tmux('send-keys', '-t', sess, `./${key}`, 'Enter');
     return sess;
