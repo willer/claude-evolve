@@ -52,6 +52,10 @@ ideation_strategies:
 # Python command to use for evaluation
 python_cmd: "python3"
 
+# CPU priority for evaluator runs (os.nice increment, 0-20). Default 10 lets evolution
+# yield the CPU to time-critical work on a shared machine. 0 = normal priority.
+nice: 10
+
 # Auto ideation configuration
 # When true, automatically generate new ideas when no pending candidates remain
 auto_ideate: true

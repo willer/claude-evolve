@@ -124,6 +124,7 @@ def main():
         cpu_seconds=ws.cpu_limit_seconds,
         timeout_seconds=ws.timeout_seconds,
         use_sandbox=use_sandbox,
+        nice=ws.nice,
     )
     if returncode != 0:
         with EvolutionCSV(str(ws.csv_path)) as csv:

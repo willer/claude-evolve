@@ -95,6 +95,7 @@ class Workspace:
     output_dir: Path
     python_cmd: str
     timeout_seconds: int
+    nice: int
     sandbox_enabled: bool
     memory_limit_mb: int
     cpu_limit_seconds: int
@@ -193,6 +194,7 @@ def load_workspace(working_dir: str = None, config_path: str = None) -> Workspac
         output_dir=output_dir,
         python_cmd=data.get("python_cmd", "python3"),
         timeout_seconds=int(data.get("timeout_seconds", 600)),
+        nice=int(data.get("nice", 10)),
         sandbox_enabled=bool(sandbox.get("enabled", True)),
         memory_limit_mb=int(sandbox.get("memory_limit_mb", data.get("memory_limit_mb", 0))),
         cpu_limit_seconds=int(sandbox.get("cpu_limit_seconds", 0)),

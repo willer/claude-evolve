@@ -54,6 +54,7 @@ class Config:
     memory_limit_mb: int = 0
     cpu_limit_seconds: int = 0  # CPU time limit (0 = unlimited)
     timeout_seconds: int = 600
+    nice: int = 10  # evaluator CPU priority (os.nice increment); yields to production work
     max_candidates: int = 5
     min_generation: Optional[int] = None  # Only claim candidates >= this generation (--gens window)
     max_validation_retries: int = 3  # Max attempts to fix validation errors (if validator.py exists)
@@ -466,6 +467,7 @@ python validator.py {target_basename}
                 memory_mb=self.config.memory_limit_mb,
                 cpu_seconds=self.config.cpu_limit_seconds,
                 timeout_seconds=self.config.timeout_seconds,
+                nice=self.config.nice,
                 use_sandbox=use_sandbox
             )
 
@@ -814,6 +816,7 @@ def load_config_from_yaml(config_path: Optional[str] = None) -> Config:
         memory_limit_mb=sandbox.get('memory_limit_mb', data.get('memory_limit_mb', 0)),
         cpu_limit_seconds=sandbox.get('cpu_limit_seconds', 0),
         timeout_seconds=data.get('timeout_seconds', 600),
+        nice=int(data.get('nice', 10)),
         max_candidates=data.get('worker_max_candidates', 5),
         max_validation_retries=data.get('max_validation_retries', 3),
         sandbox_enabled=sandbox.get('enabled', True),

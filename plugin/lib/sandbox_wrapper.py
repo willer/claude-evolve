@@ -140,7 +140,7 @@ def build_sandbox_command(
     return sandbox_cmd + command
 
 
-def make_child_preexec(memory_mb: int, cpu_seconds: int):
+def make_child_preexec(memory_mb: int, cpu_seconds: int, nice: int = 0):
     """
     Create a preexec_fn that sets resource limits and creates a new session.
 
@@ -152,6 +152,11 @@ def make_child_preexec(memory_mb: int, cpu_seconds: int):
         os.setsid()
         # Apply resource limits only to this child process
         set_resource_limits(memory_mb, cpu_seconds)
+        # AIDEV-NOTE: evaluators run at lowered priority (config `nice`, default 10) so
+        # evolution yields the CPU to time-critical work on a shared machine -- e.g. the
+        # 16:15 ET production inference run, which timed out 12/12 on 2026-09-24 at load ~700.
+        if nice:
+            os.nice(nice)
     return child_setup
 
 
@@ -161,7 +166,8 @@ def run_sandboxed(
     memory_mb: int = 0,
     cpu_seconds: int = 0,
     timeout_seconds: int = 600,
-    use_sandbox: bool = True
+    use_sandbox: bool = True,
+    nice: int = 0,
 ) -> Tuple[int, str, str]:
     """
     Run a command with sandboxing.
@@ -194,7 +200,7 @@ def run_sandboxed(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             cwd=evolution_dir,
-            preexec_fn=make_child_preexec(memory_mb, cpu_seconds)
+            preexec_fn=make_child_preexec(memory_mb, cpu_seconds, nice)
         )
 
         # Start memory monitor in background
