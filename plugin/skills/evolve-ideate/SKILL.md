@@ -77,7 +77,7 @@ python3 "$PLUGIN_ROOT/scripts/ideate_branch.py" --working-dir "$WS" --context-fi
 
 `--extra` is where the caller's situational context goes (e.g. "twelve candidates tie exactly at X — knob sweeps on axes A/B/C are inert; propose structural changes only"). Pass the same `--extra` to every branch.
 
-- **External branches (`codex`/`grok`):** launch each script call with Bash `run_in_background: true`, all in one message. No `timeout` wrapper (the script has its own 30-min budget). You are notified when each exits. A branch that fails writes `"status":"error"|"timeout"` with the reason — report it as such; there is no fallback to another model.
+- **External branches (`codex`/`grok`):** launch each script call with Bash `run_in_background: true`, all in one message. No `timeout` wrapper (the script has its own 30-min budget). You are notified when each exits. A branch that fails writes `"status":"error"|"timeout"` with the reason. **Re-roll it:** roll again with the same weights over the sources that have not failed this generation (a failed `grok` re-rolls 3/5 `opus`, 2/5 `codex`), and relaunch the branch with identical arguments on the new source. Repeat until it succeeds or every source has failed. A source that failed once is out for the rest of the generation, so later failures skip it. Tag the ideas with the source that produced them, and name every failure and its reason in the report.
 - **Opus branches:** run the script in the FOREGROUND (it only writes the prompt and exits instantly), then launch one `Agent` per branch with `subagent_type: "claude-evolve:ideator"` (no `model` override) and this prompt — nothing else:
 
   ```
@@ -109,10 +109,10 @@ It prints `{"added": N}`.
 
 ## Step 5 — Release + report
 
-`rm -rf "$LK"`, then report one line: `Ideated generation <N>: added <added>/<count> ideas (<dropped> dropped as duplicates; <failed branches>, if any)`. Don't paste the idea list unless asked — it's in the CSV.
+`rm -rf "$LK"`, then report one line: `Ideated generation <N>: added <added>/<count> ideas (<dropped> dropped as duplicates; <failed branch/source → re-rolled source>, if any)`. Don't paste the idea list unless asked — it's in the CSV.
 
 ## Honesty
 
-- If a branch fails or times out, append what the others produced and say which branch failed and why. Don't pad with filler to hit the count — for novel slots, two branches' pool is still a pool.
+- A failed branch is re-rolled (Step 3), never silently dropped. Only when every source has failed for a branch do you append what the others produced and leave its slots empty, saying which sources failed and why. Don't pad with filler to hit the count.
 - If the caller asked for an explicit "converged / nothing non-inert left" verdict and the branches genuinely produced nothing that clears the bar, append nothing and say exactly that.
 - If the BRIEF is empty or there are no completed performers yet, novel_exploration can still run, but say the context was thin.

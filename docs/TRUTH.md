@@ -289,3 +289,25 @@ workspaces could not settle it: their rows almost never carry an `idea-LLM`
 tag. Plugin-appended ideas are tagged `opus` from now on; old `fable` rows keep
 their tag. GPT-5.6 Sol was not adopted for the codex slot: it is cheaper than
 Astra, not better. Plugin 0.3.3.
+
+## Failed ideation branches re-roll to another source (2026-09-25)
+
+Supersedes the "no fallback to another model" rule from plugin 0.3.0. When an
+external branch (`codex`/`grok`) returns `error`/`timeout`, the evolve-ideate
+orchestrator re-rolls it with the normal weights over the sources that have not
+failed this generation (a failed grok goes 3/5 opus, 2/5 codex) and relaunches
+it with identical arguments. A failed source is out for the rest of that
+generation. Ideas are tagged with the source that produced them; every failure
+is still named in the report. The operator's reasoning: an empty slot costs a
+whole generation's hill-climbing or crossover on the current leader, which is
+worse than getting those ideas from a different model. `ideate_branch.py`
+itself still never switches models; the re-roll is orchestrator logic in the
+skill. Plugin 0.3.4.
+
+Trigger: from 2026-09-17 every Grok branch failed with opencode's
+`UnknownError` / "Unexpected server error". The cause was opencode 1.18.30
+(Homebrew) crashing in `SystemPrompt.environment` (`TypeError: undefined is not
+an object (evaluating 'a.name')`, in `~/.local/share/opencode/log/opencode.log`)
+before any request was sent. It crashes for every model and with an empty HOME.
+OpenRouter and the ~/.zprofile key were fine; opencode 1.18.29 and 1.18.32 both
+work.

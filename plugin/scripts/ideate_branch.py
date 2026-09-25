@@ -26,8 +26,8 @@ Usage:
 
 <out> is JSON: {"source","strategy","status":"ok|error|timeout","ideas":[...],
 "error":...,"prompt_file":...}. Exit 0 only on status ok (or for opus, once
-the prompt file is written). No fallback to another model — a failed branch is
-reported as failed and the orchestrator decides.
+the prompt file is written). The script never switches models itself: a failed
+branch is reported as failed and the orchestrator re-rolls it to another source.
 """
 
 import argparse

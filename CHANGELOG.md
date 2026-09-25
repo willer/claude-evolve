@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Failed ideation branches re-roll to another model (plugin 0.3.4)** — a
+  branch whose external source errors or times out is relaunched on a source
+  re-rolled from the ones that have not failed this generation, instead of
+  leaving its slots empty. Replaces the 0.3.0 no-fallback rule: when Grok went
+  down (really: opencode 1.18.30 crashing on every call), whole hill-climbing
+  and crossover slates were lost each generation.
 - README rewritten around the plugin marketplace install (Claude Code and
   Codex); the npm CLI is documented as legacy. Stale root scripts, sample
   workspaces, and superseded design docs deleted.
