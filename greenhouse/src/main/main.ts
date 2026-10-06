@@ -121,6 +121,10 @@ app.whenReady().then(() => {
   win = createWindow(prefs);
   win.on('closed', () => (win = null));
 
+  // Fail loud at launch if tmux is missing: without it every session shows as
+  // stopped and nothing can start. The dashboards still work, so keep running.
+  host.check().catch((err: Error) => dialog.showErrorBox('tmux is not available', err.message));
+
   poller.start(5000);
 
   // Host load (CPU/loadavg/memory) for the header gauges — its own faster cadence

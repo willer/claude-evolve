@@ -36,9 +36,19 @@ const SERVER_OPTS: Array<[string, string, string]> = [
   ['-g', 'window-size', 'latest'],
 ];
 
+// AIDEV-NOTE: tmux is a hard dependency (every launch goes through it). A
+// missing binary used to fail silently — launches just did nothing — so ENOENT
+// is rewritten into an actionable error that the IPC layer puts in a dialog.
 async function tmux(...args: string[]): Promise<string> {
-  const { stdout } = await execFileP('tmux', args);
-  return stdout;
+  try {
+    const { stdout } = await execFileP('tmux', args);
+    return stdout;
+  } catch (err) {
+    if ((err as { code?: string }).code === 'ENOENT') {
+      throw new Error('tmux not found on PATH — Greenhouse runs every session in tmux. Install it: brew install tmux');
+    }
+    throw err;
+  }
 }
 
 async function assertServerOpts(): Promise<void> {
@@ -52,6 +62,11 @@ function isNoServerStderr(stderr: string): boolean {
 }
 
 export class SessionHost {
+  /** Throws (with the install hint) if tmux can't be run. */
+  async check(): Promise<void> {
+    await tmux('-V');
+  }
+
   /** Names of all live tmux sessions (not just ours). */
   async list(): Promise<Set<string>> {
     try {

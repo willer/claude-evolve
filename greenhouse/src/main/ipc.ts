@@ -2,7 +2,7 @@
 // session model meets Electron IPC. Terminal bytes ride a MessagePort, not
 // JSON IPC (same transport design as Genome FleetView).
 
-import { BrowserWindow, MessageChannelMain, ipcMain, nativeTheme } from 'electron';
+import { BrowserWindow, MessageChannelMain, dialog, ipcMain, nativeTheme } from 'electron';
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -24,6 +24,17 @@ async function sqliteJson(db: string, sql: string): Promise<unknown[]> {
   return stdout.trim() ? (JSON.parse(stdout) as unknown[]) : [];
 }
 
+/** Run a session launch; on failure show the error in a dialog (the renderer
+ *  fires launches from keypresses and can't surface them) and rethrow. */
+async function launch(what: string, fn: () => Promise<unknown>): Promise<void> {
+  try {
+    await fn();
+  } catch (err) {
+    dialog.showErrorBox(`Could not start ${what}`, err instanceof Error ? err.message : String(err));
+    throw err;
+  }
+}
+
 export function wireIpc(
   win: () => BrowserWindow | null,
   host: SessionHost,
@@ -38,7 +49,7 @@ export function wireIpc(
     const tool = poller.currentTools().find((t) => t.id === id);
     if (!tool) throw new Error(`tool not available in any root: ${id}`);
     if (tool.running) throw new Error(`tool already running: ${id}`);
-    await host.startTool(tool.id, tool.key, tool.root);
+    await launch(tool.key, () => host.startTool(tool.id, tool.key, tool.root));
     await poller.poll();
   });
 
@@ -128,7 +139,7 @@ export function wireIpc(
   ipcMain.handle('evolution:start', async (_e, key: string) => {
     const ws = poller.current().find((r) => r.key === key);
     if (!ws) throw new Error(`unknown workspace: ${key}`);
-    await host.startEvolution(ws.key, ws.path);
+    await launch(`evolution for ${key}`, () => host.startEvolution(ws.key, ws.path));
     await poller.poll();
   });
 
@@ -143,7 +154,7 @@ export function wireIpc(
   ipcMain.handle('adhoc:start', async (_e, key: string) => {
     const ws = poller.current().find((r) => r.key === key);
     if (!ws) throw new Error(`unknown workspace: ${key}`);
-    await host.startAdhoc(ws.key, ws.path);
+    await launch(`claude for ${key}`, () => host.startAdhoc(ws.key, ws.path));
     await poller.poll();
   });
 
@@ -157,7 +168,7 @@ export function wireIpc(
   ipcMain.handle('shell:start', async (_e, key: string) => {
     const ws = poller.current().find((r) => r.key === key);
     if (!ws) throw new Error(`unknown workspace: ${key}`);
-    await host.startShell(ws.key, ws.path);
+    await launch(`shell for ${key}`, () => host.startShell(ws.key, ws.path));
     await poller.poll();
   });
 
