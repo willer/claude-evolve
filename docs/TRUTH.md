@@ -373,3 +373,15 @@ from `~/.zprofile` (the personal key), never the session env. Grok gets
 that warning is harmless for one-shot prompts. The reason for the switch is
 that opencode was an extra dependency that broke on its own (1.18.30, entry
 above), while the claude CLI is always present.
+
+## Greenhouse Root column under All roots (2026-10-07)
+
+With 2+ roots and the switcher on All roots, the list view shows a `Root`
+column right of Name (task 4). It holds the last path element of the row's
+configured root (`core/roots.ts rootColumnLabel`); a root that is itself a
+workspace shows its own last element, matching `inRoot`. The column hides when
+one root is selected or only one root exists (`showRootColumn`), because the
+switcher then already says which root you are looking at. The value is the
+plain basename, not the `name@label` disambiguator, as asked; two roots with the
+same basename therefore look alike in this column (hover shows the full path).
+It sorts ascending by default, like Name.

@@ -62,3 +62,25 @@ export function inRoot(item: { path?: string; root: string }, filter: string): b
 export function activeRootFilter(saved: string, roots: string[]): string {
   return roots.length > 1 && roots.includes(saved) ? saved : '';
 }
+
+// ── root column ─────────────────────────────────────────────────────────────
+// Under 'All' with 2+ roots the list view gains a Root column (task 4) so
+// same-looking workspaces from different roots can be told apart.
+
+/** The Root column shows only when the switcher is on All and 2+ roots exist. */
+export function showRootColumn(filter: string, roots: string[]): boolean {
+  return roots.length > 1 && !filter;
+}
+
+/** Root-column text: the last path element of the configured root the item
+ *  belongs to. A root that is itself a workspace has its parent as `root`, so
+ *  its own path is the configured root (same rule as inRoot). */
+export function rootColumnLabel(item: { path?: string; root: string }, roots: string[]): string {
+  const configured = configuredRoot(item, roots);
+  return segments(configured).at(-1) ?? configured;
+}
+
+/** The configured root an item belongs to (its own path for a root workspace). */
+export function configuredRoot(item: { path?: string; root: string }, roots: string[]): string {
+  return item.path && roots.includes(item.path) ? item.path : item.root;
+}

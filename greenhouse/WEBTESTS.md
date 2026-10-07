@@ -70,6 +70,12 @@ to verify the NAV chart deterministically.
   to All; with one root the dropdown is hidden. The EG_SHOT harness picks the
   last root for `shots/list-root.png`, logs `root-switch picked=` / `restored=`,
   and restores the saved choice. [draft]
+- Root column: with 2+ roots and the switcher on All roots → the list shows a
+  sortable `Root` column right of Name, holding the last path element of each
+  row's configured root (hover shows the full root path); picking one root, or
+  running with a single root, hides the column. The EG_SHOT `root-switch`
+  log lines carry `rootCol` (true under All, false after picking a root) and the
+  first `rootCells`. [TASK-4, draft]
 - [ ] List: column headers sort on click with ▲/▼ indicator; health chip
       (ok/plateau/stale/failing/error) and state badge render per row;
       sparkline stroke matches health color (green/yellow/red)
