@@ -373,3 +373,15 @@ from `~/.zprofile` (the personal key), never the session env. Grok gets
 that warning is harmless for one-shot prompts. The reason for the switch is
 that opencode was an extra dependency that broke on its own (1.18.30, entry
 above), while the claude CLI is always present.
+
+## Shift+Enter in Greenhouse terminals sends ESC+CR (2026-10-07)
+
+xterm.js sends Shift+Enter as a bare CR, the same as Enter, so claude
+submitted instead of adding a line. The renderer's custom key handler
+(`core/terminalKeys.ts terminalKeyOverride`) now sends ESC+CR (meta-Enter)
+for an unmodified-otherwise Shift+Enter, swallows its keypress/keyup, and
+leaves plain Enter alone. The kitty CSI-u form (`ESC[13;2u`) was rejected:
+a raw-mode probe behind a real tmux 3.7 client showed tmux (extended-keys on)
+downgrades it to a plain CR for a pane app that has not asked for extended
+keys, while ESC+CR arrives byte-for-byte. Claude's composer treats ESC+CR as
+"insert newline". Open sessions pick this up after `./run-greenhouse`.
