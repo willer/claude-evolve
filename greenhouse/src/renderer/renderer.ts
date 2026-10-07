@@ -13,7 +13,7 @@ import type { GenAxis } from '../core/genAxis';
 import { nearestColumnIndex, tipPlacement } from '../core/hover';
 import type { HoverColumn } from '../core/hover';
 import { productionTags } from '../core/inferenceAll';
-import { activeRootFilter, inRoot, rootLabel } from '../core/roots';
+import { activeRootFilter, configuredRoot, inRoot, rootColumnLabel, rootLabel, showRootColumn } from '../core/roots';
 import { terminalKeyOverride } from '../core/terminalKeys';
 import { fmtGeneric, leaderMetrics } from '../core/profile';
 import {
@@ -932,6 +932,7 @@ const SORTS: Record<string, (r: WorkspaceRow) => number | string | null> = {
   gens: (r) => r.stats.gensSinceTop,
   rate: (r) => r.stats.recentSuccessRate,
   health: (r) => HEALTH_RANK[healthOf(r).level],
+  root: (r) => rootColumnLabel(r, roots),
 };
 
 // Case-insensitive substring match over name + leader id + leader description.
@@ -971,7 +972,7 @@ function sorted(): WorkspaceRow[] {
 async function setSort(col: string): Promise<void> {
   // Same column again flips direction; new column starts at its natural
   // direction (name ascending, everything else best/worst-first descending).
-  const sortDesc = prefs.sortCol === col ? !prefs.sortDesc : col !== 'name';
+  const sortDesc = prefs.sortCol === col ? !prefs.sortDesc : col !== 'name' && col !== 'root';
   prefs = await api.prefs.set({ sortCol: col, sortDesc });
   syncHeaderControls();
   render();
@@ -1213,6 +1214,7 @@ function listCols(): Array<{ label: string; sort?: string; cls?: string }> {
   return [
     { label: '★' },
     { label: 'Name', sort: 'name' },
+    ...(showRootColumn(currentRootFilter(), roots) ? [{ label: 'Root', sort: 'root' }] : []),
     { label: 'State', sort: 'state' },
     { label: 'Health', sort: 'health' },
     { label: 'Winner' },
@@ -1234,6 +1236,7 @@ function renderList(order: WorkspaceRow[]): void {
     return;
   }
   const winnerCols = activeWinnerCols();
+  const rootCol = showRootColumn(currentRootFilter(), roots);
   const head = listCols().map((c) => {
     const arrow = c.sort && prefs.sortCol === c.sort ? (prefs.sortDesc ? ' ▼' : ' ▲') : '';
     const attrs = c.sort ? ` data-sort="${c.sort}" title="Sort by ${esc(c.label)}"` : '';
@@ -1251,6 +1254,7 @@ function renderList(order: WorkspaceRow[]): void {
       return `<tr class="row ${r.key === selectedKey ? 'selected' : ''}" data-name="${n}">
         <td><span class="star ${r.starred ? 'on' : ''}" data-star="${n}" title="Pin to top">${r.starred ? '★' : '☆'}</span></td>
         <td class="name" title="${esc(r.path)}">${nameHtml(r)}</td>
+        ${rootCol ? `<td class="root" title="${esc(configuredRoot(r, roots))}">${esc(rootColumnLabel(r, roots))}</td>` : ''}
         <td>${badge(r)}</td>
         <td>${healthChip(h)}</td>
         <td class="winner">${s.error ? `<span class="warn">${esc(s.error)}</span>` : esc(s.leader?.id ?? '—')}</td>

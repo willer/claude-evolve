@@ -291,6 +291,8 @@ function devShots(dir: string): void {
       js(`JSON.stringify({
         value: document.getElementById('root-switch').value,
         rows: document.querySelectorAll('#list tr.row').length,
+        rootCol: [...document.querySelectorAll('#list th')].some((t) => t.textContent.startsWith('Root')),
+        rootCells: [...document.querySelectorAll('#list td.root')].slice(0, 3).map((t) => t.textContent),
         tools: [...document.querySelectorAll('#tool-btns button')].map((b) => b.textContent.trim()),
       })`);
     const switchTo = (v: string) =>

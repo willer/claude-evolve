@@ -385,3 +385,15 @@ a raw-mode probe behind a real tmux 3.7 client showed tmux (extended-keys on)
 downgrades it to a plain CR for a pane app that has not asked for extended
 keys, while ESC+CR arrives byte-for-byte. Claude's composer treats ESC+CR as
 "insert newline". Open sessions pick this up after `./run-greenhouse`.
+
+## Greenhouse Root column under All roots (2026-10-07)
+
+With 2+ roots and the switcher on All roots, the list view shows a `Root`
+column right of Name (task 4). It holds the last path element of the row's
+configured root (`core/roots.ts rootColumnLabel`); a root that is itself a
+workspace shows its own last element, matching `inRoot`. The column hides when
+one root is selected or only one root exists (`showRootColumn`), because the
+switcher then already says which root you are looking at. The value is the
+plain basename, not the `name@label` disambiguator, as asked; two roots with the
+same basename therefore look alike in this column (hover shows the full path).
+It sorts ascending by default, like Name.

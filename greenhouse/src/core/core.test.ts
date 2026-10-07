@@ -17,7 +17,7 @@ import { chartFracs, genFrac, genTicks, sharedGenDomain } from './genAxis';
 import { nearestColumnIndex, tipPlacement } from './hover';
 import { parseInferenceAll, productionTags } from './inferenceAll';
 import { TRADING_METRICS, leaderMetrics, resolveProfile } from './profile';
-import { activeRootFilter, assignKeys, inRoot, rootLabel } from './roots';
+import { activeRootFilter, assignKeys, inRoot, rootColumnLabel, rootLabel, showRootColumn } from './roots';
 import {
   SESSION_KINDS,
   SHELL_CMD,
@@ -965,5 +965,28 @@ describe('root switcher', () => {
     expect(activeRootFilter('/g/gone', roots)).toBe('');
     expect(activeRootFilter('/g/trading', ['/g/trading'])).toBe('');
     expect(activeRootFilter('', roots)).toBe('');
+  });
+});
+
+describe('root column', () => {
+  const roots = ['/g/trading', '/g/predict'];
+
+  it('shows only under All with 2+ roots', () => {
+    expect(showRootColumn('', roots)).toBe(true);
+    expect(showRootColumn('/g/predict', roots)).toBe(false);
+    expect(showRootColumn('', ['/g/trading'])).toBe(false);
+    expect(showRootColumn('', [])).toBe(false);
+  });
+
+  it('labels a subdir workspace with the last element of its configured root', () => {
+    expect(rootColumnLabel({ path: '/g/predict/sales', root: '/g/predict' }, roots)).toBe('predict');
+  });
+
+  it('labels a root that is itself a workspace with its own last element', () => {
+    expect(rootColumnLabel({ path: '/g/predict', root: '/g' }, roots)).toBe('predict');
+  });
+
+  it('keeps the raw basename, unsanitized, and ignores a trailing slash', () => {
+    expect(rootColumnLabel({ path: '/a/my.repo/w', root: '/a/my.repo/' }, ['/a/my.repo/', '/b'])).toBe('my.repo');
   });
 });
