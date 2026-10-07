@@ -27,7 +27,9 @@ export interface AttachHandle {
 }
 
 // Global tmux options, idempotent to re-assert per spawn/attach:
-// - extended-keys: forward Shift+Enter etc. (newline in claude's composer)
+// - extended-keys: forward modified keys from extkeys-capable clients (the
+//   operator's own terminal). Greenhouse's xterm can't send them, so its
+//   Shift+Enter newline is ESC+CR instead (core/terminalKeys).
 // - window-size latest: co-attaching alongside the operator's own terminal
 //   must not shrink the session in both places.
 const SERVER_OPTS: Array<[string, string, string]> = [

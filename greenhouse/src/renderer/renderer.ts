@@ -14,6 +14,7 @@ import { nearestColumnIndex, tipPlacement } from '../core/hover';
 import type { HoverColumn } from '../core/hover';
 import { productionTags } from '../core/inferenceAll';
 import { activeRootFilter, inRoot, rootLabel } from '../core/roots';
+import { terminalKeyOverride } from '../core/terminalKeys';
 import { fmtGeneric, leaderMetrics } from '../core/profile';
 import {
   SESSION_KINDS,
@@ -2098,6 +2099,14 @@ async function attachTerminal(
   terms.set(sessId, ts);
 
   term.onData((data) => ts.port?.postMessage({ type: 'input', data }));
+  // Shift+Enter → newline in claude's composer (see core/terminalKeys).
+  term.attachCustomKeyEventHandler((e) => {
+    const o = terminalKeyOverride(e);
+    if (!o) return true;
+    e.preventDefault();
+    if (o.send) ts.port?.postMessage({ type: 'input', data: o.send });
+    return false;
+  });
   // No custom wheel handler: claude runs in the alternate screen with mouse
   // tracking on, so tmux keeps zero scrollback for it (`history_size` 0) — the
   // old copy-mode hijack scrolled a buffer that doesn't exist and, by cancelling
