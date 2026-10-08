@@ -913,18 +913,15 @@ class EvolutionCSV:
             # Add header if missing
             rows.insert(0, ['id', 'basedOnId', 'description', 'performance', 'status', 'idea-LLM', 'run-LLM'])
 
-        # Append candidates
+        # AIDEV-NOTE: map by HEADER NAME, never by position. Workspaces whose header
+        # puts other columns (e.g. `fitness`) at index 5 had idea-LLM written there.
+        header = rows[0]
+        for name in ('idea-LLM', 'run-LLM'):
+            if name not in header:
+                header.append(name)
+        defaults = {'status': 'pending'}
         for candidate in candidates:
-            row = [
-                candidate.get('id', ''),
-                candidate.get('basedOnId', ''),
-                candidate.get('description', ''),
-                candidate.get('performance', ''),
-                candidate.get('status', 'pending'),
-                candidate.get('idea-LLM', ''),
-                candidate.get('run-LLM', '')
-            ]
-            rows.append(row)
+            rows.append([candidate.get(col, defaults.get(col, '')) for col in header])
 
         self._write_csv(rows)
         return len(candidates)
