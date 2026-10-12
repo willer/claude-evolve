@@ -127,6 +127,10 @@
       health chip (was reversed in detail/grid/peek vs the list view)
 - [x] Removed one-key ✓1/✗2 answer machinery (buttons, 1/2 keys, IPC,
       sendKeys) — asking still badges + notifies; answer in the terminal
+- [x] Login-expired session state (core/state.ts isAuthExpired, unit-tested):
+      auth-error markers in the last 40 pane lines, cleared by a later "Login
+      successful"; outranks asking/working/stuck; red badge + card ring, edge-
+      fired native notification, fleet header banner "run /login in any session"
 
 ## Later
 

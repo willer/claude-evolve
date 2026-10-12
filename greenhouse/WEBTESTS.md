@@ -101,6 +101,12 @@ to verify the NAV chart deterministically.
 - [ ] Asking sessions: magenta badge + native notification; answering happens
       in the attached terminal (no remote answer buttons — the CLI owns its
       own question asking)
+- [ ] Login-expired sessions (pane tail shows "Please run /login" / "OAuth token
+      revoked" / "Login expired" / "authentication_failed" / "Invalid API key"
+      with no later "Login successful"): solid red "🔒 login expired" badge in
+      list and grid, card ring, red tab dot, ONE native "Claude login expired"
+      notification per transition, and a red header banner "LOGIN EXPIRED (N) —
+      run /login in any session"
 - [ ] Stuck sessions (byte-static on a spend/usage-limit wall): red badge +
       native "is stuck" notification + header `N stuck` count. The badge is a
       red-outlined "⚠ unstick" BUTTON (list, grid, and detail bar / session

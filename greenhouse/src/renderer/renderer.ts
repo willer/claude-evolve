@@ -921,7 +921,7 @@ function btToggleClick(e: MouseEvent): void {
 
 // ── sorting ──────────────────────────────────────────────────────────────────
 
-const ACTIVITY_RANK: Record<string, number> = { stuck: 4, asking: 3, waiting: 2, working: 1 };
+const ACTIVITY_RANK: Record<string, number> = { 'login-expired': 5, stuck: 4, asking: 3, waiting: 2, working: 1 };
 const HEALTH_RANK: Record<Health['level'], number> = { error: 4, failing: 3, stale: 2, plateau: 1, good: 0 };
 
 const SORTS: Record<string, (r: WorkspaceRow) => number | string | null> = {
@@ -988,7 +988,7 @@ function sessBadge(s: SessionState, sessId?: string): string {
   if (a === 'stuck' && sessId) {
     return `<button class="badge stuck" data-unstick="${esc(sessId)}" title="Nudge it: sends Esc + 'continue please' + Enter to the session">⚠ unstick</button>`;
   }
-  const label = a === 'asking' ? '❓ asking' : a === 'stuck' ? '⚠ stuck' : a;
+  const label = a === 'asking' ? '❓ asking' : a === 'stuck' ? '⚠ stuck' : a === 'login-expired' ? '🔒 login expired' : a;
   return `<span class="badge ${a}">${label}</span>`;
 }
 
@@ -1064,9 +1064,16 @@ function renderTotals(): void {
   const running = rows.filter((r) => r.session.running).length;
   const asking = rows.filter((r) => r.session.activity === 'asking').length;
   const stuck = rows.filter((r) => r.session.activity === 'stuck').length;
+  // A login is machine-wide: one /login in any session fixes every one, so a
+  // single loud banner rather than a per-row hunt.
+  const loginExpired = rows.filter((r) => [r.session, r.adhoc].some((s) => s.activity === 'login-expired')).length;
   const counts: Record<string, number> = {};
   for (const r of rows) counts[healthOf(r).level] = (counts[healthOf(r).level] ?? 0) + 1;
   const parts = [`<b>${rows.length}</b> workspaces`, `<b>${running}</b> running`];
+  if (loginExpired)
+    parts.unshift(
+      `<span class="login-alert" title="Claude auth expired/revoked on this machine">🔒 <b>LOGIN EXPIRED</b> (${loginExpired}) — run /login in any session</span>`,
+    );
   if (stuck) parts.push(`<span class="t-red"><b>${stuck}</b> stuck</span>`);
   if (asking) parts.push(`<span class="t-magenta"><b>${asking}</b> asking</span>`);
   for (const [level, cls] of [
@@ -1299,7 +1306,7 @@ function renderGridCards(order: WorkspaceRow[]): void {
       const c = s.counts;
       const act = r.session.activity;
       const cls = [
-        act === 'asking' ? 'asking' : act === 'stuck' ? 'stuck' : '',
+        act === 'asking' ? 'asking' : act === 'stuck' ? 'stuck' : act === 'login-expired' ? 'login-expired' : '',
         r.key === selectedKey ? 'selected' : '',
       ].join(' ');
       return `

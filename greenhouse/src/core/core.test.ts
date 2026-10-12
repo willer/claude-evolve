@@ -25,6 +25,8 @@ import {
   adhocSessionName,
   evolutionCmd,
   classifyPane,
+  isAuthExpired,
+  AUTH_TAIL_LINES,
   hashText,
   pickSessionTab,
   sessionDotClass,
@@ -384,6 +386,55 @@ describe('classifyPane', () => {
     ].join('\n');
     const first = classifyPane(txt, null);
     expect(classifyPane(txt, first.hash).activity).toBe('stuck');
+  });
+
+  it('reports login-expired on a revoked/expired login, over every other state', () => {
+    // Real evolve pane 2026-10-12: every worker died on a revoked OAuth token and
+    // the session came to rest. Nothing progresses until a human runs /login.
+    const txt = [
+      '✻ Worked for 12m 04s',
+      '⏺ Agent "evolve worker 1" failed: Agent terminated early due to an API error: OAuth token revoked · Please run /login (error type authentication_failed, HTTP 401, request id req_011CfwEKeWpbtAUnCkMTqCMC, model sent to the API: claude-opus-5-5)',
+      '  ⎿  OAuth token revoked · Please run /login',
+      '✻ Cooked for 0s',
+      '❯ ',
+    ].join('\n');
+    expect(isAuthExpired(txt)).toBe(true);
+    expect(classifyPane(txt, null).activity).toBe('login-expired'); // first sight, no motion needed
+    expect(classifyPane(txt, classifyPane(txt, null).hash).activity).toBe('login-expired');
+    for (const msg of [
+      'Login expired · Please run /login (error type authentication_failed)',
+      'API Error: 401 OAuth token revoked',
+      'Invalid API key · Please run /login',
+      'OAuth token has expired. Please obtain a new token or refresh your existing token.',
+      'error type AUTHENTICATION_FAILED',
+    ]) {
+      expect(classifyPane(`  ⎿  ${msg}\n✻ Cooked for 0s\n❯ `, null).activity).toBe('login-expired');
+    }
+    // Precedence: beats asking and busy-working markers too.
+    expect(classifyPane('Please run /login\nDo you want to proceed?\n❯ 1. Yes', null).activity).toBe('login-expired');
+    expect(classifyPane('Login expired · Please run /login\n✻ Worked for 1m · 2 shells', null).activity).toBe('login-expired');
+  });
+
+  it('clears login-expired once "Login successful" follows the last error', () => {
+    const txt = '  ⎿  OAuth token revoked · Please run /login\n❯ /login\n  ⎿  Login successful\n❯ ';
+    expect(isAuthExpired(txt)).toBe(false);
+    expect(classifyPane(txt, classifyPane(txt, null).hash).activity).toBe('waiting');
+    // ...but a NEW error after the success re-flags it.
+    expect(isAuthExpired(txt + '\nLogin expired · Please run /login')).toBe(true);
+  });
+
+  it('ignores an auth error that scrolled out of the 40-line tail', () => {
+    const lines = ['  ⎿  OAuth token revoked · Please run /login'];
+    for (let i = 0; i < AUTH_TAIL_LINES; i++) lines.push(`⏺ worked on gen12-00${i % 10}`);
+    expect(isAuthExpired(lines.join('\n'))).toBe(false);
+    expect(isAuthExpired(lines.slice(0, AUTH_TAIL_LINES).join('\n'))).toBe(true); // just inside
+  });
+
+  it('does not flag a normal working pane', () => {
+    const txt = '⏺ Scoring gen12-003\n✻ Worked for 3m 33s · 2 shells still running\n❯ ';
+    expect(isAuthExpired(txt)).toBe(false);
+    expect(classifyPane(txt, null).activity).toBe('working');
+    expect(isAuthExpired(null)).toBe(false);
   });
 
   it('recovers to working once a spend-limited pane resumes moving', () => {

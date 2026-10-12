@@ -2,8 +2,9 @@
 // shapes (plus the raw terminal byte stream over a MessagePort).
 
 /** Live-session activity, classified from tmux pane motion (see state.ts).
- *  'stuck' = byte-static on a hard wall (spend/usage limit) — needs a human. */
-export type Activity = 'working' | 'waiting' | 'asking' | 'stuck';
+ *  'stuck' = byte-static on a hard wall (spend/usage limit) — needs a human.
+ *  'login-expired' = Claude auth expired/revoked — run /login in any session. */
+export type Activity = 'working' | 'waiting' | 'asking' | 'stuck' | 'login-expired';
 
 export interface SessionState {
   running: boolean;

@@ -68,7 +68,7 @@ export class Poller {
   private tools: ToolState[] = [];
   private statsCache = new Map<string, CacheEntry>();
   private paneHashes = new Map<string, number | null>();
-  // Sessions currently in an attention state (asking | stuck) — for edge-firing
+  // Sessions currently in an attention state (asking | stuck | login-expired) — for edge-firing
   // the native notification once per transition into that state.
   private prevAttention = new Set<string>();
   private timer: NodeJS.Timeout | null = null;
@@ -158,7 +158,7 @@ export class Poller {
     const pane = await this.host.capture(sess);
     const { activity, hash } = classifyPane(pane, this.paneHashes.get(sess) ?? null);
     this.paneHashes.set(sess, hash);
-    if (activity === 'asking' || activity === 'stuck') {
+    if (activity === 'asking' || activity === 'stuck' || activity === 'login-expired') {
       if (notifyName && !this.prevAttention.has(sess)) this.onAttention(notifyName, activity);
       this.prevAttention.add(sess);
     } else {

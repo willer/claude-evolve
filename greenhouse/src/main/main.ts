@@ -107,6 +107,13 @@ app.whenReady().then(() => {
     (payload) => win?.webContents.send('fleet:update', payload),
     (name, activity) => {
       const stuck = activity === 'stuck';
+      if (activity === 'login-expired') {
+        new Notification({
+          title: `${name}: Claude login expired`,
+          body: 'The session died on an auth error. Run /login in any session — one login fixes them all.',
+        }).show();
+        return;
+      }
       new Notification({
         title: stuck ? `${name} is stuck` : `${name} is asking`,
         body: stuck
