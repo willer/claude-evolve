@@ -190,7 +190,7 @@ def main():
 
     # AIDEV-NOTE: -s workspace-write is REQUIRED, not decorative. `codex exec`
     # defaults to a read-only sandbox (verified on codex v0.145.0), under which
-    # every patch is rejected with "writing is blocked by read-only sandbox" —
+    # every patch is rejected with "writing is blocked by read-only sandbox" —  ui-claim-ok: quotes codex CLI error output, not app UI
     # codex burns a full turn, leaves the file untouched, and the worker falls
     # back to Opus every single time. workspace-write reads anywhere but writes
     # only inside the workdir; -C makes the workspace dir that writable root.

@@ -249,7 +249,7 @@ $prompt"
     # --- Ollama cloud models (flat-rate subscription) ---
     ollama-glm)
       local ai_output
-      ai_output=$(codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss --local-provider=ollama -m glm-5.1:cloud "$prompt" 2>&1)
+      ai_output=$(codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --oss --local-provider=ollama -m glm-5.3:cloud "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     ollama-gemma)

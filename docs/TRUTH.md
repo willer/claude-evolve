@@ -344,3 +344,65 @@ a process can't lower its niceness without root, so inference-all started by
 hand from a niced Greenhouse shell stays niced. Run it from the tool tab or a
 normal terminal. Sessions that were already running before this change keep
 their old priority until they are restarted.
+
+## Greenhouse root switcher (2026-09-25)
+
+With 2+ roots, a header dropdown (All roots, then one entry per root) narrows
+the list/grid, totals and tool buttons to one root. This lets one server run
+trading and predictive-model evolutions side by side without mixing them in
+one list. The choice persists as prefs `rootFilter` ('' = All).
+`core/roots.ts activeRootFilter` ignores a saved filter that is no longer a
+configured root, so removing a root never blanks the fleet. Native
+notifications still fire for every root, so a hidden root's stuck session still
+alerts. The options come from the fleet payload's `roots` (the roots actually
+scanned, EG_ROOTS-aware), not saved prefs. Chosen over one window per root:
+same outcome for about a third of the work, with no per-window state.
+
+## OpenRouter ideation sources run through `claude -p`, not opencode (2026-09-25)
+
+`plugin/scripts/ideate_branch.py` runs grok (and the unrolled glm/kimi/qwen)
+as `claude -p --bare --model <slug> --tools Read,Grep,Glob --effort <e>` (read-only tools: with none, Grok stops after "I'll inspect the leader..." and returns no JSON) with the prompt
+on stdin and the routing env Spaces uses for its claude/grok route
+(`anthropicEndpointEnv` in Spaces `core/launch.ts`):
+`ANTHROPIC_BASE_URL=https://openrouter.ai/api`, `ANTHROPIC_AUTH_TOKEN=<key>`,
+`ANTHROPIC_API_KEY=""` (if set, it takes precedence over AUTH_TOKEN), and
+`ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL`, and
+`CLAUDE_CODE_SUBAGENT_MODEL` all set to the slug. That is 8 vars. The key is read
+from `~/.zprofile` (the personal key), never the session env. Grok gets
+`--effort max`. Claude Code warns that the slug is not in its model catalog;
+that warning is harmless for one-shot prompts. The reason for the switch is
+that opencode was an extra dependency that broke on its own (1.18.30, entry
+above), while the claude CLI is always present.
+
+## Shift+Enter in Greenhouse terminals sends ESC+CR (2026-10-07)
+
+xterm.js sends Shift+Enter as a bare CR, the same as Enter, so claude
+submitted instead of adding a line. The renderer's custom key handler
+(`core/terminalKeys.ts terminalKeyOverride`) now sends ESC+CR (meta-Enter)
+for an unmodified-otherwise Shift+Enter, swallows its keypress/keyup, and
+leaves plain Enter alone. The kitty CSI-u form (`ESC[13;2u`) was rejected:
+a raw-mode probe behind a real tmux 3.7 client showed tmux (extended-keys on)
+downgrades it to a plain CR for a pane app that has not asked for extended
+keys, while ESC+CR arrives byte-for-byte. Claude's composer treats ESC+CR as
+"insert newline". Open sessions pick this up after `./run-greenhouse`.
+
+## Greenhouse Root column under All roots (2026-10-07)
+
+With 2+ roots and the switcher on All roots, the list view shows a `Root`
+column right of Name (task 4). It holds the last path element of the row's
+configured root (`core/roots.ts rootColumnLabel`); a root that is itself a
+workspace shows its own last element, matching `inRoot`. The column hides when
+one root is selected or only one root exists (`showRootColumn`), because the
+switcher then already says which root you are looking at. The value is the
+plain basename, not the `name@label` disambiguator, as asked; two roots with the
+same basename therefore look alike in this column (hover shows the full path).
+It sorts ascending by default, like Name.
+
+## Grok ideation source moves to Grok 4.7 (2026-10-13)
+
+The 1/6 Grok ideation roll now runs OpenRouter `x-ai/grok-4.7` instead of
+`x-ai/grok-4.6` (task 5). The slug is in `OPENROUTER_MODELS` in
+`plugin/scripts/ideate_branch.py`; OpenRouter's model list carried
+`x-ai/grok-4.7` on this date. Everything else stays the same: the 3/6 opus,
+2/6 codex, 1/6 grok split, `--effort max`, the `claude -p` route, and the
+re-roll-on-failure rule. Earlier entries that name Grok 4.6 are historical.

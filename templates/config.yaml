@@ -129,7 +129,7 @@ llm_cli:
   #
   # --- Cheap/open (primary coding tier) ---
   # Ollama cloud (flat-rate $20/mo subscription):
-  # - ollama-glm: GLM 5.1 via Ollama cloud
+  # - ollama-glm: GLM 5.3 via Ollama cloud
   # - ollama-qwen: Qwen 3.6 via Ollama cloud
   # - ollama-minimax: MiniMax M2.7 via Ollama cloud
   # - ollama-gemma: Gemma 4 31B via Ollama cloud

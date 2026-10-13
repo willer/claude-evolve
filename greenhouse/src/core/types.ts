@@ -2,8 +2,9 @@
 // shapes (plus the raw terminal byte stream over a MessagePort).
 
 /** Live-session activity, classified from tmux pane motion (see state.ts).
- *  'stuck' = byte-static on a hard wall (spend/usage limit) — needs a human. */
-export type Activity = 'working' | 'waiting' | 'asking' | 'stuck';
+ *  'stuck' = byte-static on a hard wall (spend/usage limit) — needs a human.
+ *  'login-expired' = Claude auth expired/revoked — run /login in any session. */
+export type Activity = 'working' | 'waiting' | 'asking' | 'stuck' | 'login-expired';
 
 export interface SessionState {
   running: boolean;
@@ -153,6 +154,8 @@ export interface ToolState {
 export interface FleetPayload {
   rows: WorkspaceRow[];
   tools: ToolState[];
+  /** The roots actually scanned (EG_ROOTS-aware) — the root switcher's options. */
+  roots: string[];
 }
 
 export interface Prefs {
@@ -167,6 +170,9 @@ export interface Prefs {
   /** UI theme; 'system' follows the OS. Drives Electron's nativeTheme, which
    *  the renderer picks up via prefers-color-scheme. */
   theme: 'system' | 'light' | 'dark';
+  /** Root switcher: the configured root the fleet is narrowed to, '' = All.
+   *  Applied via core/roots.ts activeRootFilter (ignored if no longer a root). */
+  rootFilter: string;
   /** Last window position/size, restored on launch. Undefined until the first
    *  window close. `maximized` restores a maximized window over the saved
    *  normal bounds. */

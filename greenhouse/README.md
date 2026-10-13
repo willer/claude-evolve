@@ -24,7 +24,13 @@ CSS, so the terminal panel stays dark either way):
   pending/complete/failed/running counts, CSV staleness
 - **Session state** — working / waiting / **asking** (with a native
   notification), detected from tmux pane motion exactly like the TUI; asking
-  sessions get one-key ✓1/✗2 answer buttons (tmux send-keys)
+  sessions get one-key ✓1/✗2 answer buttons (tmux send-keys). **login expired**
+  (red chip + one native notification per transition) when the last ~40 pane
+  lines show an auth error ("Please run /login", "OAuth token revoked", "Login
+  expired", "authentication_failed", "Invalid API key") with no "Login
+  successful" after it; it outranks every other state, and the header shows a
+  fleet-wide "LOGIN EXPIRED — run /login in any session" banner, since one
+  login fixes every session on the machine
 
 **Space** peeks full status for the selected workspace without leaving the
 fleet: every leader ratio (Sharpe, Sortino, CAGR, MaxDD, win rate, pain, …),

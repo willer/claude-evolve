@@ -13,6 +13,8 @@ import type { GenAxis } from '../core/genAxis';
 import { nearestColumnIndex, tipPlacement } from '../core/hover';
 import type { HoverColumn } from '../core/hover';
 import { productionTags } from '../core/inferenceAll';
+import { activeRootFilter, configuredRoot, inRoot, rootColumnLabel, rootLabel, showRootColumn } from '../core/roots';
+import { terminalKeyOverride } from '../core/terminalKeys';
 import { fmtGeneric, leaderMetrics } from '../core/profile';
 import {
   SESSION_KINDS,
@@ -90,7 +92,16 @@ const api = window.greenhouse;
 
 let rows: WorkspaceRow[] = [];
 let tools: ToolState[] = [];
-let prefs: Prefs = { roots: [], starred: [], sortCol: 'score', sortDesc: true, winnerCols: ['', '', '', '', ''], theme: 'system' };
+let prefs: Prefs = {
+  roots: [],
+  starred: [],
+  sortCol: 'score',
+  sortDesc: true,
+  winnerCols: ['', '', '', '', ''],
+  theme: 'system',
+  rootFilter: '',
+};
+let roots: string[] = []; // roots actually scanned (from the fleet payload) — the switcher's options
 let viewMode: 'list' | 'grid' = 'list'; // session-only — every launch starts in the list
 // Workspace identity is row.key (core/roots.ts), never row.name: two roots can
 // each hold a same-named workspace.
@@ -910,7 +921,7 @@ function btToggleClick(e: MouseEvent): void {
 
 // ── sorting ──────────────────────────────────────────────────────────────────
 
-const ACTIVITY_RANK: Record<string, number> = { stuck: 4, asking: 3, waiting: 2, working: 1 };
+const ACTIVITY_RANK: Record<string, number> = { 'login-expired': 5, stuck: 4, asking: 3, waiting: 2, working: 1 };
 const HEALTH_RANK: Record<Health['level'], number> = { error: 4, failing: 3, stale: 2, plateau: 1, good: 0 };
 
 const SORTS: Record<string, (r: WorkspaceRow) => number | string | null> = {
@@ -921,6 +932,7 @@ const SORTS: Record<string, (r: WorkspaceRow) => number | string | null> = {
   gens: (r) => r.stats.gensSinceTop,
   rate: (r) => r.stats.recentSuccessRate,
   health: (r) => HEALTH_RANK[healthOf(r).level],
+  root: (r) => rootColumnLabel(r, roots),
 };
 
 // Case-insensitive substring match over name + leader id + leader description.
@@ -944,7 +956,7 @@ function sorted(): WorkspaceRow[] {
   const key = sortKey(prefs.sortCol);
   const dir = prefs.sortDesc ? -1 : 1;
   // Starred first, missing values last regardless of direction.
-  return [...rows].filter(matchesSearch).sort((a, b) => {
+  return fleetRows().filter(matchesSearch).sort((a, b) => {
     if (a.starred !== b.starred) return a.starred ? -1 : 1;
     const va = key(a);
     const vb = key(b);
@@ -960,7 +972,7 @@ function sorted(): WorkspaceRow[] {
 async function setSort(col: string): Promise<void> {
   // Same column again flips direction; new column starts at its natural
   // direction (name ascending, everything else best/worst-first descending).
-  const sortDesc = prefs.sortCol === col ? !prefs.sortDesc : col !== 'name';
+  const sortDesc = prefs.sortCol === col ? !prefs.sortDesc : col !== 'name' && col !== 'root';
   prefs = await api.prefs.set({ sortCol: col, sortDesc });
   syncHeaderControls();
   render();
@@ -976,7 +988,7 @@ function sessBadge(s: SessionState, sessId?: string): string {
   if (a === 'stuck' && sessId) {
     return `<button class="badge stuck" data-unstick="${esc(sessId)}" title="Nudge it: sends Esc + 'continue please' + Enter to the session">⚠ unstick</button>`;
   }
-  const label = a === 'asking' ? '❓ asking' : a === 'stuck' ? '⚠ stuck' : a;
+  const label = a === 'asking' ? '❓ asking' : a === 'stuck' ? '⚠ stuck' : a === 'login-expired' ? '🔒 login expired' : a;
   return `<span class="badge ${a}">${label}</span>`;
 }
 
@@ -1014,13 +1026,54 @@ function shellButtons(r: WorkspaceRow): string {
     : `<button data-act="shell-start" data-name="${n}" title="Launch a plain zsh in this workspace (no claude)">▶ Shell</button>`;
 }
 
+// ── root switcher ────────────────────────────────────────────────────────────
+// Header dropdown narrowing the fleet (list/grid, totals, tool buttons) to one
+// root; hidden with a single root. Notifications still cover every root.
+
+function currentRootFilter(): string {
+  return activeRootFilter(prefs.rootFilter, roots);
+}
+
+/** Workspaces in the selected root (all of them under 'All'). */
+function fleetRows(): WorkspaceRow[] {
+  const f = currentRootFilter();
+  return rows.filter((r) => inRoot(r, f));
+}
+
+let rootSwitchSig = ''; // rebuild options only when they change, so a poll can't close an open dropdown
+function renderRootSwitch(): void {
+  const el = $('root-switch') as HTMLSelectElement;
+  el.style.display = roots.length > 1 ? '' : 'none';
+  const sig = JSON.stringify(roots);
+  if (sig !== rootSwitchSig) {
+    rootSwitchSig = sig;
+    el.innerHTML =
+      `<option value="">All roots</option>` +
+      roots.map((r) => `<option value="${esc(r)}" title="${esc(r)}">${esc(rootLabel(r, roots))}</option>`).join('');
+  }
+  el.value = currentRootFilter();
+}
+
+$('root-switch').addEventListener('change', async (e) => {
+  prefs = await api.prefs.set({ rootFilter: (e.target as HTMLSelectElement).value });
+  render();
+});
+
 function renderTotals(): void {
+  const rows = fleetRows();
   const running = rows.filter((r) => r.session.running).length;
   const asking = rows.filter((r) => r.session.activity === 'asking').length;
   const stuck = rows.filter((r) => r.session.activity === 'stuck').length;
+  // A login is machine-wide: one /login in any session fixes every one, so a
+  // single loud banner rather than a per-row hunt.
+  const loginExpired = rows.filter((r) => [r.session, r.adhoc].some((s) => s.activity === 'login-expired')).length;
   const counts: Record<string, number> = {};
   for (const r of rows) counts[healthOf(r).level] = (counts[healthOf(r).level] ?? 0) + 1;
   const parts = [`<b>${rows.length}</b> workspaces`, `<b>${running}</b> running`];
+  if (loginExpired)
+    parts.unshift(
+      `<span class="login-alert" title="Claude auth expired/revoked on this machine">🔒 <b>LOGIN EXPIRED</b> (${loginExpired}) — run /login in any session</span>`,
+    );
   if (stuck) parts.push(`<span class="t-red"><b>${stuck}</b> stuck</span>`);
   if (asking) parts.push(`<span class="t-magenta"><b>${asking}</b> asking</span>`);
   for (const [level, cls] of [
@@ -1168,6 +1221,7 @@ function listCols(): Array<{ label: string; sort?: string; cls?: string }> {
   return [
     { label: '★' },
     { label: 'Name', sort: 'name' },
+    ...(showRootColumn(currentRootFilter(), roots) ? [{ label: 'Root', sort: 'root' }] : []),
     { label: 'State', sort: 'state' },
     { label: 'Health', sort: 'health' },
     { label: 'Winner' },
@@ -1189,6 +1243,7 @@ function renderList(order: WorkspaceRow[]): void {
     return;
   }
   const winnerCols = activeWinnerCols();
+  const rootCol = showRootColumn(currentRootFilter(), roots);
   const head = listCols().map((c) => {
     const arrow = c.sort && prefs.sortCol === c.sort ? (prefs.sortDesc ? ' ▼' : ' ▲') : '';
     const attrs = c.sort ? ` data-sort="${c.sort}" title="Sort by ${esc(c.label)}"` : '';
@@ -1206,6 +1261,7 @@ function renderList(order: WorkspaceRow[]): void {
       return `<tr class="row ${r.key === selectedKey ? 'selected' : ''}" data-name="${n}">
         <td><span class="star ${r.starred ? 'on' : ''}" data-star="${n}" title="Pin to top">${r.starred ? '★' : '☆'}</span></td>
         <td class="name" title="${esc(r.path)}">${nameHtml(r)}</td>
+        ${rootCol ? `<td class="root" title="${esc(configuredRoot(r, roots))}">${esc(rootColumnLabel(r, roots))}</td>` : ''}
         <td>${badge(r)}</td>
         <td>${healthChip(h)}</td>
         <td class="winner">${s.error ? `<span class="warn">${esc(s.error)}</span>` : esc(s.leader?.id ?? '—')}</td>
@@ -1250,7 +1306,7 @@ function renderGridCards(order: WorkspaceRow[]): void {
       const c = s.counts;
       const act = r.session.activity;
       const cls = [
-        act === 'asking' ? 'asking' : act === 'stuck' ? 'stuck' : '',
+        act === 'asking' ? 'asking' : act === 'stuck' ? 'stuck' : act === 'login-expired' ? 'login-expired' : '',
         r.key === selectedKey ? 'selected' : '',
       ].join(' ');
       return `
@@ -1360,6 +1416,7 @@ function render(): void {
   $('grid').style.display = isFleet && viewMode === 'grid' ? 'grid' : 'none';
   $('detail').style.display = isDetail ? 'block' : 'none';
   $('tool').style.display = isTool ? 'block' : 'none';
+  renderRootSwitch();
   renderTotals();
   renderToolButtons();
   renderHints();
@@ -2053,6 +2110,14 @@ async function attachTerminal(
   terms.set(sessId, ts);
 
   term.onData((data) => ts.port?.postMessage({ type: 'input', data }));
+  // Shift+Enter → newline in claude's composer (see core/terminalKeys).
+  term.attachCustomKeyEventHandler((e) => {
+    const o = terminalKeyOverride(e);
+    if (!o) return true;
+    e.preventDefault();
+    if (o.send) ts.port?.postMessage({ type: 'input', data: o.send });
+    return false;
+  });
   // No custom wheel handler: claude runs in the alternate screen with mouse
   // tracking on, so tmux keeps zero scrollback for it (`history_size` 0) — the
   // old copy-mode hijack scrolled a buffer that doesn't exist and, by cancelling
@@ -2151,6 +2216,7 @@ function renderTool(): void {
 
 function renderToolButtons(): void {
   $('tool-btns').innerHTML = tools
+    .filter((t) => inRoot(t, currentRootFilter()))
     .map(
       (t) =>
         `<button data-tool="${esc(t.id)}" class="${t.running ? 'on' : ''}"
@@ -2190,6 +2256,7 @@ window.addEventListener('message', (e) => {
     const payload = e.data.payload as FleetPayload;
     rows = payload.rows;
     tools = payload.tools;
+    roots = payload.roots;
     render();
     loadNewRootBacktests();
   } else if (e.data?.type === 'eg-event' && e.data.channel === 'system:update') {
@@ -2644,6 +2711,7 @@ void (async () => {
   const payload = await api.fleet.snapshot();
   rows = payload.rows;
   tools = payload.tools;
+  roots = payload.roots;
   render();
   syncHeaderHeight();
   loadNewRootBacktests(); // joins each root's BT scores into the list/peek/detail when they land
