@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Grok ideation source moves to Grok 4.7 (plugin 0.3.6)** — the 1/6 Grok
+  roll in `ideate_branch.py` now calls OpenRouter `x-ai/grok-4.7` (was
+  `x-ai/grok-4.6`). Effort (max) and routing are unchanged.
 - **Grok ideation runs through Claude Code, not opencode (plugin 0.3.5)** —
   `ideate_branch.py` runs the OpenRouter sources (grok, and the unrolled
   glm/kimi/qwen) as a headless `claude -p --bare` (read-only tools) with the same

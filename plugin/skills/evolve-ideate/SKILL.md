@@ -1,6 +1,6 @@
 ---
 name: evolve-ideate
-description: Run one generation of ideation for a claude-evolve workspace. Reads the top performers, BRIEF, and accumulated notes, then runs parallel ideation branches — three isolated framed branches for novel exploration plus one each for hill climbing, structural mutation, and crossover. Each branch rolls its idea source — Opus (high, via one ideator subagent) or an external model run directly by script (codex GPT-6 Astra, or Grok 4.6) — then the best ideas are selected and appended as pending rows in evolution.csv. Use when the user says "ideate", "generate new ideas", "make the next generation", or when the omnibus evolve loop drains its pending queue. Run only ONE ideation at a time per workspace.
+description: Run one generation of ideation for a claude-evolve workspace. Reads the top performers, BRIEF, and accumulated notes, then runs parallel ideation branches — three isolated framed branches for novel exploration plus one each for hill climbing, structural mutation, and crossover. Each branch rolls its idea source — Opus (high, via one ideator subagent) or an external model run directly by script (codex GPT-6 Astra, or Grok 4.7) — then the best ideas are selected and appended as pending rows in evolution.csv. Use when the user says "ideate", "generate new ideas", "make the next generation", or when the omnibus evolve loop drains its pending queue. Run only ONE ideation at a time per workspace.
 argument-hint: "[--working-dir DIR] [count]"
 ---
 
@@ -49,7 +49,7 @@ Split them across the four strategies by the `strategies` counts (skip any with 
 
 **Intents.** If `novel_intents` is non-empty, split the novel slice by its counts in the order the intents appear: the first `count` IDs carry the first intent, the next slice the second, and so on; leftover novel IDs are FREE. Build the `--intents` JSON (`{"<id>":"<intent name>"}`) for the novel branches. The harness carries each intent's `rule` text into the prompt verbatim and never interprets it.
 
-**Sources.** Three sources are rolled — `opus` (Opus 5.5, high), `codex` (GPT-6 Astra, xhigh), and `grok` (Grok 4.6 at max, via a headless `claude -p` routed to OpenRouter, the diversity source: it attacks from a different direction). Roll once per branch — 3/6 `opus`, 2/6 `codex`, 1/6 `grok`. Model IDs and the enabled set live in `scripts/ideate_branch.py` (`ENABLED_SOURCES`), not here; GLM/Kimi/Qwen remain wired there but are not rolled.
+**Sources.** Three sources are rolled — `opus` (Opus 5.5, high), `codex` (GPT-6 Astra, xhigh), and `grok` (Grok 4.7 at max, via a headless `claude -p` routed to OpenRouter, the diversity source: it attacks from a different direction). Roll once per branch — 3/6 `opus`, 2/6 `codex`, 1/6 `grok`. Model IDs and the enabled set live in `scripts/ideate_branch.py` (`ENABLED_SOURCES`), not here; GLM/Kimi/Qwen remain wired there but are not rolled.
 
 ```bash
 for s in novel_A novel_B novel_C hill_climbing structural_mutation crossover_hybrid; do
