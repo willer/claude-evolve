@@ -48,7 +48,7 @@ from evolve_common import add_workspace_args, load_workspace
 CODEX_MODEL = "gpt-6-astra"
 CODEX_EFFORT = "xhigh"
 OPENROUTER_MODELS = {
-    "grok": "x-ai/grok-4.6",
+    "grok": "x-ai/grok-4.7",
     "glm": "z-ai/glm-5.3-flash",
     "kimi": "moonshotai/kimi-k3",
     "qwen": "qwen/qwen3.8-max",
@@ -59,7 +59,7 @@ OPENROUTER_BASE = "https://openrouter.ai/api"  # claude appends /v1/messages its
 SOURCES = ("opus", "codex") + tuple(OPENROUTER_MODELS)  # everything the script can run
 # AIDEV-NOTE: Sept 23 2026 policy — "only the very best for ideation": the roll is
 # 3/6 Opus 5.5 high (replaced Fable 5.1 xhigh on benchmarks), 2/6 GPT-6 Astra xhigh, 1/6
-# Grok 4.6 — it attacks from a different direction, so it earns the diversity slot. GLM/Kimi/Qwen stay wired (not rolled) because this changes.
+# Grok 4.7 — it attacks from a different direction, so it earns the diversity slot. GLM/Kimi/Qwen stay wired (not rolled) because this changes.
 ENABLED_SOURCES = ("opus", "codex", "grok")
 STRATEGIES = ("novel_exploration", "hill_climbing", "structural_mutation", "crossover_hybrid")
 DEFAULT_TIMEOUT = 1800  # 30 min — reasoning models at xhigh routinely take 10+ min

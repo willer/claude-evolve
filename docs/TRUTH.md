@@ -397,3 +397,12 @@ switcher then already says which root you are looking at. The value is the
 plain basename, not the `name@label` disambiguator, as asked; two roots with the
 same basename therefore look alike in this column (hover shows the full path).
 It sorts ascending by default, like Name.
+
+## Grok ideation source moves to Grok 4.7 (2026-10-13)
+
+The 1/6 Grok ideation roll now runs OpenRouter `x-ai/grok-4.7` instead of
+`x-ai/grok-4.6` (task 5). The slug is in `OPENROUTER_MODELS` in
+`plugin/scripts/ideate_branch.py`; OpenRouter's model list carried
+`x-ai/grok-4.7` on this date. Everything else stays the same: the 3/6 opus,
+2/6 codex, 1/6 grok split, `--effort max`, the `claude -p` route, and the
+re-roll-on-failure rule. Earlier entries that name Grok 4.6 are historical.
