@@ -406,3 +406,15 @@ The 1/6 Grok ideation roll now runs OpenRouter `x-ai/grok-4.7` instead of
 `x-ai/grok-4.7` on this date. Everything else stays the same: the 3/6 opus,
 2/6 codex, 1/6 grok split, `--effort max`, the `claude -p` route, and the
 re-roll-on-failure rule. Earlier entries that name Grok 4.6 are historical.
+
+## Fable 5.1 returns to the ideation roll (2026-10-16)
+
+The ideation roll now draws from four sources: 2/6 Opus 5.5 high, 1/6 Fable 5.1
+high, 2/6 GPT-6 Astra xhigh, 1/6 Grok 4.7 max. Fable's slot comes out of Opus's
+old 3/6. Opus still beats Fable on benchmarks (the Sept 23 swap stands). Fable is
+back because it is a bigger, different model and may produce different ideas,
+the same reason Grok holds a slot. It runs at high, not xhigh as it did before
+Sept 23. Fable branches use their own pinned agent, `plugin/agents/ideator-fable.md`,
+which is the same as `ideator.md` with `model: fable`. `ideate_branch.py
+--source fable` only writes the prompt file, as `opus` does (`SUBAGENT_SOURCES`).
+Re-roll on failure is unchanged. Ideas are tagged `idea-LLM=fable`. Plugin 0.3.7.

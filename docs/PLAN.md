@@ -1,6 +1,8 @@
 # Plan
 
 No open items. Completed and accepted work is in git history (`git log docs/PLAN.md`).
+- [x] add Fable 5.1 high back to the ideation roll for idea diversity: 2/6 Opus 5.5 high, 1/6 Fable 5.1 high, 2/6 Astra xhigh, 1/6 Grok 4.7
+  - New `plugin/agents/ideator-fable.md`; `fable` source in `ideate_branch.py`; evolve-ideate roll and dispatch; READMEs, manifests. Plugin 0.3.7. See TRUTH.
 - [x] switch ideation from Fable 5.1 xhigh to Opus 5.5 high (benchmarks + newer knowledge); keep Astra, skip Sol
   - `plugin/agents/ideator.md` → opus/high; dice-roll source `fable` → `opus` in `ideate_branch.py`, both skills, both READMEs, both manifests. Plugin 0.3.3. See TRUTH.
 - [x] make sure that greenhouse launches its shells niced, so the evolutions run niced. the inference should NOT run niced though.

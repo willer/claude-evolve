@@ -11,7 +11,7 @@ Anthropic subagents.
 Evolution is a greenhouse: each generation grows new algorithm variants from the
 best of the last one. The loop is always the same:
 
-1. **Ideate** new variants from the top performers + your `BRIEF.md` (Opus, high effort).
+1. **Ideate** new variants from the top performers + your `BRIEF.md` (dice roll: Opus 5.5, Fable 5.1, GPT-6 Astra, Grok 4.7).
 2. **Code** each variant by editing a copy of its parent algorithm (codex-first, Opus judge/fallback).
 3. **Score** each variant by running your `evaluator.py` under a sandbox (Haiku /
    deterministic).
@@ -25,7 +25,7 @@ plugin runs the loop.
 | Skill | Tier | Does |
 |-------|------|------|
 | `evolve` | orchestrator | Runs the whole loop as a self-respawning pool of background worker subagents. The main conversation stays a clean dashboard. Equivalent to `claude-evolve run`. |
-| `evolve-ideate` | Opus (high) + external models | One generation of ideation. Six parallel branches (3 framed novel / hill-climb / structural / crossover); each rolls its source — 3/6 Opus via one `ideator` subagent, 2/6 codex GPT-6 Astra, 1/6 Grok 4.7, the external two run directly by `scripts/ideate_branch.py` with no subagent. Appends new `pending` rows. Run one at a time per workspace. |
+| `evolve-ideate` | Opus + Fable (high) + external models | One generation of ideation. Six parallel branches (3 framed novel / hill-climb / structural / crossover); each rolls its source — 2/6 Opus and 1/6 Fable via one pinned `ideator`/`ideator-fable` subagent, 2/6 codex GPT-6 Astra, 1/6 Grok 4.7, the external two run directly by `scripts/ideate_branch.py` with no subagent. Appends new `pending` rows. Run one at a time per workspace. |
 | `evolve-code` | Opus (medium) | Write the code for one candidate: resolve parent, copy to `evolution_<id>.py`, implement its description. |
 | `evolve-score` | Haiku | Score one candidate: syntax-check, optional `validator.py`, sandboxed `evaluator.py`, write the number to the CSV. Deterministic — the subagent only exists to keep evaluator noise out of the main thread. |
 
@@ -42,8 +42,8 @@ no flag they auto-detect `evolution/config.yaml` or `./config.yaml`. The
   ID generation, sandboxed evaluation) lives under `lib/` and needs nothing
   installed — no npm, no `pip` — falling back to a minimal config parser when
   PyYAML is absent. This plugin is the home of that engine, not a copy of it.
-- **Fixed model roles, defined in `agents/` and `scripts/`.** Opus at high effort ideates
-  (`agents/ideator.md`), sharing the slots with external models the ideation dice
+- **Fixed model roles, defined in `agents/` and `scripts/`.** Opus and Fable at high effort ideate
+  (`agents/ideator.md`, `agents/ideator-fable.md`), sharing the slots with external models the ideation dice
   roll picks (`scripts/ideate_branch.py` owns those model IDs and runs them
   without a subagent wrapper); codex (GPT-5.6 Luna) codes first with the Opus worker
   (`agents/coder.md`, medium effort, restricted tools) judging and falling back to

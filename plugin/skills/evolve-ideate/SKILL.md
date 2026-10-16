@@ -1,6 +1,6 @@
 ---
 name: evolve-ideate
-description: Run one generation of ideation for a claude-evolve workspace. Reads the top performers, BRIEF, and accumulated notes, then runs parallel ideation branches — three isolated framed branches for novel exploration plus one each for hill climbing, structural mutation, and crossover. Each branch rolls its idea source — Opus (high, via one ideator subagent) or an external model run directly by script (codex GPT-6 Astra, or Grok 4.7) — then the best ideas are selected and appended as pending rows in evolution.csv. Use when the user says "ideate", "generate new ideas", "make the next generation", or when the omnibus evolve loop drains its pending queue. Run only ONE ideation at a time per workspace.
+description: Run one generation of ideation for a claude-evolve workspace. Reads the top performers, BRIEF, and accumulated notes, then runs parallel ideation branches — three isolated framed branches for novel exploration plus one each for hill climbing, structural mutation, and crossover. Each branch rolls its idea source — Opus 5.5 or Fable 5.1 (high, via one pinned ideator subagent) or an external model run directly by script (codex GPT-6 Astra, or Grok 4.7) — then the best ideas are selected and appended as pending rows in evolution.csv. Use when the user says "ideate", "generate new ideas", "make the next generation", or when the omnibus evolve loop drains its pending queue. Run only ONE ideation at a time per workspace.
 argument-hint: "[--working-dir DIR] [count]"
 ---
 
@@ -8,7 +8,7 @@ argument-hint: "[--working-dir DIR] [count]"
 
 Generate the next batch of candidate ideas for an evolution workspace. It fans out parallel branches — three isolated, differently-framed branches for novel exploration (best-of-pool selection afterward) plus one per remaining strategy — each proposing variants grounded in the current best performers and the BRIEF, then writes the winners to `evolution.csv` as `pending` rows for the coding/scoring loop to pick up.
 
-Every branch's prompt is assembled by `scripts/ideate_branch.py` from the context JSON — never by hand, and never inlined into an `Agent` call. An `opus` branch is ONE `claude-evolve:ideator` subagent that reads the prompt file; an external branch (`codex`/`grok`) is the script running that CLI itself, with no subagent at all. That is what keeps this skill cheap: the orchestrator never carries the BRIEF, notes, or thousands of descriptions in its own context, and no Opus turn is spent wrapping a codex call.
+Every branch's prompt is assembled by `scripts/ideate_branch.py` from the context JSON — never by hand, and never inlined into an `Agent` call. An `opus` or `fable` branch is ONE ideator subagent (`claude-evolve:ideator` or `claude-evolve:ideator-fable`) that reads the prompt file; an external branch (`codex`/`grok`) is the script running that CLI itself, with no subagent at all. That is what keeps this skill cheap: the orchestrator never carries the BRIEF, notes, or thousands of descriptions in its own context, and no Claude turn is spent wrapping a codex call.
 
 > **One at a time.** Two concurrent ideation runs would race on candidate IDs and generation numbering. This skill takes a lock and refuses to start if another ideation is in progress for the same workspace.
 
@@ -49,12 +49,12 @@ Split them across the four strategies by the `strategies` counts (skip any with 
 
 **Intents.** If `novel_intents` is non-empty, split the novel slice by its counts in the order the intents appear: the first `count` IDs carry the first intent, the next slice the second, and so on; leftover novel IDs are FREE. Build the `--intents` JSON (`{"<id>":"<intent name>"}`) for the novel branches. The harness carries each intent's `rule` text into the prompt verbatim and never interprets it.
 
-**Sources.** Three sources are rolled — `opus` (Opus 5.5, high), `codex` (GPT-6 Astra, xhigh), and `grok` (Grok 4.7 at max, via a headless `claude -p` routed to OpenRouter, the diversity source: it attacks from a different direction). Roll once per branch — 3/6 `opus`, 2/6 `codex`, 1/6 `grok`. Model IDs and the enabled set live in `scripts/ideate_branch.py` (`ENABLED_SOURCES`), not here; GLM/Kimi/Qwen remain wired there but are not rolled.
+**Sources.** Four sources are rolled — `opus` (Opus 5.5, high), `fable` (Fable 5.1, high: older but bigger, rolled for a different angle), `codex` (GPT-6 Astra, xhigh), and `grok` (Grok 4.7 at max, via a headless `claude -p` routed to OpenRouter, the diversity source: it attacks from a different direction). Roll once per branch — 2/6 `opus`, 1/6 `fable`, 2/6 `codex`, 1/6 `grok`. Model IDs and the enabled set live in `scripts/ideate_branch.py` (`ENABLED_SOURCES`), not here; GLM/Kimi/Qwen remain wired there but are not rolled.
 
 ```bash
 for s in novel_A novel_B novel_C hill_climbing structural_mutation crossover_hybrid; do
   r=$(( RANDOM % 6 ))
-  case $r in 0|1|2) src=opus;; 3|4) src=codex;; *) src=grok;; esac
+  case $r in 0|1) src=opus;; 2) src=fable;; 3|4) src=codex;; *) src=grok;; esac
   echo "$s=$src"
 done
 ```
@@ -77,8 +77,8 @@ python3 "$PLUGIN_ROOT/scripts/ideate_branch.py" --working-dir "$WS" --context-fi
 
 `--extra` is where the caller's situational context goes (e.g. "twelve candidates tie exactly at X — knob sweeps on axes A/B/C are inert; propose structural changes only"). Pass the same `--extra` to every branch.
 
-- **External branches (`codex`/`grok`):** launch each script call with Bash `run_in_background: true`, all in one message. No `timeout` wrapper (the script has its own 30-min budget). You are notified when each exits. A branch that fails writes `"status":"error"|"timeout"` with the reason. **Re-roll it:** roll again with the same weights over the sources that have not failed this generation (a failed `grok` re-rolls 3/5 `opus`, 2/5 `codex`), and relaunch the branch with identical arguments on the new source. Repeat until it succeeds or every source has failed. A source that failed once is out for the rest of the generation, so later failures skip it. Tag the ideas with the source that produced them, and name every failure and its reason in the report.
-- **Opus branches:** run the script in the FOREGROUND (it only writes the prompt and exits instantly), then launch one `Agent` per branch with `subagent_type: "claude-evolve:ideator"` (no `model` override) and this prompt — nothing else:
+- **External branches (`codex`/`grok`):** launch each script call with Bash `run_in_background: true`, all in one message. No `timeout` wrapper (the script has its own 30-min budget). You are notified when each exits. A branch that fails writes `"status":"error"|"timeout"` with the reason. **Re-roll it:** roll again with the same weights over the sources that have not failed this generation (a failed `grok` re-rolls 2/5 `opus`, 1/5 `fable`, 2/5 `codex`), and relaunch the branch with identical arguments on the new source. Repeat until it succeeds or every source has failed. A source that failed once is out for the rest of the generation, so later failures skip it. Tag the ideas with the source that produced them, and name every failure and its reason in the report.
+- **Opus and Fable branches:** run the script in the FOREGROUND (it only writes the prompt and exits instantly), then launch one `Agent` per branch with `subagent_type: "claude-evolve:ideator"` for `opus` or `"claude-evolve:ideator-fable"` for `fable` (no `model` override — each agent pins its own) and this prompt — nothing else:
 
   ```
   Read /tmp/evolve-ideate/<...>/<branch>.json.prompt.txt with the Read tool and answer it. Return ONLY the JSON array it asks for.
@@ -90,13 +90,13 @@ Launch everything in parallel: the background script calls and the `Agent` calls
 
 ## Step 4 — Collect, select, dedup, append
 
-External branches: read `"ideas"` from each `<out>` JSON. Opus branches: parse the subagent's returned JSON array.
+External branches: read `"ideas"` from each `<out>` JSON. Opus and Fable branches: parse the subagent's returned JSON array.
 
 **Select the novel winners.** You hold ~3× ideas for N novel slots. If intents are assigned, select **per intent group**: pool the branches' candidates for each intent's slots (and for FREE) and pick that group's best — never promote across groups. Within each pool drop near-duplicates, then keep the best by novelty (distance from existing descriptions and from each other) and fit (does it plausibly attack the BRIEF's metric); prefer a diverse set over N variations of one angle. **Enforce intents honestly:** disqualify any intent-slot candidate that violates its rule, however promising — the quota exists because such ideas outcompete everything else at selection. If a pool has no compliant candidate, leave those slots unfilled and say so; never backfill from another group. Verify each winner's description starts with its `[<INTENT NAME>] ` tag (add it if the branch forgot; FREE ideas carry no tag). Reassign the reserved novel IDs to the winners in order, keeping each winner on a slot of its own intent. Remember which branch each winner came from.
 
 Then drop any idea (all strategies) whose description is a near-duplicate of an existing description or of another new idea. Keep the reserved IDs; don't invent new ones.
 
-Tag each survivor's `idea-LLM` with its branch's source (`opus`, `codex`, `grok`) — non-novel IDs are disjoint per strategy so map by ID slice; novel winners by the branch that produced them.
+Tag each survivor's `idea-LLM` with its branch's source (`opus`, `fable`, `codex`, `grok`) — non-novel IDs are disjoint per strategy so map by ID slice; novel winners by the branch that produced them.
 
 Append the survivors in one call:
 

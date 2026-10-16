@@ -8,16 +8,17 @@ and shelled out. That wrapper cost a full Claude ideator context (BRIEF, notes,
 thousands of descriptions) per branch for zero judgment. This script does the
 assembly deterministically instead:
 
-  --source opus             write the prompt file and exit; the orchestrator
+  --source opus|fable       write the prompt file and exit; the orchestrator
                             hands the file path to ONE claude-evolve:ideator
-                            subagent, which reads it and answers.
+                            (opus) or claude-evolve:ideator-fable subagent,
+                            which reads it and answers.
   --source codex            write the prompt file, run `codex exec` on it,
                             parse its JSON array, write <out>. No subagent.
   --source grok|glm|kimi|qwen
                             same, but through a headless `claude -p` pointed at
                             OpenRouter (the Spaces claude/grok route). No subagent.
 
-The skill's dice roll uses ENABLED_SOURCES (opus / codex GPT-6 Astra / grok);
+The skill's dice roll uses ENABLED_SOURCES (opus / fable / codex GPT-6 Astra / grok);
 the other OpenRouter models stay wired so a roll change is a one-line edit.
 
 Usage:
@@ -27,7 +28,7 @@ Usage:
       [--timeout SECONDS]
 
 <out> is JSON: {"source","strategy","status":"ok|error|timeout","ideas":[...],
-"error":...,"prompt_file":...}. Exit 0 only on status ok (or for opus, once
+"error":...,"prompt_file":...}. Exit 0 only on status ok (or for opus/fable, once
 the prompt file is written). The script never switches models itself: a failed
 branch is reported as failed and the orchestrator re-rolls it to another source.
 """
@@ -56,11 +57,13 @@ OPENROUTER_MODELS = {
 # claude --effort per OpenRouter source; OpenRouter maps it to the provider's reasoning effort.
 OPENROUTER_EFFORT = {"grok": "max"}
 OPENROUTER_BASE = "https://openrouter.ai/api"  # claude appends /v1/messages itself
-SOURCES = ("opus", "codex") + tuple(OPENROUTER_MODELS)  # everything the script can run
-# AIDEV-NOTE: Sept 23 2026 policy — "only the very best for ideation": the roll is
-# 3/6 Opus 5.5 high (replaced Fable 5.1 xhigh on benchmarks), 2/6 GPT-6 Astra xhigh, 1/6
-# Grok 4.7 — it attacks from a different direction, so it earns the diversity slot. GLM/Kimi/Qwen stay wired (not rolled) because this changes.
-ENABLED_SOURCES = ("opus", "codex", "grok")
+SUBAGENT_SOURCES = ("opus", "fable")  # answered by a pinned ideator subagent, not run here
+SOURCES = SUBAGENT_SOURCES + ("codex",) + tuple(OPENROUTER_MODELS)  # everything the script can run
+# AIDEV-NOTE: Oct 16 2026 policy — the roll is 2/6 Opus 5.5 high, 1/6 Fable 5.1 high,
+# 2/6 GPT-6 Astra xhigh, 1/6 Grok 4.7 max. Opus beat Fable on benchmarks (Sept 23), but
+# Fable is a bigger, different model: it is back for idea diversity, like Grok, not for
+# quality. GLM/Kimi/Qwen stay wired (not rolled) because this changes.
+ENABLED_SOURCES = ("opus", "fable", "codex", "grok")
 STRATEGIES = ("novel_exploration", "hill_climbing", "structural_mutation", "crossover_hybrid")
 DEFAULT_TIMEOUT = 1800  # 30 min — reasoning models at xhigh routinely take 10+ min
 
@@ -280,7 +283,7 @@ def main():
               "frame": args.frame, "prompt_file": str(prompt_file),
               "prompt_chars": prompt_file.stat().st_size}
 
-    if args.source == "opus":
+    if args.source in SUBAGENT_SOURCES:
         result["status"] = "prompt_only"
         out.write_text(json.dumps(result, indent=1))
         print(json.dumps(result))
