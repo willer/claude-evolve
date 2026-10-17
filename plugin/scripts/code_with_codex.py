@@ -36,7 +36,8 @@ Output (one JSON line):
     it cannot code anything → the worker must STOP, not fall back.
 
 Exit codes: 0 = ok, 1 = codex tried and fell short (worker codes it itself),
-2 = environment fault (broken toolchain — abort the run and fix it).
+2 = environment fault (broken toolchain — abort the run and fix it),
+3 = already coded (file is not a pristine parent copy) — the worker scores it as-is.
 The worker should ALSO read summary+diff and MAY reject a hard-ok change on
 semantic grounds, then redo it from the parent.
 """
@@ -54,6 +55,7 @@ from evolve_common import add_workspace_args, load_workspace, PLUGIN_ROOT
 
 sys.path.insert(0, str(PLUGIN_ROOT))
 from lib.evolution_csv import EvolutionCSV
+from prepare import resolve_parent
 
 # Substrings that mean codex was PREVENTED from writing (broken toolchain),
 # as opposed to codex choosing to write nothing (a real coding outcome).
@@ -170,6 +172,16 @@ def main():
     if not description:
         emit({"id": args.id, "invoked": False, "ok": False,
               "error": "candidate has no description in CSV"}, 1)
+
+    # AIDEV-NOTE: never recode a candidate that is already coded. A re-score (evaluator change)
+    # queues rows whose file holds real code; prepare.py reports already_exists=true for them.
+    # Codex editing it, or the worker's restore-parent fallback, would score a different
+    # program under the old id. Only a pristine copy of the parent may be coded.
+    _, parent_source = resolve_parent(info.get("basedOnId", "") or "", ws, ws.output_dir)
+    if parent_source is None or target.read_text() != Path(parent_source).read_text():
+        emit({"id": args.id, "invoked": False, "ok": False, "already_coded": True,
+              "error": f"{target.name} is not a pristine copy of its parent: it is already "
+                       f"coded. Score it as-is (score.py); do not recode or restore it."}, 3)
 
     prompt = build_prompt(description, target.name)
 

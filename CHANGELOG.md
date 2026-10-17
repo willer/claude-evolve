@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Re-scoring no longer rewrites candidates. A pending row whose `evolution_<id>.py` already holds code (prepare.py `already_exists: true`) is scored as-is: the coder agent skips coding, and `code_with_codex.py` refuses (exit 3, `already_coded`) any file that is not a pristine parent copy, so neither codex nor the restore-parent fallback can overwrite it. Test: `plugin/tests/test_code_with_codex_guard.py`.
+
 - **CSV lock no longer unlinked on release (plugin 0.3.2)** — deleting
   `.evolution.csv.lock` handed the next writer a fresh inode, so two workers
   could each hold an "exclusive" flock and concurrent read-modify-write cycles

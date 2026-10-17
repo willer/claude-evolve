@@ -32,6 +32,9 @@ Repeat up to K times:
        python3 "<PLUGIN_ROOT>/scripts/evolve_csv.py" --working-dir "<WORKING_DIR>" set-status <id> failed-parent-missing
      continue to next candidate.
    - is_baseline true: skip coding (baseline scores algorithm.py as-is); go to step 3.
+   - already_exists true: the file is ALREADY CODED (a re-score after an evaluator
+     change, or a resumed run). Do NOT code it, run codex, or restore the parent —
+     any of those would score a different program under this id. Go to step 3.
    - otherwise code it. TRY CODEX (GPT-5.6 Luna) FIRST, then fall back to coding it yourself:
 
    2a. CODEX FIRST:
@@ -46,6 +49,8 @@ Repeat up to K times:
      Do NOT fall back and do NOT claim the candidate. STOP the whole run
      immediately and report the `error` field verbatim as your final line:
        ABORTED — codex environment fault: <error>
+     If the JSON has `"already_coded": true` (exit code 3), the file is already
+     coded: do NOT fall back to 2b and do NOT restore the parent. Go to step 3.
      READ `summary` and `diff` and JUDGE for yourself: did codex actually
      implement `description`, preserve the interface (same entry points/IO the
      parent had), and make a real behavioral change — not a no-op, rename, or
