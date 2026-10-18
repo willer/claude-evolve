@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Gemini 4 Argon joins the ideation roll (plugin 0.3.9)** — `--source argon`
+  runs Google's Antigravity CLI (`agy --model gemini-4-argon-high --sandbox`)
+  with the prompt on stdin as a stream-json `user` event. The roll is now 2/6
+  Opus, 1/6 Fable, 1/6 Astra, 1/6 Argon, 1/6 Grok; Argon took one of Astra's
+  two slots. Requires `agy` signed in.
 - **Grok ideation source moves to Grok 4.7 (plugin 0.3.6)** — the 1/6 Grok
   roll in `ideate_branch.py` now calls OpenRouter `x-ai/grok-4.7` (was
   `x-ai/grok-4.6`). Effort (max) and routing are unchanged.

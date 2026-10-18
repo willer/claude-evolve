@@ -418,3 +418,32 @@ Sept 23. Fable branches use their own pinned agent, `plugin/agents/ideator-fable
 which is the same as `ideator.md` with `model: fable`. `ideate_branch.py
 --source fable` only writes the prompt file, as `opus` does (`SUBAGENT_SOURCES`).
 Re-roll on failure is unchanged. Ideas are tagged `idea-LLM=fable`. Plugin 0.3.7.
+
+## Gemini 4 Argon joins the ideation roll via Antigravity (2026-10-18)
+
+The roll is now 2/6 Opus 5.5 high, 1/6 Fable 5.1 high, 1/6 GPT-6 Astra xhigh,
+1/6 Gemini 4 Argon high, 1/6 Grok 4.7 max. Argon took one of Astra's two slots:
+Google claims Argon beats Astra, and this puts that claim against Astra on the
+same branches. Opus keeps two slots as the proven source.
+
+Argon runs through Google's Antigravity CLI, `agy`, not OpenRouter. On this
+date, OpenRouter's `google/gemini-4-argon` through the `claude -p` route
+reported success with an empty result at every effort level, while Grok on the
+same route answered. The `gemini` CLI is retired by Google (`UNSUPPORTED_CLIENT`,
+"migrate to Antigravity"). `agy` bakes effort into the model ID
+(`gemini-4-argon-low|medium|high`); high is the top tier.
+
+`agy -p` takes the prompt as an argv value, and prompts run to ~300KB, so
+`ideate_branch.py` sends it on stdin as one stream-json event,
+`{"event":"user","message":{"role":"user","content":...}}`, and reads the
+`result` event's `response`. Read-only is `--sandbox` with the default
+permission mode: a write attempt errors and reads still work. Reads are limited
+to the working directory plus `--add-dir` directories, and when a read is denied
+the turn ends with an empty answer. So the workspace's parent is added: candidates
+import shared modules from it (`trading-strategies/orthogonal_signals.py`), and
+codex's read-only sandbox can read there too. Shell commands stay denied, and the
+prompt opens with a preface that points Argon at its file tools; without the
+preface, its first `ls` was refused and it gave up. `--mode plan`
+returns an empty response, so it is not used. `agy` must be signed in (run it
+once interactively). Re-roll on failure is unchanged; a failed branch re-rolls
+over the other sources. Ideas are tagged `idea-LLM=argon`. Plugin 0.3.9.

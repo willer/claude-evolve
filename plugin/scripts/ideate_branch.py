@@ -14,11 +14,13 @@ assembly deterministically instead:
                             which reads it and answers.
   --source codex            write the prompt file, run `codex exec` on it,
                             parse its JSON array, write <out>. No subagent.
+  --source argon            same, through Google's Antigravity CLI (`agy`,
+                            Gemini 4 Argon). No subagent.
   --source grok|glm|kimi|qwen
                             same, but through a headless `claude -p` pointed at
                             OpenRouter (the Spaces claude/grok route). No subagent.
 
-The skill's dice roll uses ENABLED_SOURCES (opus / fable / codex GPT-6 Astra / grok);
+The skill's dice roll uses ENABLED_SOURCES (opus / fable / codex GPT-6 Astra / argon / grok);
 the other OpenRouter models stay wired so a roll change is a one-line edit.
 
 Usage:
@@ -48,6 +50,10 @@ from evolve_common import add_workspace_args, load_workspace
 # skill prose. Change a model in one place.
 CODEX_MODEL = "gpt-6-astra"
 CODEX_EFFORT = "xhigh"
+ARGON_MODEL = "gemini-4-argon-high"  # agy bakes effort into the model ID; high is Argon's top tier
+ARGON_PREFACE = ("Tools: shell commands (run_command) are DENIED in this session. To inspect files use "
+                 "only view_file, list_dir, grep_search and find_by_name. If any tool is denied, carry "
+                 "on without it — you must still end with the JSON array.\n\n")
 OPENROUTER_MODELS = {
     "grok": "x-ai/grok-4.7",
     "glm": "z-ai/glm-5.3-flash",
@@ -58,12 +64,12 @@ OPENROUTER_MODELS = {
 OPENROUTER_EFFORT = {"grok": "max"}
 OPENROUTER_BASE = "https://openrouter.ai/api"  # claude appends /v1/messages itself
 SUBAGENT_SOURCES = ("opus", "fable")  # answered by a pinned ideator subagent, not run here
-SOURCES = SUBAGENT_SOURCES + ("codex",) + tuple(OPENROUTER_MODELS)  # everything the script can run
-# AIDEV-NOTE: Oct 16 2026 policy — the roll is 2/6 Opus 5.5 high, 1/6 Fable 5.1 high,
-# 2/6 GPT-6 Astra xhigh, 1/6 Grok 4.7 max. Opus beat Fable on benchmarks (Sept 23), but
-# Fable is a bigger, different model: it is back for idea diversity, like Grok, not for
-# quality. GLM/Kimi/Qwen stay wired (not rolled) because this changes.
-ENABLED_SOURCES = ("opus", "fable", "codex", "grok")
+SOURCES = SUBAGENT_SOURCES + ("codex", "argon") + tuple(OPENROUTER_MODELS)  # everything the script can run
+# AIDEV-NOTE: Oct 18 2026 policy — the roll is 2/6 Opus 5.5 high, 1/6 Fable 5.1 high,
+# 1/6 GPT-6 Astra xhigh, 1/6 Gemini 4 Argon high, 1/6 Grok 4.7 max. Argon took one of
+# Astra's two slots (Google claims it beats Astra; this tests that). Fable and Grok are
+# rolled for idea diversity, not quality. GLM/Kimi/Qwen stay wired (not rolled).
+ENABLED_SOURCES = ("opus", "fable", "codex", "argon", "grok")
 STRATEGIES = ("novel_exploration", "hill_climbing", "structural_mutation", "crossover_hybrid")
 DEFAULT_TIMEOUT = 1800  # 30 min — reasoning models at xhigh routinely take 10+ min
 
@@ -222,6 +228,8 @@ def run_external(source, prompt_file, workdir, timeout):
         with open(prompt_file) as fh:
             proc = subprocess.run(cmd, stdin=fh, capture_output=True, text=True,
                                   cwd=str(workdir), timeout=timeout)
+    elif source == "argon":
+        return _run_argon(prompt_file, workdir, timeout)
     else:
         if shutil.which("claude") is None:
             raise RuntimeError("claude CLI not found on PATH")
@@ -254,6 +262,43 @@ def run_external(source, prompt_file, workdir, timeout):
             proc = subprocess.run(cmd, stdin=fh, capture_output=True, text=True,
                                   cwd=str(workdir), env=env, timeout=timeout)
     return proc.returncode, (proc.stdout or ""), (proc.stderr or "")
+
+
+def _run_argon(prompt_file, workdir, timeout):
+    if shutil.which("agy") is None:
+        raise RuntimeError("agy (Antigravity CLI) not found on PATH")
+    # AIDEV-NOTE: agy's -p takes the prompt as an argv value, and prompts run ~300KB,
+    # so the prompt goes in on stdin as one stream-json `user` event instead. --sandbox
+    # plus the default (request-review) permission mode makes file writes ERROR in print
+    # mode while reads still work — do NOT add --dangerously-skip-permissions. Reads are
+    # confined to cwd + --add-dir dirs, and a denied read ends the turn with an EMPTY answer,
+    # so the workspace's parent is added: candidates import shared modules from it (e.g.
+    # trading-strategies/orthogonal_signals.py), as codex's read-only sandbox allows. --mode plan
+    # returns an empty response. Argon is NOT usable via OpenRouter + claude -p: it
+    # reports success with an empty result (tested Oct 18 2026). Needs `agy` signed in.
+    # Shell is denied (that denial is what keeps the run read-only), and Argon quits with an
+    # empty answer when its first `ls` is refused — so steer it to the file tools up front.
+    content = ARGON_PREFACE + Path(prompt_file).read_text()
+    msg = json.dumps({"event": "user", "message": {"role": "user", "content": content}})
+    cmd = ["agy", "--model", ARGON_MODEL, "--sandbox", "--add-dir", str(Path(workdir).resolve().parent),
+           "--disable-slash-commands",
+           "--input-format", "stream-json", "--output-format", "stream-json"]
+    proc = subprocess.run(cmd, input=msg + "\n", capture_output=True, text=True,
+                          cwd=str(workdir), timeout=timeout)
+    result = None
+    for line in (proc.stdout or "").splitlines():
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if ev.get("event") == "result":
+            result = ev.get("result") or {}
+    if result is None:
+        raise RuntimeError(f"agy exited {proc.returncode} with no result event; "
+                           f"stderr tail: {(proc.stderr or '').strip()[-800:]}")
+    if result.get("status") != "SUCCESS":
+        raise RuntimeError(f"agy status {result.get('status')}: {result.get('error')}")
+    return proc.returncode, result.get("response") or "", proc.stderr or ""
 
 
 def main():
