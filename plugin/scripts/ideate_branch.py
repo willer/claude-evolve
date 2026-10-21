@@ -123,6 +123,15 @@ INTENT_TEXT = ("Some of your assigned IDs carry an INTENT. An idea in an intent 
                "\"[<INTENT NAME, UPPERCASED>] \". FREE slots are unconstrained and untagged.")
 
 
+# AIDEV-NOTE: replay-tuning fits the scored set; the sealed holdout is what promotes a leader.
+NO_REPLAY_TUNING = ("No tuning by replay: never choose or justify a constant, gain, threshold or clip "
+                    "by replaying the evaluator's scored windows or folds and keeping the value that "
+                    "scores best. That fits the test set: the score rises, and the sealed holdout does "
+                    "not. A constant must come from a principle, or be fitted inside the candidate on "
+                    "training data only (e.g. an inner walk-forward that ends at the cutoff). Ideas "
+                    "that cite replay gains on scored data as their evidence are discarded.")
+
+
 def _clip_descriptions(existing):
     lines = [(d or "").replace("\n", " ")[:DESC_CLIP] for d in existing]
     total = sum(len(l) + 1 for l in lines)
@@ -174,6 +183,7 @@ def build_prompt(ctx, strategy, ids, frame, intents, extra):
         parts.append("Intent slots:\n" + "\n".join(lines) + "\n\n" + rule_txt + "\n\n" + INTENT_TEXT)
     if extra:
         parts.append("Additional instructions from the orchestrator:\n" + extra)
+    parts.append(NO_REPLAY_TUNING)
     parts.append("Every idea must be meaningfully DIFFERENT from every existing description below "
                  "(no near-duplicates, no trivial rewordings) and must plausibly move the BRIEF's "
                  "metric. State what would falsify it.")
