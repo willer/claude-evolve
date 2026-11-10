@@ -68,6 +68,21 @@ export function wireIpc(
     return fs.existsSync(p) ? p : undefined;
   };
 
+  // One run's scored rows + appendix (the report's flag section).
+  const loadRun = async (db: string, chosen: string, runDates: string[]) => {
+    const rows = (await sqliteJson(
+      db,
+      `SELECT algorithm, algorithm_name, period, target_risk, achieved_risk,
+              cagr, pain, aa_pain, sharpe, sortino, turnover
+       FROM results WHERE run_date = '${chosen}'`,
+    )) as BacktestRow[];
+    const appendix = (await sqliteJson(
+      db,
+      `SELECT algorithm, algorithm_name, reasons FROM appendix WHERE run_date = '${chosen}' ORDER BY algorithm`,
+    )) as Array<{ algorithm: string; algorithm_name: string; reasons: string }>;
+    return { runDate: chosen, runDates, rows, appendix };
+  };
+
   // Backtest dashboard data: latest complete run (>10 algos, like the
   // streamlit default) unless a specific runDate is requested. Includes the
   // run's appendix (flagged algorithms + reasons — the report's flag section).
@@ -84,17 +99,30 @@ export function wireIpc(
     if (!chosen || !dates.some((d) => d.run_date === chosen)) {
       chosen = (dates.find((d) => d.count > 10) ?? dates[0]).run_date;
     }
-    const rows = (await sqliteJson(
+    return loadRun(db, chosen, dates.map((d) => d.run_date));
+  });
+
+  // Newest run whose champion for `algorithm` was `candidateId` — the detail view's
+  // Pinned tab. backtest-all only ever scores a directory's CURRENT champion, so a pin
+  // that is not the leader only has backtest data from a run made while it led.
+  // Null = no run ever scored it (honest absence, the panel says so).
+  ipcMain.handle('backtests:runFor', async (_e, root: string, algorithm: string, candidateId: string) => {
+    if (!/^[\w./-]+$/.test(algorithm)) throw new Error(`bad algorithm: ${algorithm}`);
+    if (!/^[\w.-]+$/.test(candidateId)) throw new Error(`bad candidate id: ${candidateId}`);
+    const db = backtestDb(root);
+    if (!db) return null;
+    const hit = (await sqliteJson(
       db,
-      `SELECT algorithm, algorithm_name, period, target_risk, achieved_risk,
-              cagr, pain, aa_pain, sharpe, sortino, turnover
-       FROM results WHERE run_date = '${chosen}'`,
-    )) as BacktestRow[];
-    const appendix = (await sqliteJson(
-      db,
-      `SELECT algorithm, algorithm_name, reasons FROM appendix WHERE run_date = '${chosen}' ORDER BY algorithm`,
-    )) as Array<{ algorithm: string; algorithm_name: string; reasons: string }>;
-    return { runDate: chosen, runDates: dates.map((d) => d.run_date), rows, appendix };
+      `SELECT MAX(run_date) AS run_date FROM results
+       WHERE algorithm = '${algorithm}'
+         AND (algorithm_name = '${candidateId}' OR algorithm_name LIKE '% ${candidateId}')`,
+    )) as Array<{ run_date: string | null }>;
+    const chosen = hit[0]?.run_date;
+    if (!chosen) return null;
+    const dates = (await sqliteJson(db, 'SELECT DISTINCT run_date FROM results ORDER BY run_date DESC')) as Array<{
+      run_date: string;
+    }>;
+    return loadRun(db, chosen, dates.map((d) => d.run_date));
   });
 
   // Per-period NAV + position series, written by backtest-all since 2026-06-11

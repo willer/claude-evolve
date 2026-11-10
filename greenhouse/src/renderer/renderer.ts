@@ -70,6 +70,7 @@ declare global {
       tools: { start(id: string): Promise<void>; stop(id: string): Promise<void> };
       backtests: {
         summary(root: string, runDate?: string): Promise<BacktestSummary>;
+        runFor(root: string, algorithm: string, candidateId: string): Promise<BacktestSummary>;
         equity(
           root: string,
           runDate: string,
@@ -639,15 +640,15 @@ function navPanelHtml(ws: string, candidateId: string, w: number, h: number): st
 }
 
 /** Small-multiples NAV: one mini chart per backtest period for this workspace's
- *  champion in the latest run. Each period is a distinct story — YTD 2026 and
+ *  algo in the given run (the latest run for the winner; for a pin, the newest run
+ *  that scored it). Each period is a distinct story — YTD 2026 and
  *  OOS are true holdouts, Long-Term the full single-pass backtest — and the
  *  curves run through the latest data (fresher than the walk-forward artifact).
  *  Curves load lazily via btEquityFor, repainting as each arrives. Empty string
- *  when the workspace has no entry in the latest backtest run. */
-function navByPeriodPanel(r: WorkspaceRow, cw: number, tag: string): string {
-  const bt = btByRoot.get(r.root);
-  const t = btTableFor(r.root);
-  if (!bt || !t || !btAlgoFor(r)) return '';
+ *  when the workspace has no entry in that run. */
+function navByPeriodPanel(r: WorkspaceRow, bt: NonNullable<BacktestSummary>, cw: number, tag: string): string {
+  const t = btTableOf(bt);
+  if (!btAlgoIn(bt, r.name)) return '';
   const runDate = bt.runDate;
   const name = r.name;
   const cols = cw >= 780 ? 3 : cw >= 460 ? 2 : 1;
@@ -708,7 +709,10 @@ const btTableMemo = new WeakMap<object, { algos: BacktestAlgo[]; periods: string
 
 function btTableFor(root: string): { algos: BacktestAlgo[]; periods: string[] } | null {
   const bt = btByRoot.get(root);
-  if (!bt) return null;
+  return bt ? btTableOf(bt) : null;
+}
+
+function btTableOf(bt: NonNullable<BacktestSummary>): { algos: BacktestAlgo[]; periods: string[] } {
   let t = btTableMemo.get(bt);
   if (!t) {
     t = buildBacktestTable(bt.rows);
@@ -743,10 +747,41 @@ function winnerTag(state: 'winner' | 'previous' | 'unknown' | 'pinned', tested?:
 }
 
 function btAlgoFor(r: WorkspaceRow): { algo: BacktestAlgo; rank: number } | null {
-  const t = btTableFor(r.root);
-  if (!t) return null;
-  const i = t.algos.findIndex((a) => a.algorithm === r.name);
+  const bt = btByRoot.get(r.root);
+  return bt ? btAlgoIn(bt, r.name) : null;
+}
+
+/** A workspace's scored entry (and rank) within one specific run. */
+function btAlgoIn(bt: NonNullable<BacktestSummary>, name: string): { algo: BacktestAlgo; rank: number } | null {
+  const t = btTableOf(bt);
+  const i = t.algos.findIndex((a) => a.algorithm === name);
   return i === -1 ? null : { algo: t.algos[i], rank: i + 1 };
+}
+
+// Newest backtest run whose champion for a workspace was a given candidate — what the
+// detail view's Pinned tab shows. backtest-all only scores each directory's CURRENT
+// champion, so a pin that is not the leader has data only from a run made while it led.
+// null = no run ever scored it (cached too); undefined = fetch in flight.
+// AIDEV-NOTE: cached for the session like btEquityCache — a later run can't re-score a
+// non-leader pin, and a pin that becomes the leader is shown via the Winner path.
+const candRunCache = new Map<string, NonNullable<BacktestSummary> | null>();
+const candRunPending = new Set<string>();
+
+function btRunScoring(root: string, name: string, candidateId: string): NonNullable<BacktestSummary> | null | undefined {
+  const key = `${root}|${name}|${candidateId}`;
+  if (candRunCache.has(key)) return candRunCache.get(key);
+  if (!candRunPending.has(key)) {
+    candRunPending.add(key);
+    void api.backtests
+      .runFor(root, name, candidateId)
+      .then((d) => {
+        candRunCache.set(key, d);
+        candRunPending.delete(key);
+        render();
+      })
+      .catch(() => candRunPending.delete(key));
+  }
+  return undefined;
 }
 
 // Re-reads the latest backtest-all run from sqlite. Called at startup and on
@@ -1803,8 +1838,10 @@ function renderDetail(): void {
   const leader = s.leader;
   // Focus: the summary / NAV / returns-by-year panels describe ONE algo. Default is the
   // evolution winner; when production pins a DIFFERENT algo (stats.pinned), a tab strip
-  // above the panels lets the operator switch to that row. The per-generation charts,
-  // the generation table, and the backtest panel are workspace-wide and do not switch.
+  // above the panels lets the operator switch to that row. Everything per-algo follows
+  // the tab — summary, backtest table, walk-forward NAV, NAV by period, returns by year;
+  // only the history at the bottom (the two per-generation charts and the generation
+  // table) is workspace-wide and does not switch.
   const pinned = s.pinned;
   const focusPinned = !!pinned && detailFocus === 'pinned';
   const focus = focusPinned ? pinned : leader;
@@ -1836,12 +1873,15 @@ function renderDetail(): void {
   const yearVals = years.flatMap((sr) => sr.values.filter((v): v is number => v !== null));
   const yearN = years.length ? Math.max(...years.map((sr) => sr.values.length)) : 0;
   const hasYearChart = yearVals.length >= 2 && yearN >= 2;
-  const bt = btAlgoFor(r);
-  const btRun = btByRoot.get(r.root);
+  // Backtest source follows the focus. Winner: the latest run, which scores whichever
+  // champion was current when it ran — that can lag the live leader, so name the tested
+  // champion and flag staleness. Pinned: the newest run that scored the pin (it can only
+  // have been scored while it led); none → say so rather than show the leader's numbers.
+  const latestRun = btByRoot.get(r.root);
+  const pinRun = focusPinned ? btRunScoring(r.root, r.name, pinned.id) : undefined;
+  const btRun = focusPinned ? pinRun ?? undefined : latestRun;
+  const bt = btRun ? btAlgoIn(btRun, r.name) : null;
   const btFlag = btRun?.appendix.find((x) => x.algorithm === r.name);
-  // backtest-all scores whichever champion was current the last time it ran —
-  // which can lag the live leader. Name the tested champion and flag staleness
-  // so an old backtest isn't mistaken for the current leader's verdict.
   const testedId = bt ? candidateIdOf(bt.algo.name) : null;
   const leaderId = leader?.id ?? null;
   const btStale = !!(testedId && leaderId && testedId.toLowerCase() !== leaderId.toLowerCase());
@@ -1850,19 +1890,32 @@ function renderDetail(): void {
     : btStale
       ? 'previous'
       : 'winner';
-  const btTag = bt ? winnerTag(btWinnerState, testedId, leaderId) : '';
+  const btTag = focusPinned ? focusTag : bt ? winnerTag(btWinnerState, testedId, leaderId) : '';
+  // A pin scored by an older run: its numbers are from that run's data window.
+  const pinRunOld = focusPinned && btRun && latestRun && btRun.runDate !== latestRun.runDate;
   const btPanel = bt && btRun
     ? `<div class="panel bt-host">
-         <h3>Backtest — run ${esc(btRun.runDate)} · testing ${esc(bt.algo.name)} · #${bt.rank} of ${btTableFor(r.root)!.algos.length} · score ${bt.algo.score.toFixed(2)}${bt.algo.qualPct !== null ? ` · qual ${bt.algo.qualPct}%` : ''}${btTag}</h3>
+         <h3>Backtest — run ${esc(btRun.runDate)} · testing ${esc(bt.algo.name)} · #${bt.rank} of ${btTableOf(btRun).algos.length} · score ${bt.algo.score.toFixed(2)}${bt.algo.qualPct !== null ? ` · qual ${bt.algo.qualPct}%` : ''}${btTag}</h3>
          ${
-           btWinnerState === 'previous'
+           !focusPinned && btWinnerState === 'previous'
              ? `<div class="desc" style="color: var(--yellow); margin-bottom: 8px; user-select: text;">⚠ backtest-all last scored ${esc(testedId!)}; the current leader ${esc(leaderId!)} hasn't been backtested yet — re-run backtest-all to score it.</div>`
              : ''
          }
+         ${
+           pinRunOld
+             ? `<div class="desc" style="color: var(--yellow); margin-bottom: 8px; user-select: text;">⚠ backtest-all only scores the current leader, so ${esc(pinned!.id)} was last scored in the ${esc(btRun.runDate)} run (latest run ${esc(latestRun!.runDate)}); rank is within that run.</div>`
+             : ''
+         }
          ${btFlag ? `<div class="desc" style="color: var(--red); margin-bottom: 8px; user-select: text;">⚑ ${esc(btFlag.reasons)}</div>` : ''}
-         ${btPeriodTableHtml(r.root, bt.algo, btTableFor(r.root)!.periods, btRun.runDate, cw, { bh: benchmarkFor(r.key) })}
+         ${btPeriodTableHtml(r.root, bt.algo, btTableOf(btRun).periods, btRun.runDate, cw, { bh: benchmarkFor(r.key) })}
        </div>`
-    : '';
+    : focusPinned && latestRun
+      ? `<div class="panel"><h3>Backtest${focusTag}</h3><div class="desc" style="color: var(--dim)">${
+          pinRun === undefined
+            ? 'loading…'
+            : `backtest-all has never scored ${esc(pinned!.id)} — it only backtests each workspace's current leader, and no stored run caught this pin while it led.`
+        }</div></div>`
+      : '';
 
   // Production badges: inference-all says whether this workspace is live, whether it is
   // BLENDED with another workspace into one averaged webhook (each leg pinned separately by
@@ -1905,7 +1958,7 @@ function renderDetail(): void {
     ${
       focus
         ? `<div class="panel"><h3>${focusLabel} NAV over time — walk-forward OOS${focusTag}</h3>${registerNavZoom('nav-leader', equityFor(r.key, focus.id))}${zoomable('nav-leader', (w, ht) => navPanelHtml(r.key, focus.id, w, ht), cw, 130)}</div>
-           ${navByPeriodPanel(r, cw, btTag)}
+           ${bt && btRun ? navByPeriodPanel(r, btRun, cw, btTag) : ''}
            <div class="panel"><h3>${focusLabel} returns by year${focusTag}</h3>${yearBarsHtml(yearReturns(focus))}</div>`
         : ''
     }

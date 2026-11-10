@@ -39,6 +39,8 @@ contextBridge.exposeInMainWorld('greenhouse', {
   },
   backtests: {
     summary: (root: string, runDate?: string) => ipcRenderer.invoke('backtests:summary', root, runDate),
+    runFor: (root: string, algorithm: string, candidateId: string) =>
+      ipcRenderer.invoke('backtests:runFor', root, algorithm, candidateId),
     equity: (root: string, runDate: string, algorithm: string, period: string) =>
       ipcRenderer.invoke('backtests:equity', root, runDate, algorithm, period),
   },

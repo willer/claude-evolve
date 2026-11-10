@@ -178,5 +178,12 @@ enlarged views print the same gen ticks; the year chart plots
 `GenStats.yearRow` (chosen by HAVING return_YYYY, champion preferred) instead
 of `best`, so a generation with year data but no walk-forward score still
 appears. The small list/grid sparklines pass no axis and keep index positions.
+The detail Winner / Pinned tabs switch EVERY per-algo panel (summary, Backtest
+table, walk-forward NAV, Backtest NAV by period, returns by year); only the
+history at the bottom (two per-generation charts + generation table) is
+workspace-wide. backtest-all only scores each directory's current champion, so
+the Pinned tab's backtest comes from the newest run that scored the pin
+(`backtests:runFor` IPC, matched on algorithm_name ending in the id) with a
+warning naming that run; when no run ever scored it the panel says so.
 See ../docs/TRUTH.md.
 Open: equity/ artifact retention (claude-evolve side).

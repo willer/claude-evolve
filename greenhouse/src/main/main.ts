@@ -166,7 +166,8 @@ app.whenReady().then(() => {
     rebuilder?.stop();
   });
 
-  if (process.env.EG_SHOT) devShots(process.env.EG_SHOT);
+  if (process.env.EG_SHOT)
+    devShots(process.env.EG_SHOT, () => poller.current().find((r) => r.stats.pinned)?.key ?? null);
 });
 
 app.on('window-all-closed', () => app.quit());
@@ -249,7 +250,7 @@ function selfUpdate(srcDir: string, rebuilder: DevRebuilder): void {
 // first workspace's detail view, and a chart enlarged in the zoom overlay, then
 // quits. Read-only: never clicks action buttons. (Backtests are now part of the
 // per-workspace detail view, not a standalone page.)
-function devShots(dir: string): void {
+function devShots(dir: string, pinnedKey: () => string | null): void {
   const fs = require('node:fs') as typeof import('node:fs');
   fs.mkdirSync(dir, { recursive: true });
   const shot = async (name: string) => {
@@ -354,8 +355,17 @@ function devShots(dir: string): void {
     );
     console.log(`EG_SHOT leader-metrics=${leaderKs}`);
     // Winner / Pinned focus tabs: present only when inference-all pins a DIFFERENT algo
-    // than the leader. Clicking Pinned must swap the summary heading + NAV + year panels
-    // to that row (the heading names it); Winner restores the leader.
+    // than the leader. Clicking Pinned must swap every per-algo panel (summary, backtest,
+    // NAV, NAV by period, returns by year) to that row (the heading names it); Winner restores the leader.
+    // The first card rarely has a pin; open one that does so the Pinned tab is exercised.
+    const pinKey = pinnedKey();
+    console.log(`EG_SHOT focus-workspace=${JSON.stringify(pinKey)}`);
+    if (pinKey) {
+      await key('Escape');
+      await pause(400);
+      await js(`document.querySelector('.card[data-name=${JSON.stringify(JSON.stringify(pinKey)).slice(1, -1)}]')?.click()`);
+      await pause(2000);
+    }
     const focusHead = () => js(`document.querySelector('#d-left .panel h3')?.textContent?.trim() ?? null`);
     const focusTabs = await js(
       `JSON.stringify([...document.querySelectorAll('#d-focus [data-focus]')].map((e) => e.textContent.trim()))`,
@@ -364,6 +374,10 @@ function devShots(dir: string): void {
     await js(`document.querySelector('#d-focus [data-focus="pinned"]')?.click()`);
     await pause(800);
     console.log(`EG_SHOT focus-pinned head=${JSON.stringify(await focusHead())}`);
+    // Every per-algo panel follows the tab (backtest table, NAV by period too); only the
+    // generation history at the bottom stays workspace-wide.
+    const panelHeads = () => js(`JSON.stringify([...document.querySelectorAll('#d-left .panel h3')].map((e) => e.textContent.trim()))`);
+    console.log(`EG_SHOT focus-pinned panels=${await panelHeads()}`);
     await shot('detail-focus-pinned.png');
     await js(`document.querySelector('#d-focus [data-focus="winner"]')?.click()`);
     await pause(800);
