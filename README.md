@@ -72,7 +72,7 @@ score, edits the evaluator, or touches `algorithm.py`. Workers only write
 
 | Step | Who |
 |------|-----|
-| Ideation | Dice roll per branch: 2/6 Claude Opus 5.5 (high), 1/6 Claude Fable 5.1 (high), 1/6 Codex GPT-6 Astra (xhigh), 1/6 Gemini 4 Argon (high, via Google's Antigravity CLI `agy`), 1/6 Grok 4.7 (max, via `claude -p` routed to OpenRouter) |
+| Ideation | Dice roll per branch (d8): 1/8 Claude Opus 5.5 (high), 3/8 Claude Fable 5.2 (high), 2/8 Codex GPT-6 Astra (xhigh), 1/8 Gemini 4 Argon (high, via Google's Antigravity CLI `agy`), 1/8 Grok 4.7 (max, via `claude -p` routed to OpenRouter) |
 | Coding | Codex GPT-5.6 Luna writes first; a Claude Opus worker (medium) judges the diff and codes it itself if Codex fell short |
 | Scoring | Deterministic script under the sandbox; no model judgment |
 

@@ -1,6 +1,8 @@
 # Plan
 
 No open items. Completed and accepted work is in git history (`git log docs/PLAN.md`).
+- [x] reweight ideation toward Fable 5.2: d8 roll, 1/8 Opus 5.5, 3/8 Fable 5.2, 2/8 Astra, 1/8 Argon, 1/8 Grok
+  - evolve-ideate roll + re-roll example, `ideate_branch.py` policy note, both READMEs. See TRUTH.
 - [x] add Fable 5.1 high back to the ideation roll for idea diversity: 2/6 Opus 5.5 high, 1/6 Fable 5.1 high, 2/6 Astra xhigh, 1/6 Grok 4.7
   - New `plugin/agents/ideator-fable.md`; `fable` source in `ideate_branch.py`; evolve-ideate roll and dispatch; READMEs, manifests. Plugin 0.3.7. See TRUTH.
 - [x] switch ideation from Fable 5.1 xhigh to Opus 5.5 high (benchmarks + newer knowledge); keep Astra, skip Sol

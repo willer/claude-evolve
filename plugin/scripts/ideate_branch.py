@@ -65,10 +65,10 @@ OPENROUTER_EFFORT = {"grok": "max"}
 OPENROUTER_BASE = "https://openrouter.ai/api"  # claude appends /v1/messages itself
 SUBAGENT_SOURCES = ("opus", "fable")  # answered by a pinned ideator subagent, not run here
 SOURCES = SUBAGENT_SOURCES + ("codex", "argon") + tuple(OPENROUTER_MODELS)  # everything the script can run
-# AIDEV-NOTE: Oct 18 2026 policy — the roll is 2/6 Opus 5.5 high, 1/6 Fable 5.1 high,
-# 1/6 GPT-6 Astra xhigh, 1/6 Gemini 4 Argon high, 1/6 Grok 4.7 max. Argon took one of
-# Astra's two slots (Google claims it beats Astra; this tests that). Fable and Grok are
-# rolled for idea diversity, not quality. GLM/Kimi/Qwen stay wired (not rolled).
+# AIDEV-NOTE: Nov 10 2026 policy — the roll is a d8: 1/8 Opus 5.5 high, 3/8 Fable 5.2 high,
+# 2/8 GPT-6 Astra xhigh, 1/8 Gemini 4 Argon high, 1/8 Grok 4.7 max. Fable got the largest
+# share: measured Oct 16-Nov 9 it set a new board best on 12.3% of scored ideas vs Opus 11.3%,
+# Astra 8.4%, Grok 7.2% (Argon 4/45 beat parent, too few to judge). GLM/Kimi/Qwen stay wired.
 ENABLED_SOURCES = ("opus", "fable", "codex", "argon", "grok")
 STRATEGIES = ("novel_exploration", "hill_climbing", "structural_mutation", "crossover_hybrid")
 DEFAULT_TIMEOUT = 1800  # 30 min — reasoning models at xhigh routinely take 10+ min

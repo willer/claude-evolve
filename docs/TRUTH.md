@@ -447,3 +447,17 @@ preface, its first `ls` was refused and it gave up. `--mode plan`
 returns an empty response, so it is not used. `agy` must be signed in (run it
 once interactively). Re-roll on failure is unchanged; a failed branch re-rolls
 over the other sources. Ideas are tagged `idea-LLM=argon`. Plugin 0.3.9.
+
+## Fable 5.2 gets the largest ideation share (2026-11-10)
+
+The roll is now an 8-sided die: 1/8 Opus 5.5 high, 3/8 Fable 5.2 high, 2/8 GPT-6
+Astra xhigh, 1/8 Gemini 4 Argon high, 1/8 Grok 4.7 max. The operator's reasons:
+Fable 5.2 has more current ideas than the older models, and Fable already
+matched Opus on the boards. Measured over every trading-strategies board while
+Opus, Fable, Astra and Grok were all rolled (Oct 16 - Nov 9), the share of
+scored ideas that set a new board best was Fable 12.3% (n=666), Opus 11.3%
+(n=1467), Astra 8.4% (n=677), Grok 7.2% (n=195). Argon had 45 scored ideas and
+4 beat their parent, too few to judge, so it keeps one slot. These are
+walk-forward wins on the older Fable, not out-of-sample results. The
+`ideator-fable` agent pins the `fable` alias, so it runs whichever Fable that
+alias resolves to.
