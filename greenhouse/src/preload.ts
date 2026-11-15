@@ -54,6 +54,7 @@ contextBridge.exposeInMainWorld('greenhouse', {
       ipcRenderer.invoke('session:attach', name, cols, rows),
     detach: (name: string) => ipcRenderer.invoke('session:detach', name),
     unstick: (name: string) => ipcRenderer.invoke('session:unstick', name),
+    pageUp: (name: string) => ipcRenderer.invoke('session:pageUp', name),
   },
   prefs: {
     get: () => ipcRenderer.invoke('prefs:get'),

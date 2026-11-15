@@ -85,6 +85,7 @@ declare global {
         attach(id: string, cols: number, rows: number): Promise<{ ok: boolean }>;
         detach(id: string): Promise<void>;
         unstick(id: string): Promise<void>;
+        pageUp(id: string): Promise<void>;
       };
       prefs: { get(): Promise<Prefs>; set(patch: Partial<Prefs>): Promise<Prefs> };
       pathForFile(file: File): string;
@@ -1477,7 +1478,7 @@ function render(): void {
 function renderHints(): void {
   $('hints').innerHTML =
     view || toolView
-      ? `<b>esc</b> back · <b>⌘esc</b> back (even from terminal) · <b>⏎/a</b> focus terminal${view ? ' · <b>1 2 3</b> evolution/adhoc/shell tab · <b>p</b> winner/pinned · <b>s</b> start/stop' : ''} · click a chart to enlarge · click terminal to type · wheel scrolls the session`
+      ? `<b>esc</b> back · <b>⌘esc</b> back (even from terminal) · <b>⏎/a</b> focus terminal${view ? ' · <b>1 2 3</b> evolution/adhoc/shell tab · <b>p</b> winner/pinned · <b>s</b> start/stop' : ''} · click a chart to enlarge · click terminal to type · wheel / PgUp scroll the session · ⌥-drag selects text`
       : `<b>↑↓ j k</b> select · <b>⏎</b> open + attach · <b>space</b> peek stats · <b>v</b> ${viewMode === 'list' ? 'grid' : 'list'} · <b>s</b> start/stop · <b>*</b> star`;
 }
 
@@ -2121,7 +2122,7 @@ function syncSessionPanel(
     ctl.innerHTML =
       `${sessBadge(state, sessId)} ` +
       (attached
-        ? `<span class="term-note">live — click (or ⏎) to focus; wheel scrolls the session; ⌘esc backs out</span>`
+        ? `<span class="term-note">live — click (or ⏎) to focus; wheel / PgUp scroll the session, ⌥-drag selects text; ⌘esc backs out</span>`
         : `<button class="primary" data-sess-attach>Attach terminal</button>`) +
       `<span style="flex:1"></span><button class="danger" data-sess-stop>⏹ Stop</button>`;
   } else {
@@ -2156,7 +2157,10 @@ async function attachTerminal(
     fontFamily: 'SF Mono, Menlo, monospace',
     fontSize: 12,
     theme: { background: '#000000' },
-    scrollback: 0, // the attached app (claude, alt-screen) owns its own scrollback
+    scrollback: 0, // history lives in tmux (copy-mode) or in fullscreen claude itself
+    // tmux runs these sessions with `mouse on`, so plain drags go to tmux;
+    // Option-drag still makes a native xterm selection.
+    macOptionClickForcesSelection: true,
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
@@ -2167,21 +2171,25 @@ async function attachTerminal(
   terms.set(sessId, ts);
 
   term.onData((data) => ts.port?.postMessage({ type: 'input', data }));
-  // Shift+Enter → newline in claude's composer (see core/terminalKeys).
+  // Shift+Enter → newline in claude's composer; PageUp → main pages the pane
+  // (copy-mode over tmux history, or the key forwarded) — see core/terminalKeys.
   term.attachCustomKeyEventHandler((e) => {
     const o = terminalKeyOverride(e);
     if (!o) return true;
     e.preventDefault();
     if (o.send) ts.port?.postMessage({ type: 'input', data: o.send });
+    if (o.pageUp) {
+      api.session.pageUp(sessId).catch((err: unknown) => {
+        console.error(`PageUp failed for ${sessId}:`, err);
+      });
+    }
     return false;
   });
-  // No custom wheel handler: claude runs in the alternate screen with mouse
-  // tracking on, so tmux keeps zero scrollback for it (`history_size` 0) — the
-  // old copy-mode hijack scrolled a buffer that doesn't exist and, by cancelling
-  // the wheel event, stopped it ever reaching claude. Letting xterm handle the
-  // wheel natively forwards it as a mouse sequence (onData → pty → tmux →
-  // claude), so claude scrolls its own conversation. tmux `mouse off` means tmux
-  // forwards to the app rather than grabbing the wheel for itself.
+  // No custom wheel handler: SessionHost sets tmux `mouse on` on each session,
+  // so tmux turns on mouse reporting in this xterm and handles the wheel —
+  // forwarded to fullscreen claude (mouse tracking), or copy-mode over pane
+  // history when claude draws in the normal screen. With `mouse off` (before
+  // task 1111) xterm never reported the wheel and nothing scrolled.
   ts.ro = new ResizeObserver(() => {
     // A hidden (display:none) wrap measures 0×0; fitting to that would ask tmux
     // to resize the session to a degenerate size for every other client too.
@@ -2263,7 +2271,7 @@ function renderTool(): void {
   document.getElementById('t-stop')?.addEventListener('click', () => void stopTool(t.id));
   $('tool-term-hint').innerHTML = t.running
     ? terms.has(toolSessionName(t.id))
-      ? 'Live tmux attach — click (or ⏎) to focus; keystrokes then go to the session; wheel scrolls the session; ⌘esc backs out.'
+      ? 'Live tmux attach — click (or ⏎) to focus; keystrokes then go to the session; wheel / PgUp scroll the session, ⌥-drag selects text; ⌘esc backs out.'
       : '<button id="t-attach" class="primary">Attach terminal</button>'
     : `Not running. ▶ runs ./${esc(t.key)} in ${esc(t.root)} — the pane stays inspectable after it exits.`;
   document

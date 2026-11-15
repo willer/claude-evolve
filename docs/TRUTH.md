@@ -501,3 +501,29 @@ it lost to `plugin/lib` whenever both were on `sys.path`, and the full
 `plugin/tests` run failed at collection. CLI ideation (`DEFAULT_LLM_IDEATE`) is unchanged
 for now. npm 1.15.0.
 
+
+## Greenhouse terminals: wheel and PgUp scroll via tmux mouse on (2026-11-15)
+
+Task 1111: the mouse wheel and PgUp/PgDown did nothing in Greenhouse's Claude panes. The
+earlier design (no wheel handler, tmux `mouse off`) assumed claude always runs in the
+alternate screen with mouse tracking and that xterm would forward the wheel to it. With
+`mouse off`, tmux never turns on mouse reporting in the xterm client, so the wheel was
+never reported at all. And when claude draws in the normal screen, its transcript is in
+tmux pane history, which xterm (`scrollback: 0`) cannot see.
+
+Now `SessionHost` sets `mouse on` as a session option (`set-option -t <sess>`) on every
+Greenhouse session at start and again on attach, which also covers sessions adopted from
+before the change or started by the trading-strategies TUI. It is never set with `-g`:
+the operator's other tmux sessions keep their own setting. tmux's default wheel binding
+then forwards the wheel to an app with mouse tracking (fullscreen claude), or enters
+copy-mode over pane history. The renderer intercepts unmodified PageUp and calls
+`session:pageUp`. Main reads `#{alternate_on} #{pane_in_mode}`. In the normal screen and
+outside copy-mode it runs `copy-mode -e -u`; otherwise it forwards the key. The decision
+is pure in `core/terminalKeys.ts` (`pageUpAction`, `parsePaneState`). PageDown passes
+through: copy-mode pages down on its own binding and `-e` leaves at the bottom.
+
+Trade-off: with tmux owning the mouse, a plain drag selects in tmux, not natively in xterm.
+xterm runs with `macOptionClickForcesSelection`, so Option-drag still makes a native
+selection. Attaching to the same session from the operator's own terminal also gets mouse
+on. Not verified live: the build sandbox cannot reach the tmux socket, so a person with a
+real wheel and a live claude session has to confirm it.
