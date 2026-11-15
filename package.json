@@ -1,6 +1,6 @@
 {
   "name": "claude-evolve",
-  "version": "1.13.0",
+  "version": "1.14.1",
   "bin": {
     "claude-evolve": "bin/claude-evolve",
     "claude-evolve-main": "bin/claude-evolve-main",
@@ -16,7 +16,8 @@
   "files": [
     "bin/",
     "lib/",
-    "templates/"
+    "templates/",
+    "!**/__pycache__/**"
   ],
   "main": "index.js",
   "directories": {
