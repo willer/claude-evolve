@@ -17,7 +17,7 @@ import { chartFracs, genFrac, genTicks, sharedGenDomain } from './genAxis';
 import { nearestColumnIndex, tipPlacement } from './hover';
 import { parseInferenceAll, productionTags } from './inferenceAll';
 import { TRADING_METRICS, leaderMetrics, resolveProfile } from './profile';
-import { assignKeys, rootLabel } from './roots';
+import { activeRootFilter, assignKeys, inRoot, rootColumnLabel, rootLabel, showRootColumn } from './roots';
 import {
   SESSION_KINDS,
   SHELL_CMD,
@@ -25,6 +25,8 @@ import {
   adhocSessionName,
   evolutionCmd,
   classifyPane,
+  isAuthExpired,
+  AUTH_TAIL_LINES,
   hashText,
   pickSessionTab,
   sessionDotClass,
@@ -138,10 +140,9 @@ describe('computeStats', () => {
     expect(computeStats(text, 'gen09-009').pinned).toBeNull(); // pinned id not in the CSV
   });
 
-  it('picks a yearRow from year data alone, so unscored gens still plot', () => {
-    // gen02 was never walk-forward scored — no performance, status skipped — but a cheap
-    // single-window backtest filled return_2025. It must still back a year-chart point,
-    // otherwise archived generations are unplottable without a full 15-window re-score.
+  it('leaves yearRow null for a generation with no winner, even with year data', () => {
+    // gen02 has return_2025 on a skipped row but no scored champion. The year chart must
+    // skip it, exactly as the score chart does.
     const text = [
       HEADER,
       row('gen01-001', '1.0', 'complete', ['', '', '', '0.11']),
@@ -150,7 +151,7 @@ describe('computeStats', () => {
     const s = computeStats(text);
     const g2 = s.generations.find((g) => g.gen === 2);
     expect(g2?.best).toBeNull(); // no score → absent from the sparkline
-    expect(g2?.yearRow?.id).toBe('gen02-001'); // but present on the year chart
+    expect(g2?.yearRow).toBeNull(); // and absent from the year chart
     expect(s.sparkline).toEqual([1.0]);
   });
 
@@ -384,6 +385,55 @@ describe('classifyPane', () => {
     ].join('\n');
     const first = classifyPane(txt, null);
     expect(classifyPane(txt, first.hash).activity).toBe('stuck');
+  });
+
+  it('reports login-expired on a revoked/expired login, over every other state', () => {
+    // Real evolve pane 2026-10-12: every worker died on a revoked OAuth token and
+    // the session came to rest. Nothing progresses until a human runs /login.
+    const txt = [
+      '✻ Worked for 12m 04s',
+      '⏺ Agent "evolve worker 1" failed: Agent terminated early due to an API error: OAuth token revoked · Please run /login (error type authentication_failed, HTTP 401, request id req_011CfwEKeWpbtAUnCkMTqCMC, model sent to the API: claude-opus-5-5)',
+      '  ⎿  OAuth token revoked · Please run /login',
+      '✻ Cooked for 0s',
+      '❯ ',
+    ].join('\n');
+    expect(isAuthExpired(txt)).toBe(true);
+    expect(classifyPane(txt, null).activity).toBe('login-expired'); // first sight, no motion needed
+    expect(classifyPane(txt, classifyPane(txt, null).hash).activity).toBe('login-expired');
+    for (const msg of [
+      'Login expired · Please run /login (error type authentication_failed)',
+      'API Error: 401 OAuth token revoked',
+      'Invalid API key · Please run /login',
+      'OAuth token has expired. Please obtain a new token or refresh your existing token.',
+      'error type AUTHENTICATION_FAILED',
+    ]) {
+      expect(classifyPane(`  ⎿  ${msg}\n✻ Cooked for 0s\n❯ `, null).activity).toBe('login-expired');
+    }
+    // Precedence: beats asking and busy-working markers too.
+    expect(classifyPane('Please run /login\nDo you want to proceed?\n❯ 1. Yes', null).activity).toBe('login-expired');
+    expect(classifyPane('Login expired · Please run /login\n✻ Worked for 1m · 2 shells', null).activity).toBe('login-expired');
+  });
+
+  it('clears login-expired once "Login successful" follows the last error', () => {
+    const txt = '  ⎿  OAuth token revoked · Please run /login\n❯ /login\n  ⎿  Login successful\n❯ ';
+    expect(isAuthExpired(txt)).toBe(false);
+    expect(classifyPane(txt, classifyPane(txt, null).hash).activity).toBe('waiting');
+    // ...but a NEW error after the success re-flags it.
+    expect(isAuthExpired(txt + '\nLogin expired · Please run /login')).toBe(true);
+  });
+
+  it('ignores an auth error that scrolled out of the 40-line tail', () => {
+    const lines = ['  ⎿  OAuth token revoked · Please run /login'];
+    for (let i = 0; i < AUTH_TAIL_LINES; i++) lines.push(`⏺ worked on gen12-00${i % 10}`);
+    expect(isAuthExpired(lines.join('\n'))).toBe(false);
+    expect(isAuthExpired(lines.slice(0, AUTH_TAIL_LINES).join('\n'))).toBe(true); // just inside
+  });
+
+  it('does not flag a normal working pane', () => {
+    const txt = '⏺ Scoring gen12-003\n✻ Worked for 3m 33s · 2 shells still running\n❯ ';
+    expect(isAuthExpired(txt)).toBe(false);
+    expect(classifyPane(txt, null).activity).toBe('working');
+    expect(isAuthExpired(null)).toBe(false);
   });
 
   it('recovers to working once a spend-limited pane resumes moving', () => {
@@ -850,19 +900,29 @@ describe('computeStats yearRow', () => {
     expect(g.yearRow!.id).toBe('gen05-002');
   });
 
-  it('plots an unscored generation from any row that has year data', () => {
-    // Cheap single-window backtests fill return_YYYY without a walk-forward score,
-    // so this generation has no `best` but still belongs on the year chart.
+  it('does not plot a generation whose rows are all pending or failed', () => {
     const csv = [
       HEADER,
       row('gen06-001', '', 'pending', ['', '', '', '']),
       row('gen06-002', '', 'pending', ['', '', '', '0.12']),
-      row('gen06-003', '', 'pending', ['', '', '', '0.99']),
+      row('gen06-003', '', 'failed', ['', '', '', '0.99']),
       '',
     ].join('\n');
     const g = computeStats(csv).generations.find((x) => x.gen === 6)!;
     expect(g.best).toBeNull();
-    expect(g.yearRow!.id).toBe('gen06-002'); // earliest id with year data wins
+    expect(g.yearRow).toBeNull();
+  });
+
+  it('does not borrow a sibling row when the champion has no year data', () => {
+    const csv = [
+      HEADER,
+      row('gen08-001', '1.0', 'complete', ['', '', '', '0.12']),
+      row('gen08-002', '2.0', 'complete', ['', '', '', '']),
+      '',
+    ].join('\n');
+    const g = computeStats(csv).generations.find((x) => x.gen === 8)!;
+    expect(g.best!.id).toBe('gen08-002');
+    expect(g.yearRow).toBeNull();
   });
 
   it('leaves yearRow null when no row in the generation has year data', () => {
@@ -939,5 +999,54 @@ describe('multi-root keys', () => {
 
   it('sanitizes tmux-hostile characters out of the label', () => {
     expect(rootLabel('/a/my.repo:v2', ['/a/my.repo:v2', '/b/other'])).toBe('my_repo_v2');
+  });
+});
+
+describe('root switcher', () => {
+  const roots = ['/g/trading', '/g/predict'];
+
+  it('a subdir workspace belongs to the root it was found under', () => {
+    const ws = { path: '/g/predict/sales', root: '/g/predict' };
+    expect(inRoot(ws, '/g/predict')).toBe(true);
+    expect(inRoot(ws, '/g/trading')).toBe(false);
+  });
+
+  it('a root that is itself a workspace belongs to that root', () => {
+    // row.root is the parent dir here, so the path must match too
+    expect(inRoot({ path: '/g/predict', root: '/g' }, '/g/predict')).toBe(true);
+  });
+
+  it('the empty filter (All) matches everything', () => {
+    expect(inRoot({ path: '/x/y', root: '/x' }, '')).toBe(true);
+  });
+
+  it('a saved filter only applies while it is still a configured root, and 2+ roots exist', () => {
+    expect(activeRootFilter('/g/predict', roots)).toBe('/g/predict');
+    expect(activeRootFilter('/g/gone', roots)).toBe('');
+    expect(activeRootFilter('/g/trading', ['/g/trading'])).toBe('');
+    expect(activeRootFilter('', roots)).toBe('');
+  });
+});
+
+describe('root column', () => {
+  const roots = ['/g/trading', '/g/predict'];
+
+  it('shows only under All with 2+ roots', () => {
+    expect(showRootColumn('', roots)).toBe(true);
+    expect(showRootColumn('/g/predict', roots)).toBe(false);
+    expect(showRootColumn('', ['/g/trading'])).toBe(false);
+    expect(showRootColumn('', [])).toBe(false);
+  });
+
+  it('labels a subdir workspace with the last element of its configured root', () => {
+    expect(rootColumnLabel({ path: '/g/predict/sales', root: '/g/predict' }, roots)).toBe('predict');
+  });
+
+  it('labels a root that is itself a workspace with its own last element', () => {
+    expect(rootColumnLabel({ path: '/g/predict', root: '/g' }, roots)).toBe('predict');
+  });
+
+  it('keeps the raw basename, unsanitized, and ignores a trailing slash', () => {
+    expect(rootColumnLabel({ path: '/a/my.repo/w', root: '/a/my.repo/' }, ['/a/my.repo/', '/b'])).toBe('my.repo');
   });
 });

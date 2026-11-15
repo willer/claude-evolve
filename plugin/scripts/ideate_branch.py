@@ -3,20 +3,25 @@
 Build one ideation branch's prompt and, for external sources, run it.
 
 The evolve-ideate skill used to spawn a Claude subagent per branch even when the
-branch's ideas came from codex / opencode — the subagent only assembled a prompt
+branch's ideas came from codex / OpenRouter — the subagent only assembled a prompt
 and shelled out. That wrapper cost a full Claude ideator context (BRIEF, notes,
 thousands of descriptions) per branch for zero judgment. This script does the
 assembly deterministically instead:
 
-  --source opus             write the prompt file and exit; the orchestrator
+  --source opus|fable       write the prompt file and exit; the orchestrator
                             hands the file path to ONE claude-evolve:ideator
-                            subagent, which reads it and answers.
-  --source codex|grok|glm|kimi|qwen
-                            write the prompt file, run the external CLI on it,
+                            (opus) or claude-evolve:ideator-fable subagent,
+                            which reads it and answers.
+  --source codex            write the prompt file, run `codex exec` on it,
                             parse its JSON array, write <out>. No subagent.
+  --source argon            same, through Google's Antigravity CLI (`agy`,
+                            Gemini 4 Argon). No subagent.
+  --source grok|carbon
+                            same, but through a headless `claude -p` pointed at
+                            OpenRouter (the Spaces claude/grok route). No subagent.
 
-The skill's dice roll uses ENABLED_SOURCES (opus / codex GPT-6 Astra / grok);
-the other opencode models stay wired so a roll change is a one-line edit.
+The skill's dice roll uses ENABLED_SOURCES (opus / fable / codex GPT-6 Astra / argon / grok);
+carbon is wired but not rolled, so adding it to the roll is a one-line edit.
 
 Usage:
   ideate_branch.py --working-dir DIR --context-file ctx.json --out branch.json
@@ -25,13 +30,14 @@ Usage:
       [--timeout SECONDS]
 
 <out> is JSON: {"source","strategy","status":"ok|error|timeout","ideas":[...],
-"error":...,"prompt_file":...}. Exit 0 only on status ok (or for opus, once
+"error":...,"prompt_file":...}. Exit 0 only on status ok (or for opus/fable, once
 the prompt file is written). The script never switches models itself: a failed
 branch is reported as failed and the orchestrator re-rolls it to another source.
 """
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -44,19 +50,24 @@ from evolve_common import add_workspace_args, load_workspace
 # skill prose. Change a model in one place.
 CODEX_MODEL = "gpt-6-astra"
 CODEX_EFFORT = "xhigh"
-OPENCODE_MODELS = {
-    "grok": "openrouter/x-ai/grok-4.6",
-    "glm": "openrouter/z-ai/glm-5.3-flash",
-    "kimi": "openrouter/moonshotai/kimi-k3",
-    "qwen": "openrouter/qwen/qwen3.8-max",
+ARGON_MODEL = "gemini-4-argon-high"  # agy bakes effort into the model ID; high is Argon's top tier
+ARGON_PREFACE = ("Tools: shell commands (run_command) are DENIED in this session. To inspect files use "
+                 "only view_file, list_dir, grep_search and find_by_name. If any tool is denied, carry "
+                 "on without it — you must still end with the JSON array.\n\n")
+OPENROUTER_MODELS = {
+    "grok": "x-ai/grok-4.7",
+    "carbon": "google/gemini-4-carbon",
 }
-# opencode --variant = provider reasoning effort; only set where the model has one.
-OPENCODE_VARIANTS = {"grok": "max"}
-SOURCES = ("opus", "codex") + tuple(OPENCODE_MODELS)  # everything the script can run
-# AIDEV-NOTE: Sept 23 2026 policy — "only the very best for ideation": the roll is
-# 3/6 Opus 5.5 high (replaced Fable 5.1 xhigh on benchmarks), 2/6 GPT-6 Astra xhigh, 1/6
-# Grok 4.6 — it attacks from a different direction, so it earns the diversity slot. GLM/Kimi/Qwen stay wired (not rolled) because this changes.
-ENABLED_SOURCES = ("opus", "codex", "grok")
+# claude --effort per OpenRouter source; OpenRouter maps it to the provider's reasoning effort.
+OPENROUTER_EFFORT = {"grok": "max", "carbon": "high"}
+OPENROUTER_BASE = "https://openrouter.ai/api"  # claude appends /v1/messages itself
+SUBAGENT_SOURCES = ("opus", "fable")  # answered by a pinned ideator subagent, not run here
+SOURCES = SUBAGENT_SOURCES + ("codex", "argon") + tuple(OPENROUTER_MODELS)  # everything the script can run
+# AIDEV-NOTE: Nov 10 2026 policy — the roll is a d8: 1/8 Opus 5.5 high, 3/8 Fable 5.2 high,
+# 2/8 GPT-6 Astra xhigh, 1/8 Gemini 4 Argon high, 1/8 Grok 4.7 max. Fable got the largest
+# share: measured Oct 16-Nov 9 it set a new board best on 12.3% of scored ideas vs Opus 11.3%,
+# Astra 8.4%, Grok 7.2% (Argon 4/45 beat parent, too few to judge). Carbon is wired, not rolled.
+ENABLED_SOURCES = ("opus", "fable", "codex", "argon", "grok")
 STRATEGIES = ("novel_exploration", "hill_climbing", "structural_mutation", "crossover_hybrid")
 DEFAULT_TIMEOUT = 1800  # 30 min — reasoning models at xhigh routinely take 10+ min
 
@@ -110,6 +121,15 @@ INTENT_TEXT = ("Some of your assigned IDs carry an INTENT. An idea in an intent 
                "\"[<INTENT NAME, UPPERCASED>] \". FREE slots are unconstrained and untagged.")
 
 
+# AIDEV-NOTE: replay-tuning fits the scored set; the sealed holdout is what promotes a leader.
+NO_REPLAY_TUNING = ("No tuning by replay: never choose or justify a constant, gain, threshold or clip "
+                    "by replaying the evaluator's scored windows or folds and keeping the value that "
+                    "scores best. That fits the test set: the score rises, and the sealed holdout does "
+                    "not. A constant must come from a principle, or be fitted inside the candidate on "
+                    "training data only (e.g. an inner walk-forward that ends at the cutoff). Ideas "
+                    "that cite replay gains on scored data as their evidence are discarded.")
+
+
 def _clip_descriptions(existing):
     lines = [(d or "").replace("\n", " ")[:DESC_CLIP] for d in existing]
     total = sum(len(l) + 1 for l in lines)
@@ -161,6 +181,7 @@ def build_prompt(ctx, strategy, ids, frame, intents, extra):
         parts.append("Intent slots:\n" + "\n".join(lines) + "\n\n" + rule_txt + "\n\n" + INTENT_TEXT)
     if extra:
         parts.append("Additional instructions from the orchestrator:\n" + extra)
+    parts.append(NO_REPLAY_TUNING)
     parts.append("Every idea must be meaningfully DIFFERENT from every existing description below "
                  "(no near-duplicates, no trivial rewordings) and must plausibly move the BRIEF's "
                  "metric. State what would falsify it.")
@@ -215,24 +236,113 @@ def run_external(source, prompt_file, workdir, timeout):
         with open(prompt_file) as fh:
             proc = subprocess.run(cmd, stdin=fh, capture_output=True, text=True,
                                   cwd=str(workdir), timeout=timeout)
+    elif source == "argon":
+        return _run_argon(prompt_file, workdir, timeout)
     else:
-        if shutil.which("opencode") is None:
-            raise RuntimeError("opencode CLI not found on PATH")
-        # AIDEV-NOTE: `source ~/.zprofile` first — the session env may carry a
-        # corporate OPENROUTER_API_KEY whose data policy blocks these providers;
-        # the personal key in ~/.zprofile must win. Prompt is attached as a
-        # file so a 300KB prompt never hits ARG_MAX.
-        # `-f` is a LIST option in opencode's yargs parser: anything after it is
-        # eaten as another filename, so the message must come FIRST.
-        model = OPENCODE_MODELS[source]
-        variant = OPENCODE_VARIANTS.get(source)
-        variant_arg = f"--variant {variant} " if variant else ""
-        shell = (f"source ~/.zprofile >/dev/null 2>&1; cd {json.dumps(str(workdir))}; "
-                 f"opencode run 'Answer the prompt in the attached file. Return ONLY the JSON array it asks for.' "
-                 f"--pure -m {model} {variant_arg}-f {json.dumps(str(prompt_file))}")
-        proc = subprocess.run(["bash", "-lc", shell], stdin=subprocess.DEVNULL,
-                              capture_output=True, text=True, timeout=timeout)
+        if shutil.which("claude") is None:
+            raise RuntimeError("claude CLI not found on PATH")
+        # AIDEV-NOTE: same routing env Spaces uses for its claude/grok route
+        # (anthropicEndpointEnv in Spaces core/launch.ts): every model tier maps
+        # to the one OpenRouter model. ANTHROPIC_API_KEY must be EMPTY or it
+        # beats AUTH_TOKEN. The key comes from ~/.zprofile, not the session env:
+        # the Spaces env can carry a corporate key that blocks these providers.
+        # Read-only tools, like codex's read-only sandbox: models inspect the
+        # leader's code before proposing tweaks, and with no tools at all they
+        # stop after "I'll inspect..." with no JSON. The prompt goes in on stdin
+        # (prompts run ~300KB, far past ARG_MAX).
+        key = subprocess.run(["bash", "-c", 'source ~/.zprofile >/dev/null 2>&1; printf %s "$OPENROUTER_API_KEY"'],
+                             capture_output=True, text=True).stdout.strip()
+        if not key:
+            raise RuntimeError("OPENROUTER_API_KEY not set by ~/.zprofile")
+        model = OPENROUTER_MODELS[source]
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("ANTHROPIC_SMALL_FAST_MODEL", "OPENROUTER_API_KEY")}
+        env.update(ANTHROPIC_BASE_URL=OPENROUTER_BASE, ANTHROPIC_AUTH_TOKEN=key,
+                   ANTHROPIC_API_KEY="", ANTHROPIC_MODEL=model,
+                   ANTHROPIC_DEFAULT_OPUS_MODEL=model, ANTHROPIC_DEFAULT_SONNET_MODEL=model,
+                   ANTHROPIC_DEFAULT_HAIKU_MODEL=model, CLAUDE_CODE_SUBAGENT_MODEL=model)
+        cmd = ["claude", "-p", "--bare", "--model", model, "--tools", "Read,Grep,Glob",
+               "--no-session-persistence", "--setting-sources", "",
+               "--strict-mcp-config", "--disable-slash-commands",
+               "--output-format", "stream-json", "--verbose"]
+        if source in OPENROUTER_EFFORT:
+            cmd += ["--effort", OPENROUTER_EFFORT[source]]
+        with open(prompt_file) as fh:
+            proc = subprocess.run(cmd, stdin=fh, capture_output=True, text=True,
+                                  cwd=str(workdir), env=env, timeout=timeout)
+        return proc.returncode, final_turn_text(proc.stdout or ""), (proc.stderr or "")
     return proc.returncode, (proc.stdout or ""), (proc.stderr or "")
+
+
+def final_turn_text(stream):
+    """The answer text from a `claude -p --output-format stream-json` transcript.
+
+    AIDEV-NOTE: NOT the result event's `result` field. Gemini via OpenRouter ends its
+    turn with a separate empty `redacted_thinking` message after the text, and claude -p
+    fills `result` from that LAST message only — so `result` is "" while the answer sits
+    in the message before it (found Nov 15 2026 with Gemini 4 Carbon; very likely why
+    Argon looked empty on this route in Oct). Return the LAST text block after the last
+    tool_use: Carbon sometimes emits a cut-off draft block (raw newline mid-string) and
+    then the full answer as a second block, and joining them breaks the JSON parse.
+    """
+    texts, result = [], None
+    for line in stream.splitlines():
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if ev.get("type") == "assistant":
+            for block in ev.get("message", {}).get("content", []):
+                if block.get("type") == "tool_use":
+                    texts = []
+                elif block.get("type") == "text" and block.get("text"):
+                    texts.append(block["text"])
+        elif ev.get("type") == "result":
+            result = ev
+    if result is None:
+        raise RuntimeError(f"claude -p produced no result event; stdout tail: {stream.strip()[-800:]}")
+    if result.get("is_error"):
+        raise RuntimeError(f"claude -p error: {result.get('result')}")
+    if not texts:
+        raise RuntimeError("claude -p finished with no answer text in its final turn")
+    return texts[-1]
+
+
+def _run_argon(prompt_file, workdir, timeout):
+    if shutil.which("agy") is None:
+        raise RuntimeError("agy (Antigravity CLI) not found on PATH")
+    # AIDEV-NOTE: agy's -p takes the prompt as an argv value, and prompts run ~300KB,
+    # so the prompt goes in on stdin as one stream-json `user` event instead. --sandbox
+    # plus the default (request-review) permission mode makes file writes ERROR in print
+    # mode while reads still work — do NOT add --dangerously-skip-permissions. Reads are
+    # confined to cwd + --add-dir dirs, and a denied read ends the turn with an EMPTY answer,
+    # so the workspace's parent is added: candidates import shared modules from it (e.g.
+    # trading-strategies/orthogonal_signals.py), as codex's read-only sandbox allows. --mode plan
+    # returns an empty response. Argon is NOT usable via OpenRouter + claude -p: it
+    # reports success with an empty result (tested Oct 18 2026). Needs `agy` signed in.
+    # Shell is denied (that denial is what keeps the run read-only), and Argon quits with an
+    # empty answer when its first `ls` is refused — so steer it to the file tools up front.
+    content = ARGON_PREFACE + Path(prompt_file).read_text()
+    msg = json.dumps({"event": "user", "message": {"role": "user", "content": content}})
+    cmd = ["agy", "--model", ARGON_MODEL, "--sandbox", "--add-dir", str(Path(workdir).resolve().parent),
+           "--disable-slash-commands",
+           "--input-format", "stream-json", "--output-format", "stream-json"]
+    proc = subprocess.run(cmd, input=msg + "\n", capture_output=True, text=True,
+                          cwd=str(workdir), timeout=timeout)
+    result = None
+    for line in (proc.stdout or "").splitlines():
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if ev.get("event") == "result":
+            result = ev.get("result") or {}
+    if result is None:
+        raise RuntimeError(f"agy exited {proc.returncode} with no result event; "
+                           f"stderr tail: {(proc.stderr or '').strip()[-800:]}")
+    if result.get("status") != "SUCCESS":
+        raise RuntimeError(f"agy status {result.get('status')}: {result.get('error')}")
+    return proc.returncode, result.get("response") or "", proc.stderr or ""
 
 
 def main():
@@ -262,7 +372,7 @@ def main():
               "frame": args.frame, "prompt_file": str(prompt_file),
               "prompt_chars": prompt_file.stat().st_size}
 
-    if args.source == "opus":
+    if args.source in SUBAGENT_SOURCES:
         result["status"] = "prompt_only"
         out.write_text(json.dumps(result, indent=1))
         print(json.dumps(result))

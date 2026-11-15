@@ -137,14 +137,6 @@ export function computeStats(text: string, pinId: string | null = null): Workspa
     }
     (g as unknown as Record<string, number>)[bucket]++;
 
-    // Year-chart row: selected on HAVING year data, deliberately independent of
-    // performance and status. An archived generation whose rows were never walk-forward
-    // scored can still be plotted from a cheap single-window backtest that fills only
-    // return_YYYY. Earliest id wins so the pick is stable; `best` overrides below.
-    if (yearCols.length > 0 && !g.yearRow && yearCols.some((k) => c.metrics[k] !== undefined)) {
-      g.yearRow = c;
-    }
-
     if (c.status === 'complete' && c.performance !== null) {
       // Highest score wins; ties go to the earliest id (matches autostatus).
       if (
@@ -165,8 +157,9 @@ export function computeStats(text: string, pinId: string | null = null): Workspa
     }
   }
 
-  // A fully-scored generation should plot its CHAMPION, not an arbitrary sibling that
-  // happens to carry year data — so `best` wins wherever it has the columns.
+  // AIDEV-NOTE: the year chart plots a generation only when it has a WINNER (`best`),
+  // the same rule as the score chart — a generation of only pending/failed/skipped rows
+  // is absent from both, even if some sibling carries return_YYYY data.
   for (const g of byGen.values()) {
     if (g.best && yearCols.some((k) => g.best!.metrics[k] !== undefined)) g.yearRow = g.best;
   }

@@ -13,6 +13,8 @@ import type { GenAxis } from '../core/genAxis';
 import { nearestColumnIndex, tipPlacement } from '../core/hover';
 import type { HoverColumn } from '../core/hover';
 import { productionTags } from '../core/inferenceAll';
+import { activeRootFilter, configuredRoot, inRoot, rootColumnLabel, rootLabel, showRootColumn } from '../core/roots';
+import { terminalKeyOverride } from '../core/terminalKeys';
 import { fmtGeneric, leaderMetrics } from '../core/profile';
 import {
   SESSION_KINDS,
@@ -41,6 +43,9 @@ type BacktestSummary = {
   rows: BacktestRow[];
   appendix: Array<{ algorithm: string; algorithm_name: string; reasons: string }>;
 } | null;
+/** A run that scored a specific candidate, plus the results row key it is filed under:
+ *  the workspace (it was champion then) or '<ws>/evolution_<id>.py' (a production-pin row). */
+type PinRun = NonNullable<BacktestSummary> & { algorithm: string };
 
 declare global {
   interface Window {
@@ -68,6 +73,7 @@ declare global {
       tools: { start(id: string): Promise<void>; stop(id: string): Promise<void> };
       backtests: {
         summary(root: string, runDate?: string): Promise<BacktestSummary>;
+        runFor(root: string, algorithm: string, candidateId: string): Promise<PinRun | null>;
         equity(
           root: string,
           runDate: string,
@@ -79,6 +85,7 @@ declare global {
         attach(id: string, cols: number, rows: number): Promise<{ ok: boolean }>;
         detach(id: string): Promise<void>;
         unstick(id: string): Promise<void>;
+        pageUp(id: string): Promise<void>;
       };
       prefs: { get(): Promise<Prefs>; set(patch: Partial<Prefs>): Promise<Prefs> };
       pathForFile(file: File): string;
@@ -90,7 +97,16 @@ const api = window.greenhouse;
 
 let rows: WorkspaceRow[] = [];
 let tools: ToolState[] = [];
-let prefs: Prefs = { roots: [], starred: [], sortCol: 'score', sortDesc: true, winnerCols: ['', '', '', '', ''], theme: 'system' };
+let prefs: Prefs = {
+  roots: [],
+  starred: [],
+  sortCol: 'score',
+  sortDesc: true,
+  winnerCols: ['', '', '', '', ''],
+  theme: 'system',
+  rootFilter: '',
+};
+let roots: string[] = []; // roots actually scanned (from the fleet payload) — the switcher's options
 let viewMode: 'list' | 'grid' = 'list'; // session-only — every launch starts in the list
 // Workspace identity is row.key (core/roots.ts), never row.name: two roots can
 // each hold a same-named workspace.
@@ -628,23 +644,23 @@ function navPanelHtml(ws: string, candidateId: string, w: number, h: number): st
 }
 
 /** Small-multiples NAV: one mini chart per backtest period for this workspace's
- *  champion in the latest run. Each period is a distinct story — YTD 2026 and
+ *  algo in the given run (the latest run for the winner; for a pin, the newest run
+ *  that scored it). Each period is a distinct story — YTD 2026 and
  *  OOS are true holdouts, Long-Term the full single-pass backtest — and the
  *  curves run through the latest data (fresher than the walk-forward artifact).
  *  Curves load lazily via btEquityFor, repainting as each arrives. Empty string
- *  when the workspace has no entry in the latest backtest run. */
-function navByPeriodPanel(r: WorkspaceRow, cw: number, tag: string): string {
-  const bt = btByRoot.get(r.root);
-  const t = btTableFor(r.root);
-  if (!bt || !t || !btAlgoFor(r)) return '';
+ *  when the workspace has no entry in that run. */
+function navByPeriodPanel(root: string, algoKey: string, bt: NonNullable<BacktestSummary>, cw: number, tag: string): string {
+  const t = btTableOf(bt);
+  if (!btAlgoIn(bt, algoKey)) return '';
   const runDate = bt.runDate;
-  const name = r.name;
+  const name = algoKey;
   const cols = cw >= 780 ? 3 : cw >= 460 ? 2 : 1;
   const gap = 10;
   const cellW = Math.max(180, Math.floor((cw - gap * (cols - 1)) / cols));
   const tiles = t.periods
     .map((p) => {
-      const eq = btEquityFor(r.root, runDate, name, p);
+      const eq = btEquityFor(root, runDate, name, p);
       const body =
         eq === undefined
           ? `<div class="desc" style="color: var(--dim); height: 96px">loading…</div>`
@@ -654,7 +670,7 @@ function navByPeriodPanel(r: WorkspaceRow, cw: number, tag: string): string {
               zoomable(
                 `nav-period-${p}`,
                 (w, ht, zoom) => {
-                  const e2 = btEquityFor(r.root, runDate, name, p);
+                  const e2 = btEquityFor(root, runDate, name, p);
                   return e2 ? navChartSvg(e2, w, ht, { axes: zoom }) : '';
                 },
                 cellW,
@@ -697,7 +713,10 @@ const btTableMemo = new WeakMap<object, { algos: BacktestAlgo[]; periods: string
 
 function btTableFor(root: string): { algos: BacktestAlgo[]; periods: string[] } | null {
   const bt = btByRoot.get(root);
-  if (!bt) return null;
+  return bt ? btTableOf(bt) : null;
+}
+
+function btTableOf(bt: NonNullable<BacktestSummary>): { algos: BacktestAlgo[]; periods: string[] } {
   let t = btTableMemo.get(bt);
   if (!t) {
     t = buildBacktestTable(bt.rows);
@@ -732,10 +751,40 @@ function winnerTag(state: 'winner' | 'previous' | 'unknown' | 'pinned', tested?:
 }
 
 function btAlgoFor(r: WorkspaceRow): { algo: BacktestAlgo; rank: number } | null {
-  const t = btTableFor(r.root);
-  if (!t) return null;
-  const i = t.algos.findIndex((a) => a.algorithm === r.name);
+  const bt = btByRoot.get(r.root);
+  return bt ? btAlgoIn(bt, r.name) : null;
+}
+
+/** A workspace's scored entry (and rank) within one specific run. */
+function btAlgoIn(bt: NonNullable<BacktestSummary>, name: string): { algo: BacktestAlgo; rank: number } | null {
+  const t = btTableOf(bt);
+  const i = t.algos.findIndex((a) => a.algorithm === name);
   return i === -1 ? null : { algo: t.algos[i], rank: i + 1 };
+}
+
+// Newest backtest run that scored a given candidate — what the detail view's Pinned tab
+// shows: backtest-all's own production-pin row when present, else a run from while the
+// pin was the workspace's champion. null = no run ever scored it; undefined = in flight.
+// AIDEV-NOTE: keyed by the latest run date too, so a new nightly run (which now backtests
+// the pin) is picked up on the next detail open instead of serving a session-old answer.
+const candRunCache = new Map<string, PinRun | null>();
+const candRunPending = new Set<string>();
+
+function btRunScoring(root: string, name: string, candidateId: string): PinRun | null | undefined {
+  const key = `${root}|${btByRoot.get(root)?.runDate ?? ''}|${name}|${candidateId}`;
+  if (candRunCache.has(key)) return candRunCache.get(key);
+  if (!candRunPending.has(key)) {
+    candRunPending.add(key);
+    void api.backtests
+      .runFor(root, name, candidateId)
+      .then((d) => {
+        candRunCache.set(key, d);
+        candRunPending.delete(key);
+        render();
+      })
+      .catch(() => candRunPending.delete(key));
+  }
+  return undefined;
 }
 
 // Re-reads the latest backtest-all run from sqlite. Called at startup and on
@@ -910,7 +959,7 @@ function btToggleClick(e: MouseEvent): void {
 
 // ── sorting ──────────────────────────────────────────────────────────────────
 
-const ACTIVITY_RANK: Record<string, number> = { stuck: 4, asking: 3, waiting: 2, working: 1 };
+const ACTIVITY_RANK: Record<string, number> = { 'login-expired': 5, stuck: 4, asking: 3, waiting: 2, working: 1 };
 const HEALTH_RANK: Record<Health['level'], number> = { error: 4, failing: 3, stale: 2, plateau: 1, good: 0 };
 
 const SORTS: Record<string, (r: WorkspaceRow) => number | string | null> = {
@@ -921,6 +970,7 @@ const SORTS: Record<string, (r: WorkspaceRow) => number | string | null> = {
   gens: (r) => r.stats.gensSinceTop,
   rate: (r) => r.stats.recentSuccessRate,
   health: (r) => HEALTH_RANK[healthOf(r).level],
+  root: (r) => rootColumnLabel(r, roots),
 };
 
 // Case-insensitive substring match over name + leader id + leader description.
@@ -944,7 +994,7 @@ function sorted(): WorkspaceRow[] {
   const key = sortKey(prefs.sortCol);
   const dir = prefs.sortDesc ? -1 : 1;
   // Starred first, missing values last regardless of direction.
-  return [...rows].filter(matchesSearch).sort((a, b) => {
+  return fleetRows().filter(matchesSearch).sort((a, b) => {
     if (a.starred !== b.starred) return a.starred ? -1 : 1;
     const va = key(a);
     const vb = key(b);
@@ -960,7 +1010,7 @@ function sorted(): WorkspaceRow[] {
 async function setSort(col: string): Promise<void> {
   // Same column again flips direction; new column starts at its natural
   // direction (name ascending, everything else best/worst-first descending).
-  const sortDesc = prefs.sortCol === col ? !prefs.sortDesc : col !== 'name';
+  const sortDesc = prefs.sortCol === col ? !prefs.sortDesc : col !== 'name' && col !== 'root';
   prefs = await api.prefs.set({ sortCol: col, sortDesc });
   syncHeaderControls();
   render();
@@ -976,7 +1026,7 @@ function sessBadge(s: SessionState, sessId?: string): string {
   if (a === 'stuck' && sessId) {
     return `<button class="badge stuck" data-unstick="${esc(sessId)}" title="Nudge it: sends Esc + 'continue please' + Enter to the session">⚠ unstick</button>`;
   }
-  const label = a === 'asking' ? '❓ asking' : a === 'stuck' ? '⚠ stuck' : a;
+  const label = a === 'asking' ? '❓ asking' : a === 'stuck' ? '⚠ stuck' : a === 'login-expired' ? '🔒 login expired' : a;
   return `<span class="badge ${a}">${label}</span>`;
 }
 
@@ -1014,13 +1064,54 @@ function shellButtons(r: WorkspaceRow): string {
     : `<button data-act="shell-start" data-name="${n}" title="Launch a plain zsh in this workspace (no claude)">▶ Shell</button>`;
 }
 
+// ── root switcher ────────────────────────────────────────────────────────────
+// Header dropdown narrowing the fleet (list/grid, totals, tool buttons) to one
+// root; hidden with a single root. Notifications still cover every root.
+
+function currentRootFilter(): string {
+  return activeRootFilter(prefs.rootFilter, roots);
+}
+
+/** Workspaces in the selected root (all of them under 'All'). */
+function fleetRows(): WorkspaceRow[] {
+  const f = currentRootFilter();
+  return rows.filter((r) => inRoot(r, f));
+}
+
+let rootSwitchSig = ''; // rebuild options only when they change, so a poll can't close an open dropdown
+function renderRootSwitch(): void {
+  const el = $('root-switch') as HTMLSelectElement;
+  el.style.display = roots.length > 1 ? '' : 'none';
+  const sig = JSON.stringify(roots);
+  if (sig !== rootSwitchSig) {
+    rootSwitchSig = sig;
+    el.innerHTML =
+      `<option value="">All roots</option>` +
+      roots.map((r) => `<option value="${esc(r)}" title="${esc(r)}">${esc(rootLabel(r, roots))}</option>`).join('');
+  }
+  el.value = currentRootFilter();
+}
+
+$('root-switch').addEventListener('change', async (e) => {
+  prefs = await api.prefs.set({ rootFilter: (e.target as HTMLSelectElement).value });
+  render();
+});
+
 function renderTotals(): void {
+  const rows = fleetRows();
   const running = rows.filter((r) => r.session.running).length;
   const asking = rows.filter((r) => r.session.activity === 'asking').length;
   const stuck = rows.filter((r) => r.session.activity === 'stuck').length;
+  // A login is machine-wide: one /login in any session fixes every one, so a
+  // single loud banner rather than a per-row hunt.
+  const loginExpired = rows.filter((r) => [r.session, r.adhoc].some((s) => s.activity === 'login-expired')).length;
   const counts: Record<string, number> = {};
   for (const r of rows) counts[healthOf(r).level] = (counts[healthOf(r).level] ?? 0) + 1;
   const parts = [`<b>${rows.length}</b> workspaces`, `<b>${running}</b> running`];
+  if (loginExpired)
+    parts.unshift(
+      `<span class="login-alert" title="Claude auth expired/revoked on this machine">🔒 <b>LOGIN EXPIRED</b> (${loginExpired}) — run /login in any session</span>`,
+    );
   if (stuck) parts.push(`<span class="t-red"><b>${stuck}</b> stuck</span>`);
   if (asking) parts.push(`<span class="t-magenta"><b>${asking}</b> asking</span>`);
   for (const [level, cls] of [
@@ -1168,6 +1259,7 @@ function listCols(): Array<{ label: string; sort?: string; cls?: string }> {
   return [
     { label: '★' },
     { label: 'Name', sort: 'name' },
+    ...(showRootColumn(currentRootFilter(), roots) ? [{ label: 'Root', sort: 'root' }] : []),
     { label: 'State', sort: 'state' },
     { label: 'Health', sort: 'health' },
     { label: 'Winner' },
@@ -1189,6 +1281,7 @@ function renderList(order: WorkspaceRow[]): void {
     return;
   }
   const winnerCols = activeWinnerCols();
+  const rootCol = showRootColumn(currentRootFilter(), roots);
   const head = listCols().map((c) => {
     const arrow = c.sort && prefs.sortCol === c.sort ? (prefs.sortDesc ? ' ▼' : ' ▲') : '';
     const attrs = c.sort ? ` data-sort="${c.sort}" title="Sort by ${esc(c.label)}"` : '';
@@ -1206,6 +1299,7 @@ function renderList(order: WorkspaceRow[]): void {
       return `<tr class="row ${r.key === selectedKey ? 'selected' : ''}" data-name="${n}">
         <td><span class="star ${r.starred ? 'on' : ''}" data-star="${n}" title="Pin to top">${r.starred ? '★' : '☆'}</span></td>
         <td class="name" title="${esc(r.path)}">${nameHtml(r)}</td>
+        ${rootCol ? `<td class="root" title="${esc(configuredRoot(r, roots))}">${esc(rootColumnLabel(r, roots))}</td>` : ''}
         <td>${badge(r)}</td>
         <td>${healthChip(h)}</td>
         <td class="winner">${s.error ? `<span class="warn">${esc(s.error)}</span>` : esc(s.leader?.id ?? '—')}</td>
@@ -1250,7 +1344,7 @@ function renderGridCards(order: WorkspaceRow[]): void {
       const c = s.counts;
       const act = r.session.activity;
       const cls = [
-        act === 'asking' ? 'asking' : act === 'stuck' ? 'stuck' : '',
+        act === 'asking' ? 'asking' : act === 'stuck' ? 'stuck' : act === 'login-expired' ? 'login-expired' : '',
         r.key === selectedKey ? 'selected' : '',
       ].join(' ');
       return `
@@ -1360,6 +1454,7 @@ function render(): void {
   $('grid').style.display = isFleet && viewMode === 'grid' ? 'grid' : 'none';
   $('detail').style.display = isDetail ? 'block' : 'none';
   $('tool').style.display = isTool ? 'block' : 'none';
+  renderRootSwitch();
   renderTotals();
   renderToolButtons();
   renderHints();
@@ -1383,7 +1478,7 @@ function render(): void {
 function renderHints(): void {
   $('hints').innerHTML =
     view || toolView
-      ? `<b>esc</b> back · <b>⌘esc</b> back (even from terminal) · <b>⏎/a</b> focus terminal${view ? ' · <b>1 2 3</b> evolution/adhoc/shell tab · <b>p</b> winner/pinned · <b>s</b> start/stop' : ''} · click a chart to enlarge · click terminal to type · wheel scrolls the session`
+      ? `<b>esc</b> back · <b>⌘esc</b> back (even from terminal) · <b>⏎/a</b> focus terminal${view ? ' · <b>1 2 3</b> evolution/adhoc/shell tab · <b>p</b> winner/pinned · <b>s</b> start/stop' : ''} · click a chart to enlarge · click terminal to type · wheel / PgUp scroll the session · ⌥-drag selects text`
       : `<b>↑↓ j k</b> select · <b>⏎</b> open + attach · <b>space</b> peek stats · <b>v</b> ${viewMode === 'list' ? 'grid' : 'list'} · <b>s</b> start/stop · <b>*</b> star`;
 }
 
@@ -1746,8 +1841,10 @@ function renderDetail(): void {
   const leader = s.leader;
   // Focus: the summary / NAV / returns-by-year panels describe ONE algo. Default is the
   // evolution winner; when production pins a DIFFERENT algo (stats.pinned), a tab strip
-  // above the panels lets the operator switch to that row. The per-generation charts,
-  // the generation table, and the backtest panel are workspace-wide and do not switch.
+  // above the panels lets the operator switch to that row. Everything per-algo follows
+  // the tab — summary, backtest table, walk-forward NAV, NAV by period, returns by year;
+  // only the history at the bottom (the two per-generation charts and the generation
+  // table) is workspace-wide and does not switch.
   const pinned = s.pinned;
   const focusPinned = !!pinned && detailFocus === 'pinned';
   const focus = focusPinned ? pinned : leader;
@@ -1762,9 +1859,8 @@ function renderDetail(): void {
       : '';
   const years = yearSeries(r);
   // Generation numbers behind each chart's X positions. Each chart drops the generations
-  // IT cannot plot, so the two lists differ whenever a generation has year data but no
-  // walk-forward score (cheap single-window backfill) or the reverse — each list must stay
-  // filtered in step with its own series. They then share ONE x domain (min of the two
+  // IT cannot plot. Both require a winner (`best`); the year list also drops winners
+  // without return_YYYY data — each list must stay filtered in step with its own series. They then share ONE x domain (min of the two
   // mins, max of the two maxes) and position points by real generation number, so a
   // vertical line through the two stacked panels is the same generation in both and the
   // enlarged views print identical "gen N" ticks. Index positioning could not do that: it
@@ -1773,18 +1869,24 @@ function renderDetail(): void {
   // the score chart beside it looked like it spanned the whole history.
   const sparkGens = s.generations.filter((g) => g.best !== null).map((g) => g.gen);
   const yearGens = s.generations.filter((g) => g.yearRow !== null).map((g) => g.gen);
-  const genAx = sharedGenDomain([sparkGens, yearGens]);
+  // The axis always starts at gen 0, so the charts show the whole history even when only
+  // recent generations have points (e.g. while old generations are being re-scored).
+  const genAx = sharedGenDomain([[0], sparkGens, yearGens]);
   // Enough data to draw? Mirrors multiLineSvg's own emptiness guard so we can
   // decide whether to show the panel without rendering a throwaway SVG.
   const yearVals = years.flatMap((sr) => sr.values.filter((v): v is number => v !== null));
   const yearN = years.length ? Math.max(...years.map((sr) => sr.values.length)) : 0;
   const hasYearChart = yearVals.length >= 2 && yearN >= 2;
-  const bt = btAlgoFor(r);
-  const btRun = btByRoot.get(r.root);
-  const btFlag = btRun?.appendix.find((x) => x.algorithm === r.name);
-  // backtest-all scores whichever champion was current the last time it ran —
-  // which can lag the live leader. Name the tested champion and flag staleness
-  // so an old backtest isn't mistaken for the current leader's verdict.
+  // Backtest source follows the focus. Winner: the latest run, which scores whichever
+  // champion was current when it ran — that can lag the live leader, so name the tested
+  // champion and flag staleness. Pinned: the newest run that scored the pin (it can only
+  // have been scored while it led); none → say so rather than show the leader's numbers.
+  const latestRun = btByRoot.get(r.root);
+  const pinRun = focusPinned ? btRunScoring(r.root, r.name, pinned.id) : undefined;
+  const btRun = focusPinned ? pinRun ?? undefined : latestRun;
+  const btKey = focusPinned ? pinRun?.algorithm ?? r.name : r.name; // pin rows are filed by file path
+  const bt = btRun ? btAlgoIn(btRun, btKey) : null;
+  const btFlag = btRun?.appendix.find((x) => x.algorithm === btKey);
   const testedId = bt ? candidateIdOf(bt.algo.name) : null;
   const leaderId = leader?.id ?? null;
   const btStale = !!(testedId && leaderId && testedId.toLowerCase() !== leaderId.toLowerCase());
@@ -1793,19 +1895,32 @@ function renderDetail(): void {
     : btStale
       ? 'previous'
       : 'winner';
-  const btTag = bt ? winnerTag(btWinnerState, testedId, leaderId) : '';
+  const btTag = focusPinned ? focusTag : bt ? winnerTag(btWinnerState, testedId, leaderId) : '';
+  // A pin scored by an older run: its numbers are from that run's data window.
+  const pinRunOld = focusPinned && btRun && latestRun && btRun.runDate !== latestRun.runDate;
   const btPanel = bt && btRun
     ? `<div class="panel bt-host">
-         <h3>Backtest — run ${esc(btRun.runDate)} · testing ${esc(bt.algo.name)} · #${bt.rank} of ${btTableFor(r.root)!.algos.length} · score ${bt.algo.score.toFixed(2)}${bt.algo.qualPct !== null ? ` · qual ${bt.algo.qualPct}%` : ''}${btTag}</h3>
+         <h3>Backtest — run ${esc(btRun.runDate)} · testing ${esc(bt.algo.name)} · #${bt.rank} of ${btTableOf(btRun).algos.length} · score ${bt.algo.score.toFixed(2)}${bt.algo.qualPct !== null ? ` · qual ${bt.algo.qualPct}%` : ''}${btTag}</h3>
          ${
-           btWinnerState === 'previous'
+           !focusPinned && btWinnerState === 'previous'
              ? `<div class="desc" style="color: var(--yellow); margin-bottom: 8px; user-select: text;">⚠ backtest-all last scored ${esc(testedId!)}; the current leader ${esc(leaderId!)} hasn't been backtested yet — re-run backtest-all to score it.</div>`
              : ''
          }
+         ${
+           pinRunOld
+             ? `<div class="desc" style="color: var(--yellow); margin-bottom: 8px; user-select: text;">⚠ ${esc(pinned!.id)} was last scored in the ${esc(btRun.runDate)} run (latest run ${esc(latestRun!.runDate)}); rank is within that run. backtest-all backtests production pins on every run from 2026-11-10 — the next run refreshes it.</div>`
+             : ''
+         }
          ${btFlag ? `<div class="desc" style="color: var(--red); margin-bottom: 8px; user-select: text;">⚑ ${esc(btFlag.reasons)}</div>` : ''}
-         ${btPeriodTableHtml(r.root, bt.algo, btTableFor(r.root)!.periods, btRun.runDate, cw, { bh: benchmarkFor(r.key) })}
+         ${btPeriodTableHtml(r.root, bt.algo, btTableOf(btRun).periods, btRun.runDate, cw, { bh: benchmarkFor(r.key) })}
        </div>`
-    : '';
+    : focusPinned && latestRun
+      ? `<div class="panel"><h3>Backtest${focusTag}</h3><div class="desc" style="color: var(--dim)">${
+          pinRun === undefined
+            ? 'loading…'
+            : `backtest-all hasn't scored ${esc(pinned!.id)} yet — it backtests production pins on every run from 2026-11-10; the next run will fill this in.`
+        }</div></div>`
+      : '';
 
   // Production badges: inference-all says whether this workspace is live, whether it is
   // BLENDED with another workspace into one averaged webhook (each leg pinned separately by
@@ -1848,7 +1963,7 @@ function renderDetail(): void {
     ${
       focus
         ? `<div class="panel"><h3>${focusLabel} NAV over time — walk-forward OOS${focusTag}</h3>${registerNavZoom('nav-leader', equityFor(r.key, focus.id))}${zoomable('nav-leader', (w, ht) => navPanelHtml(r.key, focus.id, w, ht), cw, 130)}</div>
-           ${navByPeriodPanel(r, cw, btTag)}
+           ${bt && btRun ? navByPeriodPanel(r.root, btKey, btRun, cw, btTag) : ''}
            <div class="panel"><h3>${focusLabel} returns by year${focusTag}</h3>${yearBarsHtml(yearReturns(focus))}</div>`
         : ''
     }
@@ -2007,7 +2122,7 @@ function syncSessionPanel(
     ctl.innerHTML =
       `${sessBadge(state, sessId)} ` +
       (attached
-        ? `<span class="term-note">live — click (or ⏎) to focus; wheel scrolls the session; ⌘esc backs out</span>`
+        ? `<span class="term-note">live — click (or ⏎) to focus; wheel / PgUp scroll the session, ⌥-drag selects text; ⌘esc backs out</span>`
         : `<button class="primary" data-sess-attach>Attach terminal</button>`) +
       `<span style="flex:1"></span><button class="danger" data-sess-stop>⏹ Stop</button>`;
   } else {
@@ -2042,7 +2157,10 @@ async function attachTerminal(
     fontFamily: 'SF Mono, Menlo, monospace',
     fontSize: 12,
     theme: { background: '#000000' },
-    scrollback: 0, // the attached app (claude, alt-screen) owns its own scrollback
+    scrollback: 0, // history lives in tmux (copy-mode) or in fullscreen claude itself
+    // tmux runs these sessions with `mouse on`, so plain drags go to tmux;
+    // Option-drag still makes a native xterm selection.
+    macOptionClickForcesSelection: true,
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
@@ -2053,13 +2171,25 @@ async function attachTerminal(
   terms.set(sessId, ts);
 
   term.onData((data) => ts.port?.postMessage({ type: 'input', data }));
-  // No custom wheel handler: claude runs in the alternate screen with mouse
-  // tracking on, so tmux keeps zero scrollback for it (`history_size` 0) — the
-  // old copy-mode hijack scrolled a buffer that doesn't exist and, by cancelling
-  // the wheel event, stopped it ever reaching claude. Letting xterm handle the
-  // wheel natively forwards it as a mouse sequence (onData → pty → tmux →
-  // claude), so claude scrolls its own conversation. tmux `mouse off` means tmux
-  // forwards to the app rather than grabbing the wheel for itself.
+  // Shift+Enter → newline in claude's composer; PageUp → main pages the pane
+  // (copy-mode over tmux history, or the key forwarded) — see core/terminalKeys.
+  term.attachCustomKeyEventHandler((e) => {
+    const o = terminalKeyOverride(e);
+    if (!o) return true;
+    e.preventDefault();
+    if (o.send) ts.port?.postMessage({ type: 'input', data: o.send });
+    if (o.pageUp) {
+      api.session.pageUp(sessId).catch((err: unknown) => {
+        console.error(`PageUp failed for ${sessId}:`, err);
+      });
+    }
+    return false;
+  });
+  // No custom wheel handler: SessionHost sets tmux `mouse on` on each session,
+  // so tmux turns on mouse reporting in this xterm and handles the wheel —
+  // forwarded to fullscreen claude (mouse tracking), or copy-mode over pane
+  // history when claude draws in the normal screen. With `mouse off` (before
+  // task 1111) xterm never reported the wheel and nothing scrolled.
   ts.ro = new ResizeObserver(() => {
     // A hidden (display:none) wrap measures 0×0; fitting to that would ask tmux
     // to resize the session to a degenerate size for every other client too.
@@ -2069,7 +2199,16 @@ async function attachTerminal(
   });
   ts.ro.observe(wrap);
 
-  await api.session.attach(sessId, term.cols, term.rows);
+  try {
+    await api.session.attach(sessId, term.cols, term.rows);
+  } catch (err: unknown) {
+    // Attach rejects when tmux can't set the session up (session gone, server
+    // down). Drop the dead entry so the next render can retry, and say why.
+    console.error(`attach failed for ${sessId}:`, err);
+    if (terms.get(sessId) === ts) teardownTerminal(sessId);
+    slot.textContent = `Could not attach to ${sessId}: ${err instanceof Error ? err.message : String(err)}`;
+    return;
+  }
   if (focus) term.focus();
   render(); // refresh the control row (detail or tool page)
 }
@@ -2141,7 +2280,7 @@ function renderTool(): void {
   document.getElementById('t-stop')?.addEventListener('click', () => void stopTool(t.id));
   $('tool-term-hint').innerHTML = t.running
     ? terms.has(toolSessionName(t.id))
-      ? 'Live tmux attach — click (or ⏎) to focus; keystrokes then go to the session; wheel scrolls the session; ⌘esc backs out.'
+      ? 'Live tmux attach — click (or ⏎) to focus; keystrokes then go to the session; wheel / PgUp scroll the session, ⌥-drag selects text; ⌘esc backs out.'
       : '<button id="t-attach" class="primary">Attach terminal</button>'
     : `Not running. ▶ runs ./${esc(t.key)} in ${esc(t.root)} — the pane stays inspectable after it exits.`;
   document
@@ -2151,6 +2290,7 @@ function renderTool(): void {
 
 function renderToolButtons(): void {
   $('tool-btns').innerHTML = tools
+    .filter((t) => inRoot(t, currentRootFilter()))
     .map(
       (t) =>
         `<button data-tool="${esc(t.id)}" class="${t.running ? 'on' : ''}"
@@ -2190,6 +2330,7 @@ window.addEventListener('message', (e) => {
     const payload = e.data.payload as FleetPayload;
     rows = payload.rows;
     tools = payload.tools;
+    roots = payload.roots;
     render();
     loadNewRootBacktests();
   } else if (e.data?.type === 'eg-event' && e.data.channel === 'system:update') {
@@ -2644,6 +2785,7 @@ void (async () => {
   const payload = await api.fleet.snapshot();
   rows = payload.rows;
   tools = payload.tools;
+  roots = payload.roots;
   render();
   syncHeaderHeight();
   loadNewRootBacktests(); // joins each root's BT scores into the list/peek/detail when they land

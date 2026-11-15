@@ -39,6 +39,8 @@ contextBridge.exposeInMainWorld('greenhouse', {
   },
   backtests: {
     summary: (root: string, runDate?: string) => ipcRenderer.invoke('backtests:summary', root, runDate),
+    runFor: (root: string, algorithm: string, candidateId: string) =>
+      ipcRenderer.invoke('backtests:runFor', root, algorithm, candidateId),
     equity: (root: string, runDate: string, algorithm: string, period: string) =>
       ipcRenderer.invoke('backtests:equity', root, runDate, algorithm, period),
   },
@@ -52,6 +54,7 @@ contextBridge.exposeInMainWorld('greenhouse', {
       ipcRenderer.invoke('session:attach', name, cols, rows),
     detach: (name: string) => ipcRenderer.invoke('session:detach', name),
     unstick: (name: string) => ipcRenderer.invoke('session:unstick', name),
+    pageUp: (name: string) => ipcRenderer.invoke('session:pageUp', name),
   },
   prefs: {
     get: () => ipcRenderer.invoke('prefs:get'),

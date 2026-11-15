@@ -57,7 +57,9 @@ to before the profile split — verify against the screenshot harness.
     `key`: the dir name, or `name@<root label>` when an EARLIER root already
     has that name. Sessions, stars, selection and IPC key off `key`; `name`
     stays the display / backtest-algorithm / inference-all identity. Backtest
-    DB and data/raw prices are read from the row's own `root`.
+    DB and data/raw prices are read from the row's own `root`. The header
+    root switcher (`inRoot` / `activeRootFilter`, prefs `rootFilter`, '' = All)
+    narrows list/grid, totals and tool buttons; notifications still cover all.
   - `state.ts` — tmux pane-motion classification (working/waiting/asking) and
     the `evolve-<dir>` session naming. Both are a SHARED VOCABULARY with the
     trading-strategies TUI — change them in lockstep or the two tools stop
@@ -147,19 +149,22 @@ IPC straight from data/raw/<SYM>_1d_*.csv over each period window (SPY measured
 over the instrument's own window so differing inceptions stay comparable). It's
 retroactive (reads raw prices, no re-run) and absent when the workspace has no
 resolvable symbol. Period bounds mirror backtest-all (core/backtests.ts
-PERIOD_BOUNDS — LOCKSTEP). Terminal wheel-scroll: xterm handles the wheel
-natively (NO custom handler) and forwards it as a mouse sequence to the attached
-app. claude runs in the alternate screen with mouse tracking on, so tmux keeps
-ZERO scrollback for its pane (`history_size` 0) — the earlier copy-mode hijack
-scrolled a buffer that didn't exist and, by returning false, stopped the wheel
-ever reaching claude, so claude couldn't scroll its own conversation. tmux
-`mouse off` means tmux forwards mouse events to the app instead of grabbing them.
-The old `session:scroll` IPC / `SessionHost.scroll` / copy-mode path is deleted.
+PERIOD_BOUNDS — LOCKSTEP). Terminal scrolling (task 1111, 2026-11-15): every
+Greenhouse session gets tmux `mouse on` as a SESSION option (never -g) at start
+and on attach, so tmux enables mouse reporting in xterm and its default wheel
+binding either forwards to fullscreen claude or enters copy-mode over pane
+history (claude in the normal screen). The earlier `mouse off` setup meant xterm
+never reported the wheel, so nothing scrolled. PageUp is intercepted by the
+renderer and sent to main (`session:pageUp` → `SessionHost.pageUp`), which reads
+`#{alternate_on} #{pane_in_mode}` and enters `copy-mode -e -u` or forwards the
+key (pure decision: core/terminalKeys pageUpAction). PageDown passes through.
+Plain drags now go to tmux; Option-drag makes a native selection
+(`macOptionClickForcesSelection`). See ../docs/TRUTH.md. Unverified (needs a
+human with a real wheel + live claude session).
 Detail-view NAV charts (leader walk-forward + per-period) open an INTERACTIVE
 viewer (drag/shift-wheel pan, wheel/± zoom, reset) that re-slices the series so
 the Y axis autoscales and the return/CAGR/maxDD/Sharpe badge reflect the visible
-window; every other chart still uses the static enlarge. Unverified (need a
-human with a real wheel + live claude session): that claude now scrolls on wheel.
+window; every other chart still uses the static enlarge.
 The detail Leader heading carries PRODUCTION pills read from the parent root's
 inference-all (core/inferenceAll.ts, pure + tested): a blend pill when this
 workspace is only one leg of a MIXED signal (`("a+b", …)` — inference.py
@@ -173,8 +178,18 @@ detail charts (best score, year returns) now share ONE x domain —
 generation coverage and maps each chart's gens to 0..1 positions on it, so a
 vertical line through the stacked panels is the same generation and both
 enlarged views print the same gen ticks; the year chart plots
-`GenStats.yearRow` (chosen by HAVING return_YYYY, champion preferred) instead
-of `best`, so a generation with year data but no walk-forward score still
-appears. The small list/grid sparklines pass no axis and keep index positions.
+`GenStats.yearRow` — the generation's `best` when it carries return_YYYY, else
+null — so, like the score chart, a generation with no winner (all
+pending/failed/skipped) is not drawn (2026-11-15); the shared x axis always starts
+at gen 0. The small list/grid sparklines pass no axis and keep index positions.
+The detail Winner / Pinned tabs switch EVERY per-algo panel (summary, Backtest
+table, walk-forward NAV, Backtest NAV by period, returns by year); only the
+history at the bottom (two per-generation charts + generation table) is
+workspace-wide. Since 2026-11-10 backtest-all also backtests each production pin
+as its own row (algorithm `<ws>/evolution_<id>.py` — LOCKSTEP with
+trading-strategies backtest-all `production_pin_tests`); the Pinned tab reads the
+newest run holding that row, or an older run from while the pin was champion
+(`backtests:runFor` IPC), with a warning when the run isn't the latest; when no
+run ever scored it the panel says so.
 See ../docs/TRUTH.md.
 Open: equity/ artifact retention (claude-evolve side).

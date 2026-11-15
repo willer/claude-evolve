@@ -2,7 +2,7 @@
 // session model meets Electron IPC. Terminal bytes ride a MessagePort, not
 // JSON IPC (same transport design as Genome FleetView).
 
-import { BrowserWindow, MessageChannelMain, ipcMain, nativeTheme } from 'electron';
+import { BrowserWindow, MessageChannelMain, dialog, ipcMain, nativeTheme } from 'electron';
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -24,13 +24,24 @@ async function sqliteJson(db: string, sql: string): Promise<unknown[]> {
   return stdout.trim() ? (JSON.parse(stdout) as unknown[]) : [];
 }
 
+/** Run a session launch; on failure show the error in a dialog (the renderer
+ *  fires launches from keypresses and can't surface them) and rethrow. */
+async function launch(what: string, fn: () => Promise<unknown>): Promise<void> {
+  try {
+    await fn();
+  } catch (err) {
+    dialog.showErrorBox(`Could not start ${what}`, err instanceof Error ? err.message : String(err));
+    throw err;
+  }
+}
+
 export function wireIpc(
   win: () => BrowserWindow | null,
   host: SessionHost,
   poller: Poller,
   prefs: PrefsStore,
 ): void {
-  ipcMain.handle('fleet:snapshot', () => ({ rows: poller.current(), tools: poller.currentTools() }));
+  ipcMain.handle('fleet:snapshot', () => poller.payload());
   ipcMain.handle('fleet:refresh', () => poller.poll());
 
   // Repo-level tool scripts (inference-all / backtest-all) in their own tmux.
@@ -38,7 +49,7 @@ export function wireIpc(
     const tool = poller.currentTools().find((t) => t.id === id);
     if (!tool) throw new Error(`tool not available in any root: ${id}`);
     if (tool.running) throw new Error(`tool already running: ${id}`);
-    await host.startTool(tool.id, tool.key, tool.root);
+    await launch(tool.key, () => host.startTool(tool.id, tool.key, tool.root));
     await poller.poll();
   });
 
@@ -57,6 +68,21 @@ export function wireIpc(
     return fs.existsSync(p) ? p : undefined;
   };
 
+  // One run's scored rows + appendix (the report's flag section).
+  const loadRun = async (db: string, chosen: string, runDates: string[]) => {
+    const rows = (await sqliteJson(
+      db,
+      `SELECT algorithm, algorithm_name, period, target_risk, achieved_risk,
+              cagr, pain, aa_pain, sharpe, sortino, turnover
+       FROM results WHERE run_date = '${chosen}'`,
+    )) as BacktestRow[];
+    const appendix = (await sqliteJson(
+      db,
+      `SELECT algorithm, algorithm_name, reasons FROM appendix WHERE run_date = '${chosen}' ORDER BY algorithm`,
+    )) as Array<{ algorithm: string; algorithm_name: string; reasons: string }>;
+    return { runDate: chosen, runDates, rows, appendix };
+  };
+
   // Backtest dashboard data: latest complete run (>10 algos, like the
   // streamlit default) unless a specific runDate is requested. Includes the
   // run's appendix (flagged algorithms + reasons — the report's flag section).
@@ -73,17 +99,34 @@ export function wireIpc(
     if (!chosen || !dates.some((d) => d.run_date === chosen)) {
       chosen = (dates.find((d) => d.count > 10) ?? dates[0]).run_date;
     }
-    const rows = (await sqliteJson(
+    return loadRun(db, chosen, dates.map((d) => d.run_date));
+  });
+
+  // Newest backtest run that scored `candidateId` of workspace `algorithm` — the detail
+  // view's Pinned tab. Since 2026-11-10 backtest-all backtests each production pin as its
+  // OWN row (algorithm '<ws>/evolution_<id>.py', LOCKSTEP with trading-strategies
+  // backtest-all production_pin_tests); before that a pin only has data from a run made
+  // while it was the workspace's champion (algorithm '<ws>', name ending in the id).
+  // `algorithm` in the reply names whichever row matched. Null = no run ever scored it.
+  ipcMain.handle('backtests:runFor', async (_e, root: string, algorithm: string, candidateId: string) => {
+    if (!/^[\w./-]+$/.test(algorithm)) throw new Error(`bad algorithm: ${algorithm}`);
+    if (!/^[\w.-]+$/.test(candidateId)) throw new Error(`bad candidate id: ${candidateId}`);
+    const db = backtestDb(root);
+    if (!db) return null;
+    const pinKey = `${algorithm}/evolution_${candidateId}.py`;
+    const hit = (await sqliteJson(
       db,
-      `SELECT algorithm, algorithm_name, period, target_risk, achieved_risk,
-              cagr, pain, aa_pain, sharpe, sortino, turnover
-       FROM results WHERE run_date = '${chosen}'`,
-    )) as BacktestRow[];
-    const appendix = (await sqliteJson(
-      db,
-      `SELECT algorithm, algorithm_name, reasons FROM appendix WHERE run_date = '${chosen}' ORDER BY algorithm`,
-    )) as Array<{ algorithm: string; algorithm_name: string; reasons: string }>;
-    return { runDate: chosen, runDates: dates.map((d) => d.run_date), rows, appendix };
+      `SELECT run_date, algorithm FROM results
+       WHERE algorithm = '${pinKey}'
+          OR (algorithm = '${algorithm}'
+              AND (algorithm_name = '${candidateId}' OR algorithm_name LIKE '% ${candidateId}'))
+       ORDER BY run_date DESC, algorithm = '${pinKey}' DESC LIMIT 1`,
+    )) as Array<{ run_date: string; algorithm: string }>;
+    if (!hit.length) return null;
+    const dates = (await sqliteJson(db, 'SELECT DISTINCT run_date FROM results ORDER BY run_date DESC')) as Array<{
+      run_date: string;
+    }>;
+    return { ...(await loadRun(db, hit[0].run_date, dates.map((d) => d.run_date))), algorithm: hit[0].algorithm };
   });
 
   // Per-period NAV + position series, written by backtest-all since 2026-06-11
@@ -128,7 +171,7 @@ export function wireIpc(
   ipcMain.handle('evolution:start', async (_e, key: string) => {
     const ws = poller.current().find((r) => r.key === key);
     if (!ws) throw new Error(`unknown workspace: ${key}`);
-    await host.startEvolution(ws.key, ws.path);
+    await launch(`evolution for ${key}`, () => host.startEvolution(ws.key, ws.path));
     await poller.poll();
   });
 
@@ -143,7 +186,7 @@ export function wireIpc(
   ipcMain.handle('adhoc:start', async (_e, key: string) => {
     const ws = poller.current().find((r) => r.key === key);
     if (!ws) throw new Error(`unknown workspace: ${key}`);
-    await host.startAdhoc(ws.key, ws.path);
+    await launch(`claude for ${key}`, () => host.startAdhoc(ws.key, ws.path));
     await poller.poll();
   });
 
@@ -157,7 +200,7 @@ export function wireIpc(
   ipcMain.handle('shell:start', async (_e, key: string) => {
     const ws = poller.current().find((r) => r.key === key);
     if (!ws) throw new Error(`unknown workspace: ${key}`);
-    await host.startShell(ws.key, ws.path);
+    await launch(`shell for ${key}`, () => host.startShell(ws.key, ws.path));
     await poller.poll();
   });
 
@@ -170,9 +213,24 @@ export function wireIpc(
   // One attach client per session; re-attach replaces the old client. The
   // renderer passes full session ids (evolve-<dir> / greenhouse-<tool>).
   const attaches = new Map<string, AttachHandle>();
-  ipcMain.handle('session:attach', (_e, id: string, cols: number, rows: number) => {
+  // Bumped by every attach and detach of an id. An attach that finds its
+  // generation moved on after the await was superseded (detached or replaced
+  // meanwhile) and closes its own client instead of publishing it.
+  const attachGen = new Map<string, number>();
+  const bumpGen = (id: string): number => {
+    const g = (attachGen.get(id) ?? 0) + 1;
+    attachGen.set(id, g);
+    return g;
+  };
+  ipcMain.handle('session:attach', async (_e, id: string, cols: number, rows: number) => {
+    const gen = bumpGen(id);
     attaches.get(id)?.close();
-    const handle = host.attach(id, cols, rows);
+    const handle = await host.attach(id, cols, rows);
+    if (attachGen.get(id) !== gen) {
+      handle.close();
+      return { ok: false, superseded: true };
+    }
+    attaches.get(id)?.close();
     attaches.set(id, handle);
     const { port1, port2 } = new MessageChannelMain();
     handle.onData((chunk) => port1.postMessage(chunk));
@@ -187,18 +245,23 @@ export function wireIpc(
     handle.onClose(() => {
       port1.postMessage({ __eg: 'detached' });
       port1.close();
-      attaches.delete(id);
+      if (attaches.get(id) === handle) attaches.delete(id);
     });
     win()?.webContents.postMessage('session:port', { attachId: id }, [port2]);
     return { ok: true };
   });
 
   ipcMain.handle('session:detach', (_e, id: string) => {
+    bumpGen(id);
     attaches.get(id)?.close();
     attaches.delete(id);
   });
 
   ipcMain.handle('session:unstick', (_e, id: string) => host.unstick(id));
+
+  // PageUp from the embedded terminal (renderer key handler → here); see
+  // SessionHost.pageUp / core/terminalKeys pageUpAction.
+  ipcMain.handle('session:pageUp', (_e, id: string) => host.pageUp(id));
 
   // NAV artifact for one candidate: <workspace>/equity/<id>.csv, written by the
   // trading-strategies evaluator since 2026-06-11. Columns are date,nav with an

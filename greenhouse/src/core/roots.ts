@@ -46,3 +46,41 @@ export function assignKeys<T extends { name: string; root: string }>(items: T[])
     return { ...it, key };
   });
 }
+
+// ── root switcher ───────────────────────────────────────────────────────────
+// The header dropdown narrows the fleet to one configured root ('' = All).
+
+/** Does a workspace (or tool) belong to configured root `filter`? A subdir
+ *  workspace's `root` is the configured root; a root that is itself a workspace
+ *  has its parent as `root`, so its own path must match. '' matches all. */
+export function inRoot(item: { path?: string; root: string }, filter: string): boolean {
+  return !filter || item.root === filter || item.path === filter;
+}
+
+/** The saved filter, if it still applies: it must name a configured root, and
+ *  there must be 2+ roots (with one the switcher is hidden). Else '' (All). */
+export function activeRootFilter(saved: string, roots: string[]): string {
+  return roots.length > 1 && roots.includes(saved) ? saved : '';
+}
+
+// ── root column ─────────────────────────────────────────────────────────────
+// Under 'All' with 2+ roots the list view gains a Root column (task 4) so
+// same-looking workspaces from different roots can be told apart.
+
+/** The Root column shows only when the switcher is on All and 2+ roots exist. */
+export function showRootColumn(filter: string, roots: string[]): boolean {
+  return roots.length > 1 && !filter;
+}
+
+/** Root-column text: the last path element of the configured root the item
+ *  belongs to. A root that is itself a workspace has its parent as `root`, so
+ *  its own path is the configured root (same rule as inRoot). */
+export function rootColumnLabel(item: { path?: string; root: string }, roots: string[]): string {
+  const configured = configuredRoot(item, roots);
+  return segments(configured).at(-1) ?? configured;
+}
+
+/** The configured root an item belongs to (its own path for a root workspace). */
+export function configuredRoot(item: { path?: string; root: string }, roots: string[]): string {
+  return item.path && roots.includes(item.path) ? item.path : item.root;
+}

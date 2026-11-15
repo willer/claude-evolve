@@ -281,18 +281,15 @@ class LLMBandit:
             self.decay_factor = data.get('decay_factor', self.decay_factor)
             self._baseline_score = data.get('baseline_score', 0.0)
 
+            # AIDEV-NOTE: only the CONFIGURED models are restored. Saved stats for a model
+            # that is no longer configured are dropped, never re-added: re-adding them made
+            # select_model() keep picking models removed from the config (kimi-coder long
+            # after the default list stopped naming it).
             for name, stats_data in data.get('models', {}).items():
                 if name in self.models:
                     self.models[name].n_completed = stats_data.get('n_completed', 0)
                     self.models[name].n_submitted = stats_data.get('n_submitted', 0)
                     self.models[name].total_improvement = stats_data.get('total_improvement', 0.0)
-                else:
-                    self.models[name] = ModelStats(
-                        name=name,
-                        n_completed=stats_data.get('n_completed', 0),
-                        n_submitted=stats_data.get('n_submitted', 0),
-                        total_improvement=stats_data.get('total_improvement', 0.0)
-                    )
 
             self._log(f"Loaded bandit state: {len(self.models)} models, {self.total_completions} completions")
             return True

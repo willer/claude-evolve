@@ -12,7 +12,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- CLI coding now matches the plugin coder: codex GPT-5.6 Luna (max effort,
+  `-s workspace-write`) codes every candidate first, and Opus (medium effort) codes it
+  when codex leaves the file unchanged or the code fails syntax/validation. The old
+  cheap-model pool (ollama glm/qwen/minimax/gemma, kimi-coder, glm-zai, qwen-coder,
+  minimax) is no longer the default.
+
 ### Fixed
+- The LLM bandit no longer re-adds models from a workspace's `llm_bandit.json` that the
+  config no longer names, so removed models (kimi-coder, kimi-k2.5, gpt-5-codex...)
+  stop being picked.
+- AI CLIs run with stdin from /dev/null; `codex exec` blocked on the inherited pipe.
+- `lib/` is a regular package (`lib/__init__.py`), so the plugin's `lib` can't shadow
+  it when both are imported in one process.
+
+### Added
+
+- `claude-evolve run-noideate genNNN` re-scores pending rows of one generation only
+  (e.g. `run-noideate gen822`). `run genNNN` is refused, since ideation never adds rows
+  to an old generation. Test: `plugin/tests/test_legacy_generation_window.py`.
+
+### Fixed
+
+- Re-scoring no longer rewrites candidates. A pending row whose `evolution_<id>.py` already holds code (prepare.py `already_exists: true`) is scored as-is: the coder agent skips coding, and `code_with_codex.py` refuses (exit 3, `already_coded`) any file that is not a pristine parent copy, so neither codex nor the restore-parent fallback can overwrite it. Test: `plugin/tests/test_code_with_codex_guard.py`.
 
 - **CSV lock no longer unlinked on release (plugin 0.3.2)** — deleting
   `.evolution.csv.lock` handed the next writer a fresh inode, so two workers
@@ -22,6 +45,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Gemini 4 Argon joins the ideation roll (plugin 0.3.9)** — `--source argon`
+  runs Google's Antigravity CLI (`agy --model gemini-4-argon-high --sandbox`)
+  with the prompt on stdin as a stream-json `user` event. The roll is now 2/6
+  Opus, 1/6 Fable, 1/6 Astra, 1/6 Argon, 1/6 Grok; Argon took one of Astra's
+  two slots. Requires `agy` signed in.
+- **Grok ideation source moves to Grok 4.7 (plugin 0.3.6)** — the 1/6 Grok
+  roll in `ideate_branch.py` now calls OpenRouter `x-ai/grok-4.7` (was
+  `x-ai/grok-4.6`). Effort (max) and routing are unchanged.
+- **Grok ideation runs through Claude Code, not opencode (plugin 0.3.5)** —
+  `ideate_branch.py` runs the OpenRouter sources (grok, and the unrolled
+  glm/kimi/qwen) as a headless `claude -p --bare` (read-only tools) with the same
+  routing env Spaces uses for its claude/grok route. opencode is no longer a
+  plugin dependency.
 - **Failed ideation branches re-roll to another model (plugin 0.3.4)** — a
   branch whose external source errors or times out is relaunched on a source
   re-rolled from the ones that have not failed this generation, instead of

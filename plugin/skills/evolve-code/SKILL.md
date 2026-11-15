@@ -47,6 +47,8 @@ Code the candidate. **Try codex (GPT-5.6 Luna) first; fall back to coding it you
 python3 "$CLAUDE_PLUGIN_ROOT/scripts/code_with_codex.py" --working-dir "<WORKING_DIR>" <CANDIDATE_ID>
 ```
 
+If it exits 3 with `"already_coded": true`, the file is already coded: skip to scoring, never recode or restore it.
+
 It runs codex on the prepared file (explicit `-s workspace-write` — codex reads anywhere but writes only inside the workspace; the NEVER-USE-GIT warning rides along in the prompt) and prints one JSON line:
 
 ```json

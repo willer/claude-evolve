@@ -58,16 +58,17 @@ DEFAULT_MEMORY_LIMIT_MB=12288
 DEFAULT_WORKER_MAX_CANDIDATES=3
 
 # Default LLM CLI configuration - quality-triggered escalation system
-# AIDEV-NOTE: Two-tier design for coding (run):
-#   Primary: Cheap/open models handle normal code generation
-#   Escalation: Big commercial models only activated on syntax/validation failure
+# AIDEV-NOTE: Coding (run) mirrors the plugin's coder (plugin/agents/coder.md,
+# plugin/scripts/code_with_codex.py): codex GPT-5.6 Luna at max codes first; Opus at
+# medium takes over when codex leaves the file unchanged or the code fails syntax or
+# validation. Change both sides together.
 # Ideation keeps its own primary list (thinking models for creative work)
 # No fallback tier — if all models are down, fail fast so monitoring catches it.
 #
-# Run: Cheap/open models for code generation (flat-rate or low-cost)
-DEFAULT_LLM_RUN="ollama-glm ollama-glm ollama-qwen ollama-qwen ollama-minimax ollama-minimax ollama-gemma ollama-gemma kimi-coder kimi-coder glm-zai qwen-coder minimax"
-# Run escalation: Big models activated only when cheap models produce bad code
-DEFAULT_LLM_RUN_ESCALATION="sonnet codex-coding gemini-pro"
+# Run: codex Luna codes every candidate first
+DEFAULT_LLM_RUN="codex-coding"
+# Run escalation: Opus codes it when codex fell short or produced bad code
+DEFAULT_LLM_RUN_ESCALATION="opus"
 #
 # Ideate: Strong models for creative ideation
 DEFAULT_LLM_IDEATE="opus-think ollama-glm ollama-glm gemini-pro ollama-qwen ollama-minimax ollama-gemma kimi-coder gpt codex-think glm-zai qwen-coder minimax qwen"

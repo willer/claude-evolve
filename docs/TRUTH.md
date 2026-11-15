@@ -56,8 +56,7 @@ left-to-right — but each can only plot the generations it has data for, and th
 differ:
 
 - a generation with no completed candidate has no score, so it is absent from the sparkline;
-- a generation whose rows carry `return_YYYY` but never got a walk-forward score (cheap
-  single-window backfill) has year points but no score point.
+- a generation whose winner carries no `return_YYYY` has a score point but no year points.
 
 Both charts used to position points by ARRAY INDEX, which stretched each chart's own subset
 across the same pixel width. Gen 850 then sat at 40% of one panel and 92% of the other, and
@@ -75,10 +74,14 @@ the same generation.
 `ChartX` is optional: the tiny fleet-list/grid sparklines pass none and keep index
 positioning (no axis, no sibling chart to line up with).
 
-Related and committed with it: `GenStats.yearRow` (csv.ts) — the row that backs the year
-chart, chosen by HAVING year data rather than by performance (earliest id wins, but the
-generation champion wins whenever it has the columns). That is what lets a scored-but-not-
-walk-forward generation appear on the year chart at all; `best` alone hid it.
+Related: `GenStats.yearRow` (csv.ts) — the row that backs the year chart. Since
+2026-11-15 it is the generation's `best` when that row carries `return_YYYY`, else null:
+the year chart draws a generation only when it has a winner, the same rule as the score
+chart. A generation of only pending/failed/skipped rows is not drawn even if some row has
+year data. (Before, any row with year data could back the point, so winnerless
+generations still showed up on the year chart.) The detail view's shared x axis always
+starts at generation 0 (`sharedGenDomain([[0], sparkGens, yearGens])`), so the charts show
+the full history even when only recent generations have points.
 
 Verified 2026-08-06 through the `EG_SHOT` harness against a synthetic root built for the
 mismatch (scores on gens 20–40, `return_YYYY` on gens 0–30): shared domain 0–40, the score
@@ -344,3 +347,183 @@ a process can't lower its niceness without root, so inference-all started by
 hand from a niced Greenhouse shell stays niced. Run it from the tool tab or a
 normal terminal. Sessions that were already running before this change keep
 their old priority until they are restarted.
+
+## Greenhouse root switcher (2026-09-25)
+
+With 2+ roots, a header dropdown (All roots, then one entry per root) narrows
+the list/grid, totals and tool buttons to one root. This lets one server run
+trading and predictive-model evolutions side by side without mixing them in
+one list. The choice persists as prefs `rootFilter` ('' = All).
+`core/roots.ts activeRootFilter` ignores a saved filter that is no longer a
+configured root, so removing a root never blanks the fleet. Native
+notifications still fire for every root, so a hidden root's stuck session still
+alerts. The options come from the fleet payload's `roots` (the roots actually
+scanned, EG_ROOTS-aware), not saved prefs. Chosen over one window per root:
+same outcome for about a third of the work, with no per-window state.
+
+## OpenRouter ideation sources run through `claude -p`, not opencode (2026-09-25)
+
+`plugin/scripts/ideate_branch.py` runs grok
+as `claude -p --bare --model <slug> --tools Read,Grep,Glob --effort <e>` (read-only tools: with none, Grok stops after "I'll inspect the leader..." and returns no JSON) with the prompt
+on stdin and the routing env Spaces uses for its claude/grok route
+(`anthropicEndpointEnv` in Spaces `core/launch.ts`):
+`ANTHROPIC_BASE_URL=https://openrouter.ai/api`, `ANTHROPIC_AUTH_TOKEN=<key>`,
+`ANTHROPIC_API_KEY=""` (if set, it takes precedence over AUTH_TOKEN), and
+`ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL`, and
+`CLAUDE_CODE_SUBAGENT_MODEL` all set to the slug. That is 8 vars. The key is read
+from `~/.zprofile` (the personal key), never the session env. Grok gets
+`--effort max`. Claude Code warns that the slug is not in its model catalog;
+that warning is harmless for one-shot prompts. The reason for the switch is
+that opencode was an extra dependency that broke on its own (1.18.30, entry
+above), while the claude CLI is always present.
+
+## Shift+Enter in Greenhouse terminals sends ESC+CR (2026-10-07)
+
+xterm.js sends Shift+Enter as a bare CR, the same as Enter, so claude
+submitted instead of adding a line. The renderer's custom key handler
+(`core/terminalKeys.ts terminalKeyOverride`) now sends ESC+CR (meta-Enter)
+for an unmodified-otherwise Shift+Enter, swallows its keypress/keyup, and
+leaves plain Enter alone. The kitty CSI-u form (`ESC[13;2u`) was rejected:
+a raw-mode probe behind a real tmux 3.7 client showed tmux (extended-keys on)
+downgrades it to a plain CR for a pane app that has not asked for extended
+keys, while ESC+CR arrives byte-for-byte. Claude's composer treats ESC+CR as
+"insert newline". Open sessions pick this up after `./run-greenhouse`.
+
+## Greenhouse Root column under All roots (2026-10-07)
+
+With 2+ roots and the switcher on All roots, the list view shows a `Root`
+column right of Name (task 4). It holds the last path element of the row's
+configured root (`core/roots.ts rootColumnLabel`); a root that is itself a
+workspace shows its own last element, matching `inRoot`. The column hides when
+one root is selected or only one root exists (`showRootColumn`), because the
+switcher then already says which root you are looking at. The value is the
+plain basename, not the `name@label` disambiguator, as asked; two roots with the
+same basename therefore look alike in this column (hover shows the full path).
+It sorts ascending by default, like Name.
+
+## Grok ideation source moves to Grok 4.7 (2026-10-13)
+
+The 1/6 Grok ideation roll now runs OpenRouter `x-ai/grok-4.7` instead of
+`x-ai/grok-4.6` (task 5). The slug is in `OPENROUTER_MODELS` in
+`plugin/scripts/ideate_branch.py`; OpenRouter's model list carried
+`x-ai/grok-4.7` on this date. Everything else stays the same: the 3/6 opus,
+2/6 codex, 1/6 grok split, `--effort max`, the `claude -p` route, and the
+re-roll-on-failure rule. Earlier entries that name Grok 4.6 are historical.
+
+## Fable 5.1 returns to the ideation roll (2026-10-16)
+
+The ideation roll now draws from four sources: 2/6 Opus 5.5 high, 1/6 Fable 5.1
+high, 2/6 GPT-6 Astra xhigh, 1/6 Grok 4.7 max. Fable's slot comes out of Opus's
+old 3/6. Opus still beats Fable on benchmarks (the Sept 23 swap stands). Fable is
+back because it is a bigger, different model and may produce different ideas,
+the same reason Grok holds a slot. It runs at high, not xhigh as it did before
+Sept 23. Fable branches use their own pinned agent, `plugin/agents/ideator-fable.md`,
+which is the same as `ideator.md` with `model: fable`. `ideate_branch.py
+--source fable` only writes the prompt file, as `opus` does (`SUBAGENT_SOURCES`).
+Re-roll on failure is unchanged. Ideas are tagged `idea-LLM=fable`. Plugin 0.3.7.
+
+## Gemini 4 Argon joins the ideation roll via Antigravity (2026-10-18)
+
+The roll is now 2/6 Opus 5.5 high, 1/6 Fable 5.1 high, 1/6 GPT-6 Astra xhigh,
+1/6 Gemini 4 Argon high, 1/6 Grok 4.7 max. Argon took one of Astra's two slots:
+Google claims Argon beats Astra, and this puts that claim against Astra on the
+same branches. Opus keeps two slots as the proven source.
+
+Argon runs through Google's Antigravity CLI, `agy`, not OpenRouter. On this
+date, OpenRouter's `google/gemini-4-argon` through the `claude -p` route
+reported success with an empty result at every effort level, while Grok on the
+same route answered. The `gemini` CLI is retired by Google (`UNSUPPORTED_CLIENT`,
+"migrate to Antigravity"). `agy` bakes effort into the model ID
+(`gemini-4-argon-low|medium|high`); high is the top tier.
+
+`agy -p` takes the prompt as an argv value, and prompts run to ~300KB, so
+`ideate_branch.py` sends it on stdin as one stream-json event,
+`{"event":"user","message":{"role":"user","content":...}}`, and reads the
+`result` event's `response`. Read-only is `--sandbox` with the default
+permission mode: a write attempt errors and reads still work. Reads are limited
+to the working directory plus `--add-dir` directories, and when a read is denied
+the turn ends with an empty answer. So the workspace's parent is added: candidates
+import shared modules from it (`trading-strategies/orthogonal_signals.py`), and
+codex's read-only sandbox can read there too. Shell commands stay denied, and the
+prompt opens with a preface that points Argon at its file tools; without the
+preface, its first `ls` was refused and it gave up. `--mode plan`
+returns an empty response, so it is not used. `agy` must be signed in (run it
+once interactively). Re-roll on failure is unchanged; a failed branch re-rolls
+over the other sources. Ideas are tagged `idea-LLM=argon`. Plugin 0.3.9.
+
+## Fable 5.2 gets the largest ideation share (2026-11-10)
+
+The roll is now an 8-sided die: 1/8 Opus 5.5 high, 3/8 Fable 5.2 high, 2/8 GPT-6
+Astra xhigh, 1/8 Gemini 4 Argon high, 1/8 Grok 4.7 max. The operator's reasons:
+Fable 5.2 has more current ideas than the older models, and Fable already
+matched Opus on the boards. Measured over every trading-strategies board while
+Opus, Fable, Astra and Grok were all rolled (Oct 16 - Nov 9), the share of
+scored ideas that set a new board best was Fable 12.3% (n=666), Opus 11.3%
+(n=1467), Astra 8.4% (n=677), Grok 7.2% (n=195). Argon had 45 scored ideas and
+4 beat their parent, too few to judge, so it keeps one slot. These are
+walk-forward wins on the older Fable, not out-of-sample results. The
+`ideator-fable` agent pins the `fable` alias, so it runs whichever Fable that
+alias resolves to.
+
+## GLM, Kimi and Qwen removed from the plugin (2026-11-15)
+
+The plugin's unrolled OpenRouter ideation sources `glm`, `kimi` and `qwen` are gone from
+`OPENROUTER_MODELS` in `plugin/scripts/ideate_branch.py`. `ENABLED_SOURCES` never included
+them, so no generation used them; they only answered a hand-typed `--source`. `carbon`
+(Gemini 4 Carbon) is now the one wired-but-unrolled OpenRouter source. Plugin coding
+never used them: it is codex GPT-5.6 Luna first, with the Opus coder judging and falling back.
+Adding a source back is a model slug plus an `ENABLED_SOURCES` entry. The `claude-evolve`
+command's ideation list (`DEFAULT_LLM_IDEATE` in `lib/config.sh`) still names them. Plugin 0.3.11.
+
+## The CLI codes the way the plugin does (2026-11-15)
+
+`claude-evolve run` / `run-noideate` used to pick a coder at random from
+`DEFAULT_LLM_RUN` in `lib/config.sh`: 13 slots of cheap models (ollama glm/qwen/minimax/
+gemma, two `kimi-coder`, glm-zai, qwen-coder, minimax). Sonnet, codex Terra-medium
+and Gemini 3.1 Pro came in only after syntax or validation failures. The operator found
+Kimi errors in a `run-noideate` log. The defaults are now `run: codex-coding`
+(GPT-5.6 Luna, max effort, `-s workspace-write`, the same as `code_with_codex.py`) and
+`run_escalation: opus` (Opus, `--effort medium`, the same as `agents/coder.md`). When
+the primary finishes without changing the file, the worker now goes straight to Opus
+with a clean parent copy, as the plugin does. Before, it retried the primary list for
+up to 10 backoff rounds. Outages (`AIError`) still get the backoff.
+
+Changing the defaults was not enough on its own. `LLMBandit.load()` re-added every model
+found in a workspace's `llm_bandit.json`, and `select_model()` chose among all of them,
+so a model removed from the config kept being picked. All 51 trading-strategies
+workspaces carried `kimi-coder`, and some carried models no longer in `ai-cli.sh` at
+all (`kimi-k2.5`, `gpt-5-codex`, `glm-5`, `codex-oss-local`). Saved stats for a model
+that is not configured are now dropped on load (`plugin/tests/test_legacy_bandit_models.py`).
+
+AI CLIs now get `stdin=DEVNULL`, because `codex exec` appends stdin to its prompt and
+hangs on an inherited pipe. `lib/` gained an empty `__init__.py`: as a namespace package
+it lost to `plugin/lib` whenever both were on `sys.path`, and the full
+`plugin/tests` run failed at collection. CLI ideation (`DEFAULT_LLM_IDEATE`) is unchanged
+for now. npm 1.15.0.
+
+
+## Greenhouse terminals: wheel and PgUp scroll via tmux mouse on (2026-11-15)
+
+Task 1111: the mouse wheel and PgUp/PgDown did nothing in Greenhouse's Claude panes. The
+earlier design (no wheel handler, tmux `mouse off`) assumed claude always runs in the
+alternate screen with mouse tracking and that xterm would forward the wheel to it. With
+`mouse off`, tmux never turns on mouse reporting in the xterm client, so the wheel was
+never reported at all. And when claude draws in the normal screen, its transcript is in
+tmux pane history, which xterm (`scrollback: 0`) cannot see.
+
+Now `SessionHost` sets `mouse on` as a session option (`set-option -t <sess>`) on every
+Greenhouse session at start and again on attach, which also covers sessions adopted from
+before the change or started by the trading-strategies TUI. It is never set with `-g`:
+the operator's other tmux sessions keep their own setting. tmux's default wheel binding
+then forwards the wheel to an app with mouse tracking (fullscreen claude), or enters
+copy-mode over pane history. The renderer intercepts unmodified PageUp and calls
+`session:pageUp`. Main reads `#{alternate_on} #{pane_in_mode}`. In the normal screen and
+outside copy-mode it runs `copy-mode -e -u`; otherwise it forwards the key. The decision
+is pure in `core/terminalKeys.ts` (`pageUpAction`, `parsePaneState`). PageDown passes
+through: copy-mode pages down on its own binding and `-e` leaves at the bottom.
+
+Trade-off: with tmux owning the mouse, a plain drag selects in tmux, not natively in xterm.
+xterm runs with `macOptionClickForcesSelection`, so Option-drag still makes a native
+selection. Attaching to the same session from the operator's own terminal also gets mouse
+on. Not verified live: the build sandbox cannot reach the tmux socket, so a person with a
+real wheel and a live claude session has to confirm it.

@@ -56,7 +56,8 @@ class Config:
     timeout_seconds: int = 600
     nice: int = 10  # evaluator CPU priority (os.nice increment); yields to production work
     max_candidates: int = 5
-    min_generation: Optional[int] = None  # Only claim candidates >= this generation (--gens window)
+    min_generation: Optional[int] = None  # Only claim candidates >= this generation (run selector window)
+    max_generation: Optional[int] = None  # Only claim candidates <= this generation (genNNN selector)
     max_validation_retries: int = 3  # Max attempts to fix validation errors (if validator.py exists)
     # Sandbox configuration
     sandbox_enabled: bool = True  # Enable macOS sandbox-exec isolation
@@ -206,11 +207,14 @@ CRITICAL: If you do not know how to implement what was asked for, or if the requ
                 else:
                     # AIDEV-NOTE: Log output so we can diagnose why file wasn't modified
                     preview = output[-300:] if output else "(empty)"
-                    log(f"Bandit model {selected_model} completed but didn't modify file ({len(output)} chars), trying other primary models...")
+                    log(f"Bandit model {selected_model} completed but didn't modify file ({len(output)} chars)")
                     log(f"AI output preview: {preview}")
                     # AIDEV-NOTE: Report no-modification as failure to bandit
                     self.bandit.update(selected_model, child_score=None, parent_score=self._parent_score)
                     log(f"Bandit update: {selected_model} no file modification")
+                    # The model ran and chose not to code it: that is a coding outcome, not
+                    # an outage, so no backoff retry. The caller hands it to escalation.
+                    return False, selected_model
 
             except AIError as e:
                 log(f"Bandit model {selected_model} failed: {e}, trying other primary models...")
@@ -580,6 +584,13 @@ python validator.py {target_basename}
             prompt = self._build_prompt(candidate, target_file.name)
             success, model = self._call_ai_with_backoff(prompt, target_file)
 
+            # AIDEV-NOTE: mirrors the plugin coder: when the primary (codex) falls short,
+            # the escalation model (Opus) codes the candidate itself from a clean parent copy.
+            if not success:
+                log("Primary model fell short, escalating to code it...")
+                shutil.copy(source_file, target_file)
+                success, model = self._call_ai_escalated(prompt, target_file)
+
             if not success:
                 log_error("AI failed after all retries")
                 target_file.unlink(missing_ok=True)
@@ -730,7 +741,9 @@ python validator.py {target_basename}
         while processed < self.config.max_candidates:
             # Get next pending candidate
             with EvolutionCSV(self.config.csv_path) as csv:
-                result = csv.get_next_pending_candidate(min_generation=self.config.min_generation)
+                result = csv.get_next_pending_candidate(
+                    min_generation=self.config.min_generation,
+                    max_generation=self.config.max_generation)
 
             if not result:
                 log("No pending candidates")
@@ -831,7 +844,9 @@ def main():
     parser.add_argument('--config', help='Path to config.yaml')
     parser.add_argument('--timeout', type=int, help='Timeout in seconds')
     parser.add_argument('--min-generation', type=int,
-                        help='Only claim candidates from this generation onward (--gens window)')
+                        help='Only claim candidates from this generation onward')
+    parser.add_argument('--max-generation', type=int,
+                        help='Only claim candidates up to this generation')
     args = parser.parse_args()
 
     try:
@@ -840,6 +855,8 @@ def main():
             config.timeout_seconds = args.timeout
         if args.min_generation is not None:
             config.min_generation = args.min_generation
+        if args.max_generation is not None:
+            config.max_generation = args.max_generation
 
         # Initialize file logging in the evolution directory
         init_file_logging(config.evolution_dir)

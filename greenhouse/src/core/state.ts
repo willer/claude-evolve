@@ -52,7 +52,8 @@ export const REST_MARKERS: RegExp[] = [/new task\?/, /\/clear to save\b/];
 // the recent band (see recentBand), not the whole pane: an error left far up in
 // scrollback with a full turn of work after it is resolved history, not a wall.
 // Seen on 1d-soxl-inv 2026-06-20 ("hit your org's monthly spend limit · run
-// /usage-credits …", the limit message just above the live footer).
+// /usage-credits …", the limit message just above the live footer). A dead
+// login is NOT here — it gets its own 'login-expired' state (see below).
 export const STUCK_MARKERS: RegExp[] = [
   /\b(monthly )?spend limit\b/i,
   /\busage limit\b/i,
@@ -95,7 +96,38 @@ function recentBand(text: string): string {
   return text;
 }
 
+// AIDEV-NOTE: login expiry. When the Claude login expires/is revoked, the
+// session and its background subagents die with an auth error and the pane
+// goes byte-static — indistinguishable from an idle 'waiting' composer, so it
+// sat unnoticed for hours. One /login in ANY session fixes the whole machine.
+// Only the pane's last AUTH_TAIL_LINES count (an error scrolled out of that is
+// history), and a "Login successful" AFTER the last error clears it.
+export const AUTH_EXPIRED_MARKERS: RegExp[] = [
+  /please run \/login/i,
+  /oauth token (revoked|has expired|expired)/i,
+  /login expired/i,
+  /authentication_failed/i,
+  /invalid api key/i,
+];
+export const AUTH_RECOVERED_MARKER = /login successful/i;
+export const AUTH_TAIL_LINES = 40;
+
+/** True when the recent pane tail shows an unrecovered auth failure. Pure. */
+export function isAuthExpired(text: string | null): boolean {
+  if (text === null) return false;
+  const tail = text.split('\n').slice(-AUTH_TAIL_LINES);
+  let lastErr = -1;
+  let lastOk = -1;
+  tail.forEach((line, i) => {
+    if (AUTH_EXPIRED_MARKERS.some((re) => re.test(line))) lastErr = i;
+    if (AUTH_RECOVERED_MARKER.test(line)) lastOk = i;
+  });
+  return lastErr >= 0 && lastOk < lastErr;
+}
+
 /** Classify a live session pane:
+ *   - login-expired: an unrecovered auth error in the pane tail (takes
+ *     precedence over everything — nothing else can progress until /login).
  *   - asking: an interactive dialog footer is present.
  *   - working: background shells/subagents are live in the footer, or the pane
  *     is moving.
@@ -110,6 +142,7 @@ export function classifyPane(
 ): { activity: Activity; hash: number | null } {
   if (text === null) return { activity: 'working', hash: prevHash }; // unreadable → assume busy
   const h = hashText(text);
+  if (isAuthExpired(text)) return { activity: 'login-expired', hash: h };
   if (ASKING_MARKERS.some((m) => text.includes(m))) return { activity: 'asking', hash: h };
   const footer = liveFooter(text);
   // Busy markers are scoped to the live footer so stale "N shells" / token rows
