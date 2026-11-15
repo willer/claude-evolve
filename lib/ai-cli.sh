@@ -65,7 +65,8 @@ call_ai_model_configured() {
     # --- Claude (subscription) ---
     opus)
       local ai_output
-      ai_output=$(claude --dangerously-skip-permissions --mcp-config '' --model opus -p "$prompt" 2>&1)
+      # Medium effort: the coding fallback, same as the plugin's coder agent
+      ai_output=$(claude --dangerously-skip-permissions --mcp-config '' --model opus --effort medium -p "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     sonnet)
@@ -128,8 +129,10 @@ $prompt"
       ;;
     codex-coding)
       local ai_output
-      # Medium reasoning - for coding/implementation tasks
-      ai_output=$(codex exec -m gpt-5.6-terra -c model_reasoning_effort="medium" --dangerously-bypass-approvals-and-sandbox "$prompt" 2>&1)
+      # AIDEV-NOTE: same model/effort/sandbox as plugin/scripts/code_with_codex.py.
+      # Luna max beats Terra-xhigh at a third the cost. workspace-write: reads
+      # anywhere, writes only under the cwd (the workspace).
+      ai_output=$(codex exec -m gpt-5.6-luna -c model_reasoning_effort="max" -s workspace-write --skip-git-repo-check "$prompt" 2>&1)
       local ai_exit_code=$?
       ;;
     codex-spark)

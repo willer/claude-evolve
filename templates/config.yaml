@@ -104,20 +104,19 @@ parallel:
   # Timeout in seconds when waiting for CSV locks
   lock_timeout: 30
 
-# LLM/AI CLI configuration — quality-triggered escalation system
-# AIDEV-NOTE: Two tiers for coding:
-#   Primary (run): Cheap/open models for normal code generation
-#   Escalation (run_escalation): Big models activated ONLY on syntax/validation failure
-# No fallback tier — if all primary models are down, fail fast so monitoring catches it.
+# LLM/AI CLI configuration
+# AIDEV-NOTE: Coding mirrors the plugin's coder: codex GPT-5.6 Luna (max) first;
+# Opus (medium) codes it when codex leaves the file unchanged or the code fails
+# syntax/validation. No fallback tier — if every model is down, fail fast.
 llm_cli:
   # Models are selected randomly, repeat for weighted selection (e.g., "model model" = 2x weight)
   # Commented out because defaults change over time; uncomment to override
 
-  # Coding: cheap/open models (flat-rate or low per-token cost)
-  #run: ollama-glm ollama-glm ollama-qwen ollama-qwen ollama-minimax ollama-minimax ollama-gemma ollama-gemma kimi-coder kimi-coder glm-zai qwen-coder minimax
+  # Coding: codex GPT-5.6 Luna at max effort
+  #run: codex-coding
 
-  # Coding escalation: big commercial models, only used when primary produces bad code
-  #run_escalation: sonnet codex-coding gemini-pro
+  # Coding escalation: Opus, when codex fell short or produced bad code
+  #run_escalation: opus
 
   # Ideation: strong thinking models for creative work
   #ideate: opus-think ollama-glm ollama-glm gemini-pro ollama-qwen ollama-minimax ollama-gemma kimi-coder gpt codex-think glm-zai qwen-coder minimax qwen
@@ -141,9 +140,12 @@ llm_cli:
   # - minimax: MiniMax M2.7 via OpenRouter
   # - qwen: Qwen 3.6 Plus via OpenRouter
   #
-  # --- Big commercial (escalation tier) ---
+  # --- Default coding pair ---
+  # - codex-coding: GPT-5.6 Luna, max effort, via Codex CLI (default coder)
+  # - opus: Claude Opus, medium effort, via Claude CLI (default escalation)
+  #
+  # --- Other big commercial ---
   # - sonnet: Claude Sonnet via Claude CLI
-  # - codex-coding: GPT-5.4 medium reasoning via Codex CLI
   # - gemini-pro: Gemini 3 Pro via Gemini CLI
   #
   # --- Ideation models ---

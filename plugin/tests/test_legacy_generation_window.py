@@ -11,6 +11,12 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "lib"))
+# AIDEV-NOTE: the plugin's tests import plugin/lib as the package `lib` (via
+# ideate_branch -> evolve_common). In one pytest process that cached package then
+# shadows the legacy CLI's lib/, and `from lib.meta_learning import ...` fails. Drop
+# it so the legacy lib/ resolves from ROOT.
+for _name in [m for m in sys.modules if m == "lib" or m.startswith("lib.")]:
+    del sys.modules[_name]
 from evolution_csv import EvolutionCSV  # noqa: E402
 from evolve_run import generation_window  # noqa: E402
 

@@ -207,11 +207,14 @@ CRITICAL: If you do not know how to implement what was asked for, or if the requ
                 else:
                     # AIDEV-NOTE: Log output so we can diagnose why file wasn't modified
                     preview = output[-300:] if output else "(empty)"
-                    log(f"Bandit model {selected_model} completed but didn't modify file ({len(output)} chars), trying other primary models...")
+                    log(f"Bandit model {selected_model} completed but didn't modify file ({len(output)} chars)")
                     log(f"AI output preview: {preview}")
                     # AIDEV-NOTE: Report no-modification as failure to bandit
                     self.bandit.update(selected_model, child_score=None, parent_score=self._parent_score)
                     log(f"Bandit update: {selected_model} no file modification")
+                    # The model ran and chose not to code it: that is a coding outcome, not
+                    # an outage, so no backoff retry. The caller hands it to escalation.
+                    return False, selected_model
 
             except AIError as e:
                 log(f"Bandit model {selected_model} failed: {e}, trying other primary models...")
@@ -580,6 +583,13 @@ python validator.py {target_basename}
             # Call AI to modify (uses round-based retry with backoff)
             prompt = self._build_prompt(candidate, target_file.name)
             success, model = self._call_ai_with_backoff(prompt, target_file)
+
+            # AIDEV-NOTE: mirrors the plugin coder: when the primary (codex) falls short,
+            # the escalation model (Opus) codes the candidate itself from a clean parent copy.
+            if not success:
+                log("Primary model fell short, escalating to code it...")
+                shutil.copy(source_file, target_file)
+                success, model = self._call_ai_escalated(prompt, target_file)
 
             if not success:
                 log_error("AI failed after all retries")

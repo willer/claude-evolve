@@ -251,7 +251,7 @@ MODEL_TIMEOUTS = {
     'opus-openrouter': 600, 'cursor-sonnet': 300, 'cursor-opus': 300,
     # Codex/GPT - 10 min standard
     'gpt': 600, 'gpt-high': 900,
-    'codex-think': 900, 'codex-coding': 600, 'codex-spark': 300,
+    'codex-think': 900, 'codex-coding': 1800, 'codex-spark': 300,
     # Gemini - 30 min for pro (streams), 10 min for flash
     'gemini-pro': 1800, 'gemini-flash': 1200,
     'gemini-cheap': 600, 'gemini-pro-openrouter': 1800,
@@ -330,6 +330,9 @@ def call_ai_model(
             text=True,
             cwd=working_dir,
             env=env,
+            # AIDEV-NOTE: stdin MUST be DEVNULL. `codex exec` appends stdin to the prompt and
+            # blocks forever on an inherited pipe that never EOFs (see code_with_codex.py).
+            stdin=subprocess.DEVNULL,
             start_new_session=True,  # Creates new process group
         )
 

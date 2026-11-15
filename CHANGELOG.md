@@ -12,6 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- CLI coding now matches the plugin coder: codex GPT-5.6 Luna (max effort,
+  `-s workspace-write`) codes every candidate first, and Opus (medium effort) codes it
+  when codex leaves the file unchanged or the code fails syntax/validation. The old
+  cheap-model pool (ollama glm/qwen/minimax/gemma, kimi-coder, glm-zai, qwen-coder,
+  minimax) is no longer the default.
+
+### Fixed
+- The LLM bandit no longer re-adds models from a workspace's `llm_bandit.json` that the
+  config no longer names, so removed models (kimi-coder, kimi-k2.5, gpt-5-codex...)
+  stop being picked.
+- AI CLIs run with stdin from /dev/null; `codex exec` blocked on the inherited pipe.
+- `lib/` is a regular package (`lib/__init__.py`), so the plugin's `lib` can't shadow
+  it when both are imported in one process.
+
 ### Added
 
 - `claude-evolve run-noideate genNNN` re-scores pending rows of one generation only

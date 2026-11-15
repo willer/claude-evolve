@@ -464,3 +464,30 @@ scored ideas that set a new board best was Fable 12.3% (n=666), Opus 11.3%
 walk-forward wins on the older Fable, not out-of-sample results. The
 `ideator-fable` agent pins the `fable` alias, so it runs whichever Fable that
 alias resolves to.
+
+## The CLI codes the way the plugin does (2026-11-15)
+
+`claude-evolve run` / `run-noideate` used to pick a coder at random from
+`DEFAULT_LLM_RUN` in `lib/config.sh`: 13 slots of cheap models (ollama glm/qwen/minimax/
+gemma, two `kimi-coder`, glm-zai, qwen-coder, minimax). Sonnet, codex Terra-medium
+and Gemini 3.1 Pro came in only after syntax or validation failures. The operator found
+Kimi errors in a `run-noideate` log. The defaults are now `run: codex-coding`
+(GPT-5.6 Luna, max effort, `-s workspace-write`, the same as `code_with_codex.py`) and
+`run_escalation: opus` (Opus, `--effort medium`, the same as `agents/coder.md`). When
+the primary finishes without changing the file, the worker now goes straight to Opus
+with a clean parent copy, as the plugin does. Before, it retried the primary list for
+up to 10 backoff rounds. Outages (`AIError`) still get the backoff.
+
+Changing the defaults was not enough on its own. `LLMBandit.load()` re-added every model
+found in a workspace's `llm_bandit.json`, and `select_model()` chose among all of them,
+so a model removed from the config kept being picked. All 51 trading-strategies
+workspaces carried `kimi-coder`, and some carried models no longer in `ai-cli.sh` at
+all (`kimi-k2.5`, `gpt-5-codex`, `glm-5`, `codex-oss-local`). Saved stats for a model
+that is not configured are now dropped on load (`plugin/tests/test_legacy_bandit_models.py`).
+
+AI CLIs now get `stdin=DEVNULL`, because `codex exec` appends stdin to its prompt and
+hangs on an inherited pipe. `lib/` gained an empty `__init__.py`: as a namespace package
+it lost to `plugin/lib` whenever both were on `sys.path`, and the full
+`plugin/tests` run failed at collection. CLI ideation (`DEFAULT_LLM_IDEATE`) is unchanged
+for now. npm 1.15.0.
+
