@@ -2199,16 +2199,20 @@ async function attachTerminal(
   });
   ts.ro.observe(wrap);
 
+  let res: { ok: boolean };
   try {
-    await api.session.attach(sessId, term.cols, term.rows);
+    res = await api.session.attach(sessId, term.cols, term.rows);
   } catch (err: unknown) {
     // Attach rejects when tmux can't set the session up (session gone, server
-    // down). Drop the dead entry so the next render can retry, and say why.
+    // down). Drop the dead entry so the next render can retry, and say why —
+    // unless a newer attach already owns this session and its slot.
     console.error(`attach failed for ${sessId}:`, err);
-    if (terms.get(sessId) === ts) teardownTerminal(sessId);
+    if (terms.get(sessId) !== ts) return;
+    teardownTerminal(sessId);
     slot.textContent = `Could not attach to ${sessId}: ${err instanceof Error ? err.message : String(err)}`;
     return;
   }
+  if (!res.ok || terms.get(sessId) !== ts) return; // superseded by a newer attach/detach
   if (focus) term.focus();
   render(); // refresh the control row (detail or tool page)
 }
