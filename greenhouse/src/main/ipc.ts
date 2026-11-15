@@ -213,9 +213,10 @@ export function wireIpc(
   // One attach client per session; re-attach replaces the old client. The
   // renderer passes full session ids (evolve-<dir> / greenhouse-<tool>).
   const attaches = new Map<string, AttachHandle>();
-  ipcMain.handle('session:attach', (_e, id: string, cols: number, rows: number) => {
+  ipcMain.handle('session:attach', async (_e, id: string, cols: number, rows: number) => {
     attaches.get(id)?.close();
-    const handle = host.attach(id, cols, rows);
+    const handle = await host.attach(id, cols, rows);
+    attaches.get(id)?.close(); // a re-attach that landed while this one awaited
     attaches.set(id, handle);
     const { port1, port2 } = new MessageChannelMain();
     handle.onData((chunk) => port1.postMessage(chunk));
@@ -242,6 +243,10 @@ export function wireIpc(
   });
 
   ipcMain.handle('session:unstick', (_e, id: string) => host.unstick(id));
+
+  // PageUp from the embedded terminal (renderer key handler → here); see
+  // SessionHost.pageUp / core/terminalKeys pageUpAction.
+  ipcMain.handle('session:pageUp', (_e, id: string) => host.pageUp(id));
 
   // NAV artifact for one candidate: <workspace>/equity/<id>.csv, written by the
   // trading-strategies evaluator since 2026-06-11. Columns are date,nav with an

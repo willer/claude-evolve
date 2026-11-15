@@ -15,6 +15,7 @@ import {
   toolCmd,
   toolSessionName,
 } from '../core/state';
+import { PANE_STATE_FORMAT, pageUpAction, parsePaneState } from '../core/terminalKeys';
 
 const execFileP = promisify(execFile);
 
@@ -59,6 +60,18 @@ async function assertServerOpts(): Promise<void> {
   }
 }
 
+// AIDEV-NOTE: `mouse on` is a SESSION option, set on every Greenhouse session at
+// start and again on attach (sessions adopted from before this existed, or
+// started by the trading-strategies TUI, get it the first time Greenhouse
+// attaches). Never -g: the operator's other tmux sessions keep their own mouse
+// setting. With mouse on, tmux enables mouse reporting on the xterm client, and
+// its default WheelUpPane binding forwards the wheel to an app with mouse
+// tracking (fullscreen claude) or enters copy-mode over pane history (claude in
+// the normal screen). With mouse off, xterm never reported the wheel at all.
+async function enableMouse(sess: string): Promise<void> {
+  await tmux('set-option', '-t', sess, 'mouse', 'on');
+}
+
 function isNoServerStderr(stderr: string): boolean {
   return /no server running|error connecting to/.test(stderr);
 }
@@ -88,6 +101,7 @@ export class SessionHost {
     await assertServerOpts();
     const sess = sessionName(key);
     await tmux('new-session', '-d', '-s', sess, '-x', '220', '-y', '50', '-c', workspacePath);
+    await enableMouse(sess);
     await tmux('send-keys', '-t', sess, evolutionCmd(), 'Enter');
     return sess;
   }
@@ -99,6 +113,7 @@ export class SessionHost {
     await assertServerOpts();
     const sess = adhocSessionName(key);
     await tmux('new-session', '-d', '-s', sess, '-x', '220', '-y', '50', '-c', workspacePath);
+    await enableMouse(sess);
     await tmux('send-keys', '-t', sess, adhocCmd(), 'Enter');
     return sess;
   }
@@ -111,6 +126,7 @@ export class SessionHost {
     await assertServerOpts();
     const sess = shellSessionName(key);
     await tmux('new-session', '-d', '-s', sess, '-x', '220', '-y', '50', '-c', workspacePath, SHELL_CMD);
+    await enableMouse(sess);
     return sess;
   }
 
@@ -121,12 +137,18 @@ export class SessionHost {
     await assertServerOpts();
     const sess = toolSessionName(id);
     await tmux('new-session', '-d', '-s', sess, '-x', '220', '-y', '50', '-c', root);
+    await enableMouse(sess);
     await tmux('send-keys', '-t', sess, toolCmd(key), 'Enter');
     return sess;
   }
 
-  attach(id: string, cols: number, rows: number): AttachHandle {
+  /** Attach a pty tmux client. Async because the session's `mouse on` must be
+   *  in place before the client attaches (adopted sessions never went through
+   *  start); a failure there rejects the attach rather than leaving a pane the
+   *  wheel silently cannot scroll. */
+  async attach(id: string, cols: number, rows: number): Promise<AttachHandle> {
     void assertServerOpts(); // adopted sessions never went through start
+    await enableMouse(id);
     const proc = pty.spawn('tmux', ['attach', '-t', id], {
       name: 'xterm-256color',
       cols,
@@ -147,6 +169,18 @@ export class SessionHost {
       close: () => proc.kill(),
       onClose: (cb) => proc.onExit(() => cb()),
     };
+  }
+
+  /** PageUp from the embedded terminal (core/terminalKeys pageUpAction): page
+   *  the pane's tmux history via copy-mode when claude draws in the normal
+   *  screen, otherwise forward the key. tmux errors propagate. */
+  async pageUp(id: string): Promise<void> {
+    const state = parsePaneState(await tmux('display-message', '-p', '-t', id, PANE_STATE_FORMAT));
+    if (pageUpAction(state) === 'copy-mode') {
+      await tmux('copy-mode', '-e', '-u', '-t', id);
+    } else {
+      await tmux('send-keys', '-t', id, 'PageUp');
+    }
   }
 
   /** Nudge a stuck session: Esc (clear any half-typed prompt / dismiss a

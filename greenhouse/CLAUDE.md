@@ -149,19 +149,22 @@ IPC straight from data/raw/<SYM>_1d_*.csv over each period window (SPY measured
 over the instrument's own window so differing inceptions stay comparable). It's
 retroactive (reads raw prices, no re-run) and absent when the workspace has no
 resolvable symbol. Period bounds mirror backtest-all (core/backtests.ts
-PERIOD_BOUNDS — LOCKSTEP). Terminal wheel-scroll: xterm handles the wheel
-natively (NO custom handler) and forwards it as a mouse sequence to the attached
-app. claude runs in the alternate screen with mouse tracking on, so tmux keeps
-ZERO scrollback for its pane (`history_size` 0) — the earlier copy-mode hijack
-scrolled a buffer that didn't exist and, by returning false, stopped the wheel
-ever reaching claude, so claude couldn't scroll its own conversation. tmux
-`mouse off` means tmux forwards mouse events to the app instead of grabbing them.
-The old `session:scroll` IPC / `SessionHost.scroll` / copy-mode path is deleted.
+PERIOD_BOUNDS — LOCKSTEP). Terminal scrolling (task 1111, 2026-11-15): every
+Greenhouse session gets tmux `mouse on` as a SESSION option (never -g) at start
+and on attach, so tmux enables mouse reporting in xterm and its default wheel
+binding either forwards to fullscreen claude or enters copy-mode over pane
+history (claude in the normal screen). The earlier `mouse off` setup meant xterm
+never reported the wheel, so nothing scrolled. PageUp is intercepted by the
+renderer and sent to main (`session:pageUp` → `SessionHost.pageUp`), which reads
+`#{alternate_on} #{pane_in_mode}` and enters `copy-mode -e -u` or forwards the
+key (pure decision: core/terminalKeys pageUpAction). PageDown passes through.
+Plain drags now go to tmux; Option-drag makes a native selection
+(`macOptionClickForcesSelection`). See ../docs/TRUTH.md. Unverified (needs a
+human with a real wheel + live claude session).
 Detail-view NAV charts (leader walk-forward + per-period) open an INTERACTIVE
 viewer (drag/shift-wheel pan, wheel/± zoom, reset) that re-slices the series so
 the Y axis autoscales and the return/CAGR/maxDD/Sharpe badge reflect the visible
-window; every other chart still uses the static enlarge. Unverified (need a
-human with a real wheel + live claude session): that claude now scrolls on wheel.
+window; every other chart still uses the static enlarge.
 The detail Leader heading carries PRODUCTION pills read from the parent root's
 inference-all (core/inferenceAll.ts, pure + tested): a blend pill when this
 workspace is only one leg of a MIXED signal (`("a+b", …)` — inference.py
