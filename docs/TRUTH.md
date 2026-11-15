@@ -56,8 +56,7 @@ left-to-right — but each can only plot the generations it has data for, and th
 differ:
 
 - a generation with no completed candidate has no score, so it is absent from the sparkline;
-- a generation whose rows carry `return_YYYY` but never got a walk-forward score (cheap
-  single-window backfill) has year points but no score point.
+- a generation whose winner carries no `return_YYYY` has a score point but no year points.
 
 Both charts used to position points by ARRAY INDEX, which stretched each chart's own subset
 across the same pixel width. Gen 850 then sat at 40% of one panel and 92% of the other, and
@@ -75,10 +74,12 @@ the same generation.
 `ChartX` is optional: the tiny fleet-list/grid sparklines pass none and keep index
 positioning (no axis, no sibling chart to line up with).
 
-Related and committed with it: `GenStats.yearRow` (csv.ts) — the row that backs the year
-chart, chosen by HAVING year data rather than by performance (earliest id wins, but the
-generation champion wins whenever it has the columns). That is what lets a scored-but-not-
-walk-forward generation appear on the year chart at all; `best` alone hid it.
+Related: `GenStats.yearRow` (csv.ts) — the row that backs the year chart. Since
+2026-11-15 it is the generation's `best` when that row carries `return_YYYY`, else null:
+the year chart draws a generation only when it has a winner, the same rule as the score
+chart. A generation of only pending/failed/skipped rows is not drawn even if some row has
+year data. (Before, any row with year data could back the point, so winnerless
+generations still showed up on the year chart.)
 
 Verified 2026-08-06 through the `EG_SHOT` harness against a synthetic root built for the
 mismatch (scores on gens 20–40, `return_YYYY` on gens 0–30): shared domain 0–40, the score

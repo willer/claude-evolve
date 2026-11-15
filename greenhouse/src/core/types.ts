@@ -30,10 +30,9 @@ export interface GenStats {
   failed: number;
   skipped: number;
   best: Candidate | null;
-  /** Row backing the year-returns chart. Chosen by CARRYING return_YYYY data, NOT by
-   * performance, so a generation can be plotted from cheap single-window backtests that
-   * never produce a walk-forward fitness. Prefers `best` when that row has year data, so
-   * a fully-scored generation still plots its champion. Null when nothing has year data. */
+  /** Row backing the year-returns chart: the generation's `best` when that row carries
+   * return_YYYY data, else null. A generation with no winner (all pending/failed/skipped)
+   * is never plotted, matching the score chart. */
   yearRow: Candidate | null;
 }
 

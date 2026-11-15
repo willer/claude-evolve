@@ -1858,9 +1858,8 @@ function renderDetail(): void {
       : '';
   const years = yearSeries(r);
   // Generation numbers behind each chart's X positions. Each chart drops the generations
-  // IT cannot plot, so the two lists differ whenever a generation has year data but no
-  // walk-forward score (cheap single-window backfill) or the reverse — each list must stay
-  // filtered in step with its own series. They then share ONE x domain (min of the two
+  // IT cannot plot. Both require a winner (`best`); the year list also drops winners
+  // without return_YYYY data — each list must stay filtered in step with its own series. They then share ONE x domain (min of the two
   // mins, max of the two maxes) and position points by real generation number, so a
   // vertical line through the two stacked panels is the same generation in both and the
   // enlarged views print identical "gen N" ticks. Index positioning could not do that: it

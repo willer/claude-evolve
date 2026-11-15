@@ -140,10 +140,9 @@ describe('computeStats', () => {
     expect(computeStats(text, 'gen09-009').pinned).toBeNull(); // pinned id not in the CSV
   });
 
-  it('picks a yearRow from year data alone, so unscored gens still plot', () => {
-    // gen02 was never walk-forward scored — no performance, status skipped — but a cheap
-    // single-window backtest filled return_2025. It must still back a year-chart point,
-    // otherwise archived generations are unplottable without a full 15-window re-score.
+  it('leaves yearRow null for a generation with no winner, even with year data', () => {
+    // gen02 has return_2025 on a skipped row but no scored champion. The year chart must
+    // skip it, exactly as the score chart does.
     const text = [
       HEADER,
       row('gen01-001', '1.0', 'complete', ['', '', '', '0.11']),
@@ -152,7 +151,7 @@ describe('computeStats', () => {
     const s = computeStats(text);
     const g2 = s.generations.find((g) => g.gen === 2);
     expect(g2?.best).toBeNull(); // no score → absent from the sparkline
-    expect(g2?.yearRow?.id).toBe('gen02-001'); // but present on the year chart
+    expect(g2?.yearRow).toBeNull(); // and absent from the year chart
     expect(s.sparkline).toEqual([1.0]);
   });
 
@@ -901,19 +900,29 @@ describe('computeStats yearRow', () => {
     expect(g.yearRow!.id).toBe('gen05-002');
   });
 
-  it('plots an unscored generation from any row that has year data', () => {
-    // Cheap single-window backtests fill return_YYYY without a walk-forward score,
-    // so this generation has no `best` but still belongs on the year chart.
+  it('does not plot a generation whose rows are all pending or failed', () => {
     const csv = [
       HEADER,
       row('gen06-001', '', 'pending', ['', '', '', '']),
       row('gen06-002', '', 'pending', ['', '', '', '0.12']),
-      row('gen06-003', '', 'pending', ['', '', '', '0.99']),
+      row('gen06-003', '', 'failed', ['', '', '', '0.99']),
       '',
     ].join('\n');
     const g = computeStats(csv).generations.find((x) => x.gen === 6)!;
     expect(g.best).toBeNull();
-    expect(g.yearRow!.id).toBe('gen06-002'); // earliest id with year data wins
+    expect(g.yearRow).toBeNull();
+  });
+
+  it('does not borrow a sibling row when the champion has no year data', () => {
+    const csv = [
+      HEADER,
+      row('gen08-001', '1.0', 'complete', ['', '', '', '0.12']),
+      row('gen08-002', '2.0', 'complete', ['', '', '', '']),
+      '',
+    ].join('\n');
+    const g = computeStats(csv).generations.find((x) => x.gen === 8)!;
+    expect(g.best!.id).toBe('gen08-002');
+    expect(g.yearRow).toBeNull();
   });
 
   it('leaves yearRow null when no row in the generation has year data', () => {

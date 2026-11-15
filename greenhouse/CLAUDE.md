@@ -175,9 +175,9 @@ detail charts (best score, year returns) now share ONE x domain —
 generation coverage and maps each chart's gens to 0..1 positions on it, so a
 vertical line through the stacked panels is the same generation and both
 enlarged views print the same gen ticks; the year chart plots
-`GenStats.yearRow` (chosen by HAVING return_YYYY, champion preferred) instead
-of `best`, so a generation with year data but no walk-forward score still
-appears. The small list/grid sparklines pass no axis and keep index positions.
+`GenStats.yearRow` — the generation's `best` when it carries return_YYYY, else
+null — so, like the score chart, a generation with no winner (all
+pending/failed/skipped) is not drawn (2026-11-15). The small list/grid sparklines pass no axis and keep index positions.
 The detail Winner / Pinned tabs switch EVERY per-algo panel (summary, Backtest
 table, walk-forward NAV, Backtest NAV by period, returns by year); only the
 history at the bottom (two per-generation charts + generation table) is
