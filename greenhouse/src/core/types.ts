@@ -34,9 +34,6 @@ export interface GenStats {
    * return_YYYY data, else null. A generation with no winner (all pending/failed/skipped)
    * is never plotted, matching the score chart. */
   yearRow: Candidate | null;
-  /** Any row in the generation carries return_YYYY data, winner or not (e.g. a re-score in
-   * progress). Widens the per-generation charts' shared x axis without plotting a point. */
-  hasYearData: boolean;
 }
 
 /** Everything the dashboard knows about one workspace's CSV. */

@@ -177,8 +177,8 @@ vertical line through the stacked panels is the same generation and both
 enlarged views print the same gen ticks; the year chart plots
 `GenStats.yearRow` — the generation's `best` when it carries return_YYYY, else
 null — so, like the score chart, a generation with no winner (all
-pending/failed/skipped) is not drawn (2026-11-15); the shared x axis still spans
-generations with year data on any row (`hasYearData`), showing how far back a re-score reaches. The small list/grid sparklines pass no axis and keep index positions.
+pending/failed/skipped) is not drawn (2026-11-15); the shared x axis always starts
+at gen 0. The small list/grid sparklines pass no axis and keep index positions.
 The detail Winner / Pinned tabs switch EVERY per-algo panel (summary, Backtest
 table, walk-forward NAV, Backtest NAV by period, returns by year); only the
 history at the bottom (two per-generation charts + generation table) is

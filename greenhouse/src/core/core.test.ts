@@ -152,7 +152,6 @@ describe('computeStats', () => {
     const g2 = s.generations.find((g) => g.gen === 2);
     expect(g2?.best).toBeNull(); // no score → absent from the sparkline
     expect(g2?.yearRow).toBeNull(); // and absent from the year chart
-    expect(g2?.hasYearData).toBe(true); // but still widens the shared x axis
     expect(s.sparkline).toEqual([1.0]);
   });
 
@@ -912,7 +911,6 @@ describe('computeStats yearRow', () => {
     const g = computeStats(csv).generations.find((x) => x.gen === 6)!;
     expect(g.best).toBeNull();
     expect(g.yearRow).toBeNull();
-    expect(g.hasYearData).toBe(true);
   });
 
   it('does not borrow a sibling row when the champion has no year data', () => {
@@ -929,9 +927,7 @@ describe('computeStats yearRow', () => {
 
   it('leaves yearRow null when no row in the generation has year data', () => {
     const csv = [HEADER, row('gen07-001', '1.0', 'complete', ['2', '0.1', '0.2', '']), ''].join('\n');
-    const g = computeStats(csv).generations.find((x) => x.gen === 7)!;
-    expect(g.yearRow).toBeNull();
-    expect(g.hasYearData).toBe(false);
+    expect(computeStats(csv).generations.find((x) => x.gen === 7)!.yearRow).toBeNull();
   });
 });
 
