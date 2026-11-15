@@ -56,12 +56,13 @@ ARGON_PREFACE = ("Tools: shell commands (run_command) are DENIED in this session
                  "on without it — you must still end with the JSON array.\n\n")
 OPENROUTER_MODELS = {
     "grok": "x-ai/grok-4.7",
+    "carbon": "google/gemini-4-carbon",
     "glm": "z-ai/glm-5.3-flash",
     "kimi": "moonshotai/kimi-k3",
     "qwen": "qwen/qwen3.8-max",
 }
 # claude --effort per OpenRouter source; OpenRouter maps it to the provider's reasoning effort.
-OPENROUTER_EFFORT = {"grok": "max"}
+OPENROUTER_EFFORT = {"grok": "max", "carbon": "high"}
 OPENROUTER_BASE = "https://openrouter.ai/api"  # claude appends /v1/messages itself
 SUBAGENT_SOURCES = ("opus", "fable")  # answered by a pinned ideator subagent, not run here
 SOURCES = SUBAGENT_SOURCES + ("codex", "argon") + tuple(OPENROUTER_MODELS)  # everything the script can run
@@ -265,13 +266,49 @@ def run_external(source, prompt_file, workdir, timeout):
                    ANTHROPIC_DEFAULT_HAIKU_MODEL=model, CLAUDE_CODE_SUBAGENT_MODEL=model)
         cmd = ["claude", "-p", "--bare", "--model", model, "--tools", "Read,Grep,Glob",
                "--no-session-persistence", "--setting-sources", "",
-               "--strict-mcp-config", "--disable-slash-commands"]
+               "--strict-mcp-config", "--disable-slash-commands",
+               "--output-format", "stream-json", "--verbose"]
         if source in OPENROUTER_EFFORT:
             cmd += ["--effort", OPENROUTER_EFFORT[source]]
         with open(prompt_file) as fh:
             proc = subprocess.run(cmd, stdin=fh, capture_output=True, text=True,
                                   cwd=str(workdir), env=env, timeout=timeout)
+        return proc.returncode, final_turn_text(proc.stdout or ""), (proc.stderr or "")
     return proc.returncode, (proc.stdout or ""), (proc.stderr or "")
+
+
+def final_turn_text(stream):
+    """The answer text from a `claude -p --output-format stream-json` transcript.
+
+    AIDEV-NOTE: NOT the result event's `result` field. Gemini via OpenRouter ends its
+    turn with a separate empty `redacted_thinking` message after the text, and claude -p
+    fills `result` from that LAST message only — so `result` is "" while the answer sits
+    in the message before it (found Nov 15 2026 with Gemini 4 Carbon; very likely why
+    Argon looked empty on this route in Oct). Return the LAST text block after the last
+    tool_use: Carbon sometimes emits a cut-off draft block (raw newline mid-string) and
+    then the full answer as a second block, and joining them breaks the JSON parse.
+    """
+    texts, result = [], None
+    for line in stream.splitlines():
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if ev.get("type") == "assistant":
+            for block in ev.get("message", {}).get("content", []):
+                if block.get("type") == "tool_use":
+                    texts = []
+                elif block.get("type") == "text" and block.get("text"):
+                    texts.append(block["text"])
+        elif ev.get("type") == "result":
+            result = ev
+    if result is None:
+        raise RuntimeError(f"claude -p produced no result event; stdout tail: {stream.strip()[-800:]}")
+    if result.get("is_error"):
+        raise RuntimeError(f"claude -p error: {result.get('result')}")
+    if not texts:
+        raise RuntimeError("claude -p finished with no answer text in its final turn")
+    return texts[-1]
 
 
 def _run_argon(prompt_file, workdir, timeout):
