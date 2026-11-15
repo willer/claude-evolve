@@ -79,7 +79,9 @@ Related: `GenStats.yearRow` (csv.ts) — the row that backs the year chart. Sinc
 the year chart draws a generation only when it has a winner, the same rule as the score
 chart. A generation of only pending/failed/skipped rows is not drawn even if some row has
 year data. (Before, any row with year data could back the point, so winnerless
-generations still showed up on the year chart.)
+generations still showed up on the year chart.) The shared x axis still spans every
+generation with year data on ANY row (`GenStats.hasYearData`), so a re-score reaching back
+into old generations shows how far back it goes before those points have winners.
 
 Verified 2026-08-06 through the `EG_SHOT` harness against a synthetic root built for the
 mismatch (scores on gens 20–40, `return_YYYY` on gens 0–30): shared domain 0–40, the score

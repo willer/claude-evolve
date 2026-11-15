@@ -1868,7 +1868,10 @@ function renderDetail(): void {
   // the score chart beside it looked like it spanned the whole history.
   const sparkGens = s.generations.filter((g) => g.best !== null).map((g) => g.gen);
   const yearGens = s.generations.filter((g) => g.yearRow !== null).map((g) => g.gen);
-  const genAx = sharedGenDomain([sparkGens, yearGens]);
+  // The axis also spans generations with year data but no winner yet (a re-score in
+  // progress), so the charts show how far back that work reaches without plotting it.
+  const yearDataGens = s.generations.filter((g) => g.hasYearData).map((g) => g.gen);
+  const genAx = sharedGenDomain([sparkGens, yearGens, yearDataGens]);
   // Enough data to draw? Mirrors multiLineSvg's own emptiness guard so we can
   // decide whether to show the panel without rendering a throwaway SVG.
   const yearVals = years.flatMap((sr) => sr.values.filter((v): v is number => v !== null));

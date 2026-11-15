@@ -132,10 +132,11 @@ export function computeStats(text: string, pinId: string | null = null): Workspa
     latestGen = Math.max(latestGen, gen);
     let g = byGen.get(gen);
     if (!g) {
-      g = { gen, pending: 0, running: 0, complete: 0, failed: 0, skipped: 0, best: null, yearRow: null };
+      g = { gen, pending: 0, running: 0, complete: 0, failed: 0, skipped: 0, best: null, yearRow: null, hasYearData: false };
       byGen.set(gen, g);
     }
     (g as unknown as Record<string, number>)[bucket]++;
+    if (yearCols.some((k) => c.metrics[k] !== undefined)) g.hasYearData = true;
 
     if (c.status === 'complete' && c.performance !== null) {
       // Highest score wins; ties go to the earliest id (matches autostatus).
