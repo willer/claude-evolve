@@ -363,7 +363,7 @@ same outcome for about a third of the work, with no per-window state.
 
 ## OpenRouter ideation sources run through `claude -p`, not opencode (2026-09-25)
 
-`plugin/scripts/ideate_branch.py` runs grok (and the unrolled glm/kimi/qwen)
+`plugin/scripts/ideate_branch.py` runs grok
 as `claude -p --bare --model <slug> --tools Read,Grep,Glob --effort <e>` (read-only tools: with none, Grok stops after "I'll inspect the leader..." and returns no JSON) with the prompt
 on stdin and the routing env Spaces uses for its claude/grok route
 (`anthropicEndpointEnv` in Spaces `core/launch.ts`):
@@ -464,6 +464,16 @@ scored ideas that set a new board best was Fable 12.3% (n=666), Opus 11.3%
 walk-forward wins on the older Fable, not out-of-sample results. The
 `ideator-fable` agent pins the `fable` alias, so it runs whichever Fable that
 alias resolves to.
+
+## GLM, Kimi and Qwen removed from the plugin (2026-11-15)
+
+The plugin's unrolled OpenRouter ideation sources `glm`, `kimi` and `qwen` are gone from
+`OPENROUTER_MODELS` in `plugin/scripts/ideate_branch.py`. `ENABLED_SOURCES` never included
+them, so no generation used them; they only answered a hand-typed `--source`. `carbon`
+(Gemini 4 Carbon) is now the one wired-but-unrolled OpenRouter source. Plugin coding
+never used them: it is codex GPT-5.6 Luna first, with the Opus coder judging and falling back.
+Adding a source back is a model slug plus an `ENABLED_SOURCES` entry. The `claude-evolve`
+command's ideation list (`DEFAULT_LLM_IDEATE` in `lib/config.sh`) still names them. Plugin 0.3.11.
 
 ## The CLI codes the way the plugin does (2026-11-15)
 

@@ -16,12 +16,12 @@ assembly deterministically instead:
                             parse its JSON array, write <out>. No subagent.
   --source argon            same, through Google's Antigravity CLI (`agy`,
                             Gemini 4 Argon). No subagent.
-  --source grok|glm|kimi|qwen
+  --source grok|carbon
                             same, but through a headless `claude -p` pointed at
                             OpenRouter (the Spaces claude/grok route). No subagent.
 
 The skill's dice roll uses ENABLED_SOURCES (opus / fable / codex GPT-6 Astra / argon / grok);
-the other OpenRouter models stay wired so a roll change is a one-line edit.
+carbon is wired but not rolled, so adding it to the roll is a one-line edit.
 
 Usage:
   ideate_branch.py --working-dir DIR --context-file ctx.json --out branch.json
@@ -57,9 +57,6 @@ ARGON_PREFACE = ("Tools: shell commands (run_command) are DENIED in this session
 OPENROUTER_MODELS = {
     "grok": "x-ai/grok-4.7",
     "carbon": "google/gemini-4-carbon",
-    "glm": "z-ai/glm-5.3-flash",
-    "kimi": "moonshotai/kimi-k3",
-    "qwen": "qwen/qwen3.8-max",
 }
 # claude --effort per OpenRouter source; OpenRouter maps it to the provider's reasoning effort.
 OPENROUTER_EFFORT = {"grok": "max", "carbon": "high"}
@@ -69,7 +66,7 @@ SOURCES = SUBAGENT_SOURCES + ("codex", "argon") + tuple(OPENROUTER_MODELS)  # ev
 # AIDEV-NOTE: Nov 10 2026 policy — the roll is a d8: 1/8 Opus 5.5 high, 3/8 Fable 5.2 high,
 # 2/8 GPT-6 Astra xhigh, 1/8 Gemini 4 Argon high, 1/8 Grok 4.7 max. Fable got the largest
 # share: measured Oct 16-Nov 9 it set a new board best on 12.3% of scored ideas vs Opus 11.3%,
-# Astra 8.4%, Grok 7.2% (Argon 4/45 beat parent, too few to judge). GLM/Kimi/Qwen stay wired.
+# Astra 8.4%, Grok 7.2% (Argon 4/45 beat parent, too few to judge). Carbon is wired, not rolled.
 ENABLED_SOURCES = ("opus", "fable", "codex", "argon", "grok")
 STRATEGIES = ("novel_exploration", "hill_climbing", "structural_mutation", "crossover_hybrid")
 DEFAULT_TIMEOUT = 1800  # 30 min — reasoning models at xhigh routinely take 10+ min
