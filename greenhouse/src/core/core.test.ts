@@ -128,6 +128,21 @@ describe('computeStats', () => {
     expect(computeStats(text).sparkline).toEqual([1.0, 2.0, 3.0]);
   });
 
+  it('pairs each sparkline point with its generation, skipping winnerless gens', () => {
+    // gen02 has no scored candidate: the trend must not invent a point for it, and the
+    // remaining points carry their real generations so the tile can leave the gap.
+    const text = [
+      HEADER,
+      row('gen01-001', '1.0', 'complete'),
+      row('gen02-001', '', 'failed'),
+      row('gen02-002', '', 'pending'),
+      row('gen03-001', '3.0', 'complete'),
+    ].join('\n');
+    const s = computeStats(text);
+    expect(s.sparkline).toEqual([1.0, 3.0]);
+    expect(s.sparkGens).toEqual([1, 3]);
+  });
+
   it('resolves the production pin to its row only when it is NOT the leader', () => {
     const text = [
       HEADER,

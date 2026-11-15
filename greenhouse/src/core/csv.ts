@@ -165,9 +165,9 @@ export function computeStats(text: string, pinId: string | null = null): Workspa
   }
 
   const generations = [...byGen.values()].sort((a, b) => a.gen - b.gen);
-  const sparkline = generations
-    .filter((g) => g.best !== null)
-    .map((g) => g.best!.performance as number);
+  const scored = generations.filter((g) => g.best !== null);
+  const sparkline = scored.map((g) => g.best!.performance as number);
+  const sparkGens = scored.map((g) => g.gen);
 
   // Recent success rate: c/(c+f) over the 5 gens before the latest (which may
   // still be mid-run). gen 0 (baseline) participates only if it's not alone.
@@ -201,6 +201,7 @@ export function computeStats(text: string, pinId: string | null = null): Workspa
     recentSuccessRate,
     recentFails,
     sparkline,
+    sparkGens,
     generations,
     metricColumns,
   };
@@ -266,6 +267,7 @@ export function emptyStats(error: string | null): WorkspaceStats {
     recentSuccessRate: null,
     recentFails: 0,
     sparkline: [],
+    sparkGens: [],
     generations: [],
     metricColumns: [],
   };

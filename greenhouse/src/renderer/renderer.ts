@@ -35,6 +35,7 @@ import type {
   SessionState,
   ToolState,
   WorkspaceRow,
+  WorkspaceStats,
 } from '../core/types';
 
 type BacktestSummary = {
@@ -241,8 +242,7 @@ function yAxisGutter(
 // A chart's points placed on the SHARED generation domain: `fracs[i]` is point i's
 // 0..1 position across the plot width (from core/genAxis), `ax` is the domain both
 // per-generation charts draw on so a given generation sits at the same x in each.
-// Absent ⇒ the chart falls back to index positioning (the tiny list/grid sparklines,
-// which have no axis and no sibling to line up with).
+// Absent ⇒ the chart falls back to index positioning.
 type ChartX = { fracs: number[]; ax: GenAxis; gens: number[] };
 
 /** Shared X positioning for the two per-generation charts: real generation numbers over
@@ -336,6 +336,15 @@ function sparklineSvg(
     `<circle cx="${last[0]}" cy="${last[1]}" r="2.2" style="fill: ${color}"/>` +
     `</svg>`
   );
+}
+
+// AIDEV-NOTE: the small score-trend sparklines (list column, grid card, peek) place
+// points by REAL generation, like the detail chart, so a generation with no winner is a
+// visible gap in x instead of the next scored generation sliding into its slot. Unlike
+// the detail chart, the domain is the scored span only (no gen-0 anchor).
+function tileSparkSvg(s: WorkspaceStats, w: number, h: number, color: string): string {
+  const ax = sharedGenDomain([s.sparkGens]);
+  return sparklineSvg(s.sparkline, w, h, color, false, ax ? chartX(s.sparkGens, ax) : undefined);
 }
 
 const SERIES_COLORS = ['var(--cyan)', 'var(--magenta)', 'var(--green)', 'var(--yellow)', 'var(--red)'];
@@ -1308,7 +1317,7 @@ function renderList(order: WorkspaceRow[]): void {
         <td class="num ${gens !== null && gens > PLATEAU_GENS ? 'warn' : ''}" title="Generations since the leader">${gens ?? '—'}</td>
         <td class="num ${s.recentFails > FAILING_FAILS ? 'warn' : rate !== null ? 'pos' : ''}" title="Success rate, last 5 gens (${s.recentFails} fails in last 2)">${rate === null ? '--' : `${Math.round(rate * 100)}%`}</td>
         <td class="num ${age.stale ? 'stale' : ''}">${age.text}</td>
-        <td>${sparklineSvg(s.sparkline, 120, 20, HEALTH_COLOR[h.level])}</td>
+        <td>${tileSparkSvg(s, 120, 20, HEALTH_COLOR[h.level])}</td>
         <td><div class="actions">${evoButtons(r)}</div></td>
         <td><div class="actions">${adhocButtons(r)}</div></td>
         <td><div class="actions">${shellButtons(r)}</div></td>
@@ -1365,7 +1374,7 @@ function renderGridCards(order: WorkspaceRow[]): void {
               : `<div class="desc">no completed candidates yet</div>`
         }
         <div class="metrics">${metrics}</div>
-        ${sparklineSvg(s.sparkline, 300, 34, HEALTH_COLOR[h.level])}
+        ${tileSparkSvg(s, 300, 34, HEALTH_COLOR[h.level])}
         <div class="foot">
           <span>gen${String(s.latestGen).padStart(3, '0')}</span>
           <span class="${gens !== null && gens > PLATEAU_GENS ? 'warn' : ''}" title="Generations since the leader">▲${gens ?? '–'}</span>
@@ -1418,7 +1427,7 @@ function renderPeek(): void {
         : ''
     }
     <h4>Best score by generation</h4>
-    ${sparklineSvg(s.sparkline, 404, 44, HEALTH_COLOR[h.level])}
+    ${tileSparkSvg(s, 404, 44, HEALTH_COLOR[h.level])}
     <h4>Run</h4>
     <div class="metric-grid">
       ${
@@ -1867,7 +1876,7 @@ function renderDetail(): void {
   // stretched each chart's own subset over the full width, which is why a board with year
   // data on only its recent generations drew those lines crushed against one edge while
   // the score chart beside it looked like it spanned the whole history.
-  const sparkGens = s.generations.filter((g) => g.best !== null).map((g) => g.gen);
+  const sparkGens = s.sparkGens;
   const yearGens = s.generations.filter((g) => g.yearRow !== null).map((g) => g.gen);
   // The axis always starts at gen 0, so the charts show the whole history even when only
   // recent generations have points (e.g. while old generations are being re-scored).

@@ -181,7 +181,10 @@ enlarged views print the same gen ticks; the year chart plots
 `GenStats.yearRow` — the generation's `best` when it carries return_YYYY, else
 null — so, like the score chart, a generation with no winner (all
 pending/failed/skipped) is not drawn (2026-11-15); the shared x axis always starts
-at gen 0. The small list/grid sparklines pass no axis and keep index positions.
+at gen 0. The small score-trend sparklines (list column, grid card, peek) also
+place points by real generation (`WorkspaceStats.sparkGens`, renderer
+`tileSparkSvg`), over the scored span only — no gen-0 anchor — so a winnerless
+generation is a gap in x rather than the next point sliding into its slot.
 The detail Winner / Pinned tabs switch EVERY per-algo panel (summary, Backtest
 table, walk-forward NAV, Backtest NAV by period, returns by year); only the
 history at the bottom (two per-generation charts + generation table) is

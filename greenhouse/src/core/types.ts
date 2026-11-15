@@ -53,8 +53,10 @@ export interface WorkspaceStats {
   recentSuccessRate: number | null;
   /** Failures across the last 2 generations, including the mid-run latest. */
   recentFails: number;
-  /** Best score per generation, ascending by gen — the card sparkline. */
+  /** Best score per generation, ascending by gen — the card sparkline. Only
+   *  generations with a winner appear; `sparkGens[i]` is `sparkline[i]`'s generation. */
   sparkline: number[];
+  sparkGens: number[];
   generations: GenStats[];
   /** Metric column names that have at least one numeric value. */
   metricColumns: string[];
