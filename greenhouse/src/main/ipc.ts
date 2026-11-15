@@ -213,10 +213,24 @@ export function wireIpc(
   // One attach client per session; re-attach replaces the old client. The
   // renderer passes full session ids (evolve-<dir> / greenhouse-<tool>).
   const attaches = new Map<string, AttachHandle>();
+  // Bumped by every attach and detach of an id. An attach that finds its
+  // generation moved on after the await was superseded (detached or replaced
+  // meanwhile) and closes its own client instead of publishing it.
+  const attachGen = new Map<string, number>();
+  const bumpGen = (id: string): number => {
+    const g = (attachGen.get(id) ?? 0) + 1;
+    attachGen.set(id, g);
+    return g;
+  };
   ipcMain.handle('session:attach', async (_e, id: string, cols: number, rows: number) => {
+    const gen = bumpGen(id);
     attaches.get(id)?.close();
     const handle = await host.attach(id, cols, rows);
-    attaches.get(id)?.close(); // a re-attach that landed while this one awaited
+    if (attachGen.get(id) !== gen) {
+      handle.close();
+      return { ok: false, superseded: true };
+    }
+    attaches.get(id)?.close();
     attaches.set(id, handle);
     const { port1, port2 } = new MessageChannelMain();
     handle.onData((chunk) => port1.postMessage(chunk));
@@ -231,13 +245,14 @@ export function wireIpc(
     handle.onClose(() => {
       port1.postMessage({ __eg: 'detached' });
       port1.close();
-      attaches.delete(id);
+      if (attaches.get(id) === handle) attaches.delete(id);
     });
     win()?.webContents.postMessage('session:port', { attachId: id }, [port2]);
     return { ok: true };
   });
 
   ipcMain.handle('session:detach', (_e, id: string) => {
+    bumpGen(id);
     attaches.get(id)?.close();
     attaches.delete(id);
   });
