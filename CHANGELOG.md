@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `claude-evolve run-noideate genNNN` re-scores pending rows of one generation only
+  (e.g. `run-noideate gen822`). `run genNNN` is refused, since ideation never adds rows
+  to an old generation. Test: `plugin/tests/test_legacy_generation_window.py`.
+
 ### Fixed
 
 - Re-scoring no longer rewrites candidates. A pending row whose `evolution_<id>.py` already holds code (prepare.py `already_exists: true`) is scored as-is: the coder agent skips coding, and `code_with_codex.py` refuses (exit 3, `already_coded`) any file that is not a pristine parent copy, so neither codex nor the restore-parent fallback can overwrite it. Test: `plugin/tests/test_code_with_codex_guard.py`.

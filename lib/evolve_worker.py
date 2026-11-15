@@ -56,7 +56,8 @@ class Config:
     timeout_seconds: int = 600
     nice: int = 10  # evaluator CPU priority (os.nice increment); yields to production work
     max_candidates: int = 5
-    min_generation: Optional[int] = None  # Only claim candidates >= this generation (--gens window)
+    min_generation: Optional[int] = None  # Only claim candidates >= this generation (run selector window)
+    max_generation: Optional[int] = None  # Only claim candidates <= this generation (genNNN selector)
     max_validation_retries: int = 3  # Max attempts to fix validation errors (if validator.py exists)
     # Sandbox configuration
     sandbox_enabled: bool = True  # Enable macOS sandbox-exec isolation
@@ -730,7 +731,9 @@ python validator.py {target_basename}
         while processed < self.config.max_candidates:
             # Get next pending candidate
             with EvolutionCSV(self.config.csv_path) as csv:
-                result = csv.get_next_pending_candidate(min_generation=self.config.min_generation)
+                result = csv.get_next_pending_candidate(
+                    min_generation=self.config.min_generation,
+                    max_generation=self.config.max_generation)
 
             if not result:
                 log("No pending candidates")
@@ -831,7 +834,9 @@ def main():
     parser.add_argument('--config', help='Path to config.yaml')
     parser.add_argument('--timeout', type=int, help='Timeout in seconds')
     parser.add_argument('--min-generation', type=int,
-                        help='Only claim candidates from this generation onward (--gens window)')
+                        help='Only claim candidates from this generation onward')
+    parser.add_argument('--max-generation', type=int,
+                        help='Only claim candidates up to this generation')
     args = parser.parse_args()
 
     try:
@@ -840,6 +845,8 @@ def main():
             config.timeout_seconds = args.timeout
         if args.min_generation is not None:
             config.min_generation = args.min_generation
+        if args.max_generation is not None:
+            config.max_generation = args.max_generation
 
         # Initialize file logging in the evolution directory
         init_file_logging(config.evolution_dir)

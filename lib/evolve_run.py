@@ -19,7 +19,8 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Set
+import re
+from typing import List, Optional, Set, Tuple
 
 # Add lib to path
 SCRIPT_DIR = Path(__file__).parent
@@ -44,7 +45,22 @@ class RunConfig:
     poll_interval: int = 5
     min_completed_for_ideation: int = 3
     config_path: Optional[str] = None
-    gens: Optional[int] = None  # Only process the last N generations (None = all)
+    gens: Optional[str] = None  # Generation selector: 'N' (last N gens) or 'genNNN' (one gen); None = all
+
+
+# AIDEV-NOTE: the run/run-noideate positional selector. 'N' slides with the newest
+# generation (recomputed each loop); 'genNNN' is a fixed single generation.
+def generation_window(selector: Optional[str], highest: int) -> Optional[Tuple[int, Optional[int]]]:
+    """(min_gen, max_gen or None) for a selector, or None for no filter. Raises ValueError."""
+    if selector is None:
+        return None
+    m = re.fullmatch(r'gen(\d+)', selector)
+    if m:
+        gen = int(m.group(1))
+        return (gen, gen)
+    if re.fullmatch(r'\d+', selector) and int(selector) >= 1:
+        return (max(1, highest - int(selector) + 1), None)
+    raise ValueError(f"generation selector must be a positive number of recent gens or genNNN, got {selector!r}")
 
 
 class WorkerPool:
@@ -55,9 +71,10 @@ class WorkerPool:
         self.worker_script = worker_script
         self.config_path = config_path
         self.timeout = timeout
-        # Generation window for the --gens filter; updated each loop by the runner
-        # (None = no filter, process all pending candidates).
+        # Generation window from the run selector; updated each loop by the runner
+        # (None = no bound).
         self.min_generation: Optional[int] = None
+        self.max_generation: Optional[int] = None
         self.workers: dict[int, subprocess.Popen] = {}  # pid -> process
 
     def spawn_worker(self) -> Optional[int]:
@@ -73,6 +90,8 @@ class WorkerPool:
             cmd.extend(['--timeout', str(self.timeout)])
         if self.min_generation is not None:
             cmd.extend(['--min-generation', str(self.min_generation)])
+        if self.max_generation is not None:
+            cmd.extend(['--max-generation', str(self.max_generation)])
 
         try:
             # Don't capture output - let it stream directly to terminal
@@ -206,23 +225,19 @@ class EvolutionRunner:
 
     def get_stats(self) -> dict:
         """Get CSV statistics, restricted to the active generation window if set."""
-        min_gen = self.current_min_generation()
-        self.pool.min_generation = min_gen
+        lo, hi = self.current_window() or (None, None)
+        self.pool.min_generation, self.pool.max_generation = lo, hi
         with EvolutionCSV(self.config.csv_path) as csv:
-            return csv.get_csv_stats(min_generation=min_gen)
+            return csv.get_csv_stats(min_generation=lo, max_generation=hi)
 
-    def current_min_generation(self) -> Optional[int]:
-        """Compute the lowest generation to process given the --gens window.
-
-        Returns None when no window is set. Otherwise returns
-        highest_generation - gens + 1 (clamped to >= 1), recomputed each call so
-        the window slides forward if ideation adds a new generation.
-        """
+    def current_window(self) -> Optional[Tuple[int, Optional[int]]]:
+        """The generation window for the selector, recomputed each call so a last-N
+        window slides forward when ideation adds a new generation."""
         if not self.config.gens:
             return None
         with EvolutionCSV(self.config.csv_path) as csv:
             highest = csv.get_highest_generation()
-        return max(1, highest - self.config.gens + 1)
+        return generation_window(self.config.gens, highest)
 
     def should_ideate(self, stats: dict) -> bool:
         """Check if we should run ideation."""
@@ -284,9 +299,11 @@ class EvolutionRunner:
         log("Starting evolution run")
         log(f"Max workers: {self.config.max_workers}")
         log(f"Auto ideate: {self.config.auto_ideate}")
-        if self.config.gens:
-            min_gen = self.current_min_generation()
-            log(f"Generation window: last {self.config.gens} gen(s) (>= gen{min_gen:02d})")
+        window = self.current_window()
+        if window and window[1] is not None:
+            log(f"Generation window: gen{window[0]:02d} only")
+        elif window:
+            log(f"Generation window: last {self.config.gens} gen(s) (>= gen{window[0]:02d})")
 
         # Startup cleanup
         self.cleanup_csv()
@@ -421,8 +438,8 @@ def main():
     parser.add_argument('--timeout', type=int, help='Worker timeout in seconds')
     parser.add_argument('--no-ideate', action='store_true',
                         help='Re-score / process pending candidates only; never ideate')
-    parser.add_argument('gens', nargs='?', type=int, default=None,
-                        help='Only process the last N generations (default: all)')
+    parser.add_argument('gens', nargs='?', default=None,
+                        help='N = only the last N generations; genNNN = only that generation (default: all)')
     args = parser.parse_args()
 
     try:
@@ -443,8 +460,15 @@ def main():
             config.auto_ideate = False
 
         if args.gens is not None:
-            if args.gens < 1:
-                log_error("gens must be a positive integer")
+            try:
+                fixed = generation_window(args.gens, 0)[1] is not None
+            except ValueError as e:
+                log_error(str(e))
+                sys.exit(1)
+            # Ideation never adds rows to an old generation, so a fixed genNNN window with
+            # ideation on would re-ideate every time the window drains.
+            if fixed and config.auto_ideate:
+                log_error(f"{args.gens} selects one generation; use run-noideate {args.gens}")
                 sys.exit(1)
             config.gens = args.gens
 
