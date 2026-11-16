@@ -248,3 +248,6 @@ to verify the NAV chart deterministically.
       session (space-containing paths single-quoted), then focuses it; a drop
       anywhere off a terminal is swallowed (the window must NOT navigate to the
       file — that would blank the app)
+- [ ] Detail "Year returns & CAGR by generation" chart: a CAGR line follows the
+      2025/2026 lines in the main text colour (legend reads 2025, 2026, CAGR);
+      a workspace whose CSV has no yearly_return shows only the year lines  [TASK-1116]
