@@ -527,3 +527,13 @@ xterm runs with `macOptionClickForcesSelection`, so Option-drag still makes a na
 selection. Attaching to the same session from the operator's own terminal also gets mouse
 on. Not verified live: the build sandbox cannot reach the tmux socket, so a person with a
 real wheel and a live claude session has to confirm it.
+
+## Detail page: the year-returns chart also draws CAGR (2026-11-16, task 1116)
+
+The per-generation "Year returns & CAGR by generation" chart draws one line per
+`return_YYYY` column and, last, the overall CAGR (`yearly_return`) of the same
+best-of-generation row (`yearRow`). `core/csv.ts` `yearChartColumns` picks the columns.
+CAGR is added only when the CSV has year columns: `yearRow` exists only for generations
+whose best candidate carries return_YYYY data, so CAGR alone never draws the chart. The
+CAGR line uses the neutral `--text` colour so it reads as the long-run trend, not one more
+year.
