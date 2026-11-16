@@ -11,6 +11,7 @@ import {
   isEarlier,
   parseCandidates,
   parseCsv,
+  yearChartColumns,
 } from './csv';
 import { resolveDevSourceDir } from './devRebuild';
 import { chartFracs, genFrac, genTicks, sharedGenDomain } from './genAxis';
@@ -1063,5 +1064,21 @@ describe('root column', () => {
 
   it('keeps the raw basename, unsanitized, and ignores a trailing slash', () => {
     expect(rootColumnLabel({ path: '/a/my.repo/w', root: '/a/my.repo/' }, ['/a/my.repo/', '/b'])).toBe('my.repo');
+  });
+});
+
+describe('yearChartColumns (year-returns chart lines, task 1116)', () => {
+  it('lists the return_YYYY years in order, then the overall CAGR', () => {
+    expect(yearChartColumns(['sharpe', 'return_2026', 'yearly_return', 'return_2025'])).toEqual([
+      { col: 'return_2025', name: '2025' },
+      { col: 'return_2026', name: '2026' },
+      { col: 'yearly_return', name: 'CAGR' },
+    ]);
+  });
+  it('omits CAGR when the CSV has no yearly_return column', () => {
+    expect(yearChartColumns(['return_2025', 'sharpe'])).toEqual([{ col: 'return_2025', name: '2025' }]);
+  });
+  it('draws nothing from CAGR alone — the chart exists only for per-year data', () => {
+    expect(yearChartColumns(['yearly_return', 'sharpe'])).toEqual([]);
   });
 });

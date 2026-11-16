@@ -7,7 +7,7 @@ import { FitAddon } from '@xterm/addon-fit';
 
 import { PERIOD_LABELS, buildBacktestTable } from '../core/backtests';
 import type { BacktestAlgo, BacktestRow } from '../core/backtests';
-import { FAILING_FAILS, PLATEAU_GENS, classifyHealth } from '../core/csv';
+import { FAILING_FAILS, PLATEAU_GENS, classifyHealth, yearChartColumns } from '../core/csv';
 import { chartFracs, genTicks, sharedGenDomain } from '../core/genAxis';
 import type { GenAxis } from '../core/genAxis';
 import { nearestColumnIndex, tipPlacement } from '../core/hover';
@@ -704,14 +704,19 @@ function navByPeriodPanel(root: string, algoKey: string, bt: NonNullable<Backtes
  * the full history. Same coverage, two different x-axes, and the mismatch read
  * as "the year data is missing" when it was only unreadable. Both panels now
  * plot scored generations in order; `yearGens` is filtered in step so the
- * enlarged view still labels each point with its real generation number. */
+ * enlarged view still labels each point with its real generation number.
+ *
+ * The last line is the same best-of-gen row's overall CAGR (`yearly_return`) when the
+ * CSV has it (task 1116), drawn in the neutral foreground colour so it reads as the
+ * long-run trend rather than one more year. Columns come from core `yearChartColumns`. */
 function yearSeries(r: WorkspaceRow): Series[] {
-  const years = r.stats.metricColumns.filter((k) => /^return_\d{4}$/.test(k)).sort();
+  const cols = yearChartColumns(r.stats.metricColumns);
   const withYears = r.stats.generations.filter((g) => g.yearRow !== null);
-  return years.map((col, i) => ({
-    name: col.replace('return_', ''),
+  let yi = 0;
+  return cols.map(({ col, name }) => ({
+    name,
     values: withYears.map((g) => g.yearRow?.metrics[col] ?? null),
-    color: SERIES_COLORS[i % SERIES_COLORS.length],
+    color: col === 'yearly_return' ? 'var(--text)' : SERIES_COLORS[yi++ % SERIES_COLORS.length],
   }));
 }
 
@@ -1983,7 +1988,7 @@ function renderDetail(): void {
     ${
       hasYearChart
         ? `<div class="panel">
-             <h3>Year returns by generation (best of gen)</h3>
+             <h3>Year returns &amp; CAGR by generation (best of gen)</h3>
              ${zoomable('year-gen', (w, ht, zoom) => multiLineSvg(years, w, ht, zoom, genAx ? chartX(yearGens, genAx) : undefined, (v) => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(1)}%`), cw, 80)}
              <div class="legend">${years
                .map((y) => `<span><span class="sw" style="background:${y.color}"></span>${esc(y.name)}</span>`)

@@ -112,6 +112,20 @@ export function parseCandidates(text: string): { candidates: Candidate[]; metric
   return { candidates, metricColumns };
 }
 
+/** Lines on the detail page's "Year returns by generation" chart: each return_YYYY
+ *  column in year order, then the overall CAGR (`yearly_return`) when the CSV carries
+ *  it (task 1116), so the per-year returns sit beside the long-run trend. CAGR alone
+ *  draws nothing: the chart plots `yearRow`, which exists only for generations whose
+ *  best candidate has return_YYYY data. */
+export function yearChartColumns(metricColumns: string[]): Array<{ col: string; name: string }> {
+  const years = metricColumns
+    .filter((k) => /^return_\d{4}$/.test(k))
+    .sort()
+    .map((col) => ({ col, name: col.replace('return_', '') }));
+  if (years.length === 0) return [];
+  return metricColumns.includes('yearly_return') ? [...years, { col: 'yearly_return', name: 'CAGR' }] : years;
+}
+
 /** `pinId` is the algo production pins this workspace to (null when unpinned); the
  *  matching row surfaces as `pinned` only when it is not already the leader. */
 export function computeStats(text: string, pinId: string | null = null): WorkspaceStats {
